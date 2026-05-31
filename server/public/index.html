@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>X Autopost Dashboard</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="hero">
+      <div>
+        <p class="eyebrow">Ubuntu Local Console</p>
+        <h1>中井佑 X Autopost Dashboard</h1>
+        <p class="lead">投稿案の生成・承認・自動投稿状況を、自宅Ubuntuのブラウザから確認できます。</p>
+      </div>
+      <div class="auth-card">
+        <label for="token">Admin Token</label>
+        <div class="token-row">
+          <input id="token" type="password" placeholder=".env の ADMIN_TOKEN" autocomplete="current-password" />
+          <button id="save-token">保存</button>
+        </div>
+        <small>TokenはこのブラウザのlocalStorageにだけ保存されます。</small>
+      </div>
+    </header>
+
+    <main>
+      <section class="toolbar panel">
+        <div>
+          <h2>運用アクション</h2>
+          <p>週初のドラフト生成、承認状況の更新、手動tickをここから実行できます。</p>
+        </div>
+        <div class="actions">
+          <button id="refresh">更新</button>
+          <button id="generate">1週間分を生成</button>
+          <button id="tick">投稿チェックを実行</button>
+        </div>
+      </section>
+
+      <section class="grid stats" id="stats"></section>
+
+      <section class="grid two-columns">
+        <article class="panel">
+          <div class="panel-heading">
+            <h2>投稿ステータス</h2>
+            <span id="generated-at" class="muted"></span>
+          </div>
+          <div id="status-bars" class="bars"></div>
+        </article>
+        <article class="panel">
+          <h2>投稿軸別の本数</h2>
+          <div id="pillar-bars" class="bars"></div>
+        </article>
+      </section>
+
+      <section class="grid two-columns">
+        <article class="panel">
+          <h2>日別スケジュール</h2>
+          <div id="daily-bars" class="bars compact"></div>
+        </article>
+        <article class="panel">
+          <h2>直近の運用イベント</h2>
+          <ul id="events" class="timeline"></ul>
+        </article>
+      </section>
+
+      <section class="panel">
+        <div class="panel-heading">
+          <div>
+            <h2>承認待ち・予約済み投稿</h2>
+            <p>本文を編集して承認できます。承認済み投稿のみ自動投稿対象です。</p>
+          </div>
+          <select id="status-filter" aria-label="status filter">
+            <option value="">すべて</option>
+            <option value="draft">draft</option>
+            <option value="approved">approved</option>
+            <option value="posted">posted</option>
+            <option value="failed">failed</option>
+            <option value="rejected">rejected</option>
+          </select>
+        </div>
+        <div id="posts" class="post-list"></div>
+      </section>
+    </main>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

@@ -1,0 +1,16 @@
+{
+  "name": "x-autopost",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Home Ubuntu based X auto-posting backend with an Android approval app.",
+  "scripts": {
+    "start": "node server/src/index.js",
+    "tick": "node server/src/tick.js",
+    "generate:week": "node server/src/generate-week.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
