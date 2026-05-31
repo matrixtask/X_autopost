@@ -1,0 +1,10 @@
+[Unit]
+Description=X Autopost tick runner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/X_autopost
+EnvironmentFile=/opt/X_autopost/.env
+ExecStart=/usr/bin/node /opt/X_autopost/server/src/tick.js
