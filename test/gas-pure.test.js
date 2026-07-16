@@ -1,0 +1,74 @@
+import { test } from 'node:test';
+// vm別レルムの配列/オブジェクトはプロトタイプが異なりdeepStrictEqualで弾かれるため非strictを使う
+import assert from 'node:assert';
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
+
+// gas/src/Pure.js はGASのグローバル関数スタイルなので、vmで読み込んで検証する
+const code = readFileSync(new URL('../gas/src/Pure.js', import.meta.url), 'utf8');
+const context = { module: { exports: {} } };
+vm.createContext(context);
+vm.runInContext(code, context);
+const { weightedTweetLength, fitsInTweet, parseJsonLoose, pickWeighted, computeNextSlots } = context.module.exports;
+
+test('weightedTweetLength: 半角は1、全角は2', () => {
+  assert.equal(weightedTweetLength(''), 0);
+  assert.equal(weightedTweetLength('hello'), 5);
+  assert.equal(weightedTweetLength('こんにちは'), 10);
+  assert.equal(weightedTweetLength('abcあいう'), 3 + 6);
+});
+
+test('weightedTweetLength: URLは一律23', () => {
+  assert.equal(weightedTweetLength('https://example.com/very/long/path?query=1'), 23);
+  assert.equal(weightedTweetLength('見て https://example.com'), 4 + 1 + 23);
+});
+
+test('fitsInTweet: 全角140字はOK、141字はNG', () => {
+  assert.equal(fitsInTweet('あ'.repeat(140)), true);
+  assert.equal(fitsInTweet('あ'.repeat(141)), false);
+});
+
+test('parseJsonLoose: コードフェンスや前置きを無視する', () => {
+  assert.deepEqual(parseJsonLoose('```json\n[{"a":1}]\n```'), [{ a: 1 }]);
+  assert.deepEqual(parseJsonLoose('結果は以下です。\n{"ok": true}\n以上。'), { ok: true });
+  assert.throws(() => parseJsonLoose('JSONなし'));
+});
+
+test('pickWeighted: 乱数固定で決定的に選ばれる', () => {
+  const items = [{ w: 1 }, { w: 3 }];
+  assert.equal(pickWeighted(items, (i) => i.w, () => 0.1), items[0]); // 0.4未満
+  assert.equal(pickWeighted(items, (i) => i.w, () => 0.9), items[1]);
+  assert.equal(pickWeighted([], (i) => 1), null);
+});
+
+test('computeNextSlots: リード時間内の枠は飛ばす', () => {
+  const slots = computeNextSlots(2, {
+    now: new Date(2026, 6, 16, 7, 30),
+    slotTimes: ['08:00', '12:30', '19:30'],
+    taken: [],
+    minLeadMinutes: 60,
+  });
+  // 08:00は 07:30+60分 より前なのでスキップ
+  assert.deepEqual(slots, ['2026-07-16 12:30', '2026-07-16 19:30']);
+});
+
+test('computeNextSlots: 予約済み枠は避けて翌日に流れる', () => {
+  const slots = computeNextSlots(3, {
+    now: new Date(2026, 6, 16, 7, 30),
+    slotTimes: ['08:00', '12:30', '19:30'],
+    taken: ['2026-07-16 12:30'],
+    minLeadMinutes: 60,
+  });
+  assert.deepEqual(slots, ['2026-07-16 19:30', '2026-07-17 08:00', '2026-07-17 12:30']);
+});
+
+test('computeNextSlots: maxPerDayで1日の投稿数を制限する', () => {
+  const slots = computeNextSlots(3, {
+    now: new Date(2026, 6, 16, 0, 0),
+    slotTimes: ['08:00', '12:30', '19:30'],
+    taken: [],
+    minLeadMinutes: 60,
+    maxPerDay: 1,
+  });
+  assert.deepEqual(slots, ['2026-07-16 08:00', '2026-07-17 08:00', '2026-07-18 08:00']);
+});

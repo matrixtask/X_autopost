@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Home Ubuntu based X auto-posting backend with an Android approval app.",
+  "description": "Interview-driven X auto-posting on Google Apps Script + Spreadsheet, with Slack/Notion integration. (server/ and android/ are the legacy home-server version.)",
   "scripts": {
     "start": "node server/src/index.js",
     "tick": "node server/src/tick.js",
