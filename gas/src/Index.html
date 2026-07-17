@@ -1,0 +1,165 @@
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #ffffff; --text: #1c1e21; --sub: #65707c;
+    --line: #e3e6ea; --accent: #1d7fdb; --ok: #1a9e5c; --ng: #c9483c; --warn: #b07514;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #14171a; --card: #1e2328; --text: #e8eaed; --sub: #9aa4ae; --line: #313940; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; }
+  header { position: sticky; top: 0; background: var(--card); border-bottom: 1px solid var(--line); padding: 12px 16px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  header h1 { font-size: 16px; margin: 0 auto 0 0; }
+  .tabs { display: flex; gap: 6px; overflow-x: auto; padding: 10px 12px; }
+  .tab { border: 1px solid var(--line); background: var(--card); color: var(--sub); border-radius: 999px; padding: 6px 12px; font-size: 13px; white-space: nowrap; cursor: pointer; }
+  .tab.active { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  main { padding: 0 12px 40px; max-width: 640px; margin: 0 auto; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin-bottom: 12px; }
+  .meta { display: flex; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--sub); margin-bottom: 8px; align-items: center; }
+  .badge { border-radius: 999px; padding: 2px 8px; font-size: 11px; font-weight: 600; }
+  .b-ready { background: rgba(176,117,20,.12); color: var(--warn); }
+  .b-approved, .b-scheduled { background: rgba(29,127,219,.12); color: var(--accent); }
+  .b-posted { background: rgba(26,158,92,.12); color: var(--ok); }
+  .b-stock, .b-draft { background: rgba(101,112,124,.12); color: var(--sub); }
+  .b-rejected, .b-failed { background: rgba(201,72,60,.12); color: var(--ng); }
+  .body-text { white-space: pre-wrap; font-size: 15px; line-height: 1.7; }
+  textarea { width: 100%; min-height: 110px; font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; }
+  .reason { font-size: 12px; color: var(--sub); margin-top: 8px; }
+  .actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+  button { border: none; border-radius: 8px; padding: 10px 14px; font-size: 14px; font-weight: 600; cursor: pointer; }
+  .approve { background: var(--ok); color: #fff; }
+  .reject { background: transparent; color: var(--ng); border: 1px solid var(--ng); }
+  .edit, .ghost { background: transparent; color: var(--sub); border: 1px solid var(--line); }
+  .save { background: var(--accent); color: #fff; }
+  .empty { text-align: center; color: var(--sub); padding: 48px 0; }
+  #toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 10px 18px; border-radius: 999px; font-size: 13px; opacity: 0; transition: opacity .25s; pointer-events: none; }
+  #toast.show { opacity: 1; }
+</style>
+
+<header>
+  <h1>X Autopost ストック</h1>
+  <button class="ghost" onclick="load()">再読込</button>
+  <button class="ghost" onclick="scheduleNow()">予約実行</button>
+</header>
+<div class="tabs" id="tabs"></div>
+<main id="list"><div class="empty">読み込み中…</div></main>
+<div id="toast"></div>
+
+<script>
+  var TOKEN = '<?= token ?>';
+  var TABS = [
+    { key: 'ready', label: '承認待ち' },
+    { key: 'scheduled', label: '予約済み' },
+    { key: 'approved', label: '承認済み' },
+    { key: 'stock', label: 'ストック' },
+    { key: 'posted', label: '投稿済み' },
+    { key: 'all', label: 'すべて' },
+  ];
+  var STATUS_LABEL = { draft: '未採点', stock: '保留', ready: '承認待ち', approved: '承認済み', scheduled: '予約済み', posted: '投稿済み', rejected: '却下', failed: '失敗' };
+  var CATEGORY_LABEL = { evergreen: '定番', news: '時事', neta: 'ネタ' };
+  var posts = [];
+  var activeTab = 'ready';
+
+  function toast(msg) {
+    var el = document.getElementById('toast');
+    el.textContent = msg;
+    el.classList.add('show');
+    setTimeout(function () { el.classList.remove('show'); }, 2200);
+  }
+
+  function renderTabs() {
+    document.getElementById('tabs').innerHTML = TABS.map(function (t) {
+      var count = t.key === 'all' ? posts.length : posts.filter(function (p) { return p.status === t.key; }).length;
+      return '<button class="tab' + (activeTab === t.key ? ' active' : '') + '" onclick="setTab(\'' + t.key + '\')">' + t.label + ' ' + count + '</button>';
+    }).join('');
+  }
+
+  function setTab(key) { activeTab = key; renderTabs(); renderList(); }
+
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  function renderList() {
+    var items = activeTab === 'all' ? posts : posts.filter(function (p) { return p.status === activeTab; });
+    var el = document.getElementById('list');
+    if (!items.length) { el.innerHTML = '<div class="empty">ここにはまだ何もありません</div>'; return; }
+    el.innerHTML = items.map(function (p) {
+      var meta = [
+        '<span class="badge b-' + p.status + '">' + (STATUS_LABEL[p.status] || p.status) + '</span>',
+        p.category ? '<span>' + (CATEGORY_LABEL[p.category] || esc(p.category)) + '</span>' : '',
+        p.score !== null ? '<span>スコア ' + p.score + '</span>' : '',
+        p.scheduled_at ? '<span>予約 ' + esc(p.scheduled_at) + '</span>' : '',
+        p.posted_at ? '<span>投稿 ' + esc(p.posted_at) + '</span>' : '',
+      ].filter(Boolean).join('');
+      var actions = '';
+      if (p.status === 'ready' || p.status === 'stock') {
+        actions += '<button class="approve" onclick="setStatus(\'' + p.id + '\', \'approved\')">承認して予約へ</button>';
+      }
+      if (['ready', 'stock', 'approved', 'scheduled', 'draft'].indexOf(p.status) >= 0) {
+        actions += '<button class="edit" onclick="toggleEdit(\'' + p.id + '\')">編集</button>';
+        actions += '<button class="reject" onclick="setStatus(\'' + p.id + '\', \'rejected\')">捨てる</button>';
+      }
+      if (p.status === 'rejected') {
+        actions += '<button class="edit" onclick="setStatus(\'' + p.id + '\', \'stock\')">ストックに戻す</button>';
+      }
+      return (
+        '<div class="card" id="card-' + p.id + '">' +
+        '<div class="meta">' + meta + '</div>' +
+        '<div class="body-text" id="text-' + p.id + '">' + esc(p.text) + '</div>' +
+        '<div id="editor-' + p.id + '" style="display:none">' +
+        '<textarea id="ta-' + p.id + '">' + esc(p.text) + '</textarea>' +
+        '<div class="actions"><button class="save" onclick="saveText(\'' + p.id + '\')">保存</button>' +
+        '<button class="ghost" onclick="toggleEdit(\'' + p.id + '\')">やめる</button></div></div>' +
+        (p.score_reason ? '<div class="reason">採点コメント: ' + esc(p.score_reason) + '</div>' : '') +
+        (actions ? '<div class="actions">' + actions + '</div>' : '') +
+        '</div>'
+      );
+    }).join('');
+  }
+
+  function load() {
+    google.script.run
+      .withSuccessHandler(function (json) { posts = JSON.parse(json); renderTabs(); renderList(); })
+      .withFailureHandler(function (e) { toast('読み込み失敗: ' + e.message); })
+      .api_listPosts(TOKEN);
+  }
+
+  function setStatus(id, status) {
+    google.script.run
+      .withSuccessHandler(function () { toast('更新しました'); load(); })
+      .withFailureHandler(function (e) { toast(e.message); })
+      .api_setStatus(TOKEN, id, status);
+  }
+
+  function toggleEdit(id) {
+    var editor = document.getElementById('editor-' + id);
+    var text = document.getElementById('text-' + id);
+    var open = editor.style.display === 'none';
+    editor.style.display = open ? 'block' : 'none';
+    text.style.display = open ? 'none' : 'block';
+  }
+
+  function saveText(id) {
+    var value = document.getElementById('ta-' + id).value;
+    google.script.run
+      .withSuccessHandler(function () { toast('保存しました'); load(); })
+      .withFailureHandler(function (e) { toast(e.message); })
+      .api_updateText(TOKEN, id, value);
+  }
+
+  function scheduleNow() {
+    google.script.run
+      .withSuccessHandler(function (json) {
+        var n = JSON.parse(json).length;
+        toast(n ? n + '件を予約しました' : '予約対象（承認済み）がありません');
+        load();
+      })
+      .withFailureHandler(function (e) { toast(e.message); })
+      .api_scheduleNow(TOKEN);
+  }
+
+  load();
+</script>
