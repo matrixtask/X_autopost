@@ -35,6 +35,16 @@ function doPost(e) {
     return ContentService.createTextOutput(payload.challenge);
   }
 
+  // 文体サンプルの一括取り込み（Xアーカイブ等から。ADMIN_TOKEN必須）
+  // 例: POST {"action":"import_voice","token":"...","posts":["...","..."],"note":"archive"}
+  if (payload.action === 'import_voice') {
+    if (!payload.token || payload.token !== getProp('ADMIN_TOKEN')) {
+      return ContentService.createTextOutput(JSON.stringify({ ok: false, error: 'unauthorized' }));
+    }
+    var added = importVoicePosts(payload.posts || [], payload.note || 'import');
+    return ContentService.createTextOutput(JSON.stringify({ ok: true, added: added }));
+  }
+
   if (payload.type === 'event_callback') {
     // GASはリクエストヘッダを読めないため署名検証ができない。
     // 代わりにチャンネルIDの一致を確認し、event_idで重複排除する。
@@ -49,14 +59,21 @@ function doPost(e) {
       event.type === 'message' &&
       !event.bot_id &&
       !event.subtype &&
-      event.thread_ts &&
-      String(event.channel) === String(getProp('SLACK_CHANNEL_ID'))
+      String(event.channel).trim() === String(getProp('SLACK_CHANNEL_ID') || '').trim()
     ) {
       try {
-        handleInterviewReply(event.thread_ts, event.text);
+        if (event.thread_ts) {
+          handleInterviewReply(event.thread_ts, event.text);
+        } else {
+          // スレッド外に書かれた場合も、進行中インタビューへの回答として救済する
+          handleChannelMessage(event.text);
+        }
       } catch (err) {
         logEvent('slack_event_error', String(err));
       }
+    } else if (event.type === 'message' && !event.bot_id) {
+      // チャンネル不一致の切り分け用ログ（SLACK_CHANNEL_ID設定ミスの検出）
+      logEvent('slack_event_ignored', 'channel=' + event.channel + ' subtype=' + (event.subtype || '') + ' expected=' + getProp('SLACK_CHANNEL_ID'));
     }
   }
   return ContentService.createTextOutput('ok');

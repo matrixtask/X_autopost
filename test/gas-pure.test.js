@@ -9,7 +9,18 @@ const code = readFileSync(new URL('../gas/src/Pure.js', import.meta.url), 'utf8'
 const context = { module: { exports: {} } };
 vm.createContext(context);
 vm.runInContext(code, context);
-const { weightedTweetLength, fitsInTweet, parseJsonLoose, pickWeighted, computeNextSlots } = context.module.exports;
+const { weightedTweetLength, fitsInTweet, parseJsonLoose, pickWeighted, computeNextSlots, normalizeSlackTs, slackTsEqual } = context.module.exports;
+
+test('slackTsEqual: シートの数値解釈で下位桁が失われても一致する', () => {
+  assert.equal(slackTsEqual('1784266535.69018', '1784266535.690180'), true); // 末尾0落ち
+  assert.equal(slackTsEqual('1784266535.69018', '1784266535.690189'), true); // 精度落ち（実例）
+  assert.equal(slackTsEqual(1784266535.69018, '1784266535.690189'), true);
+  assert.equal(slackTsEqual('ts_1784266535.690189', '1784266535.690189'), true); // 接頭辞付き保存
+  assert.equal(slackTsEqual('1784266536.690189', '1784266535.690189'), false); // 別の秒
+  assert.equal(slackTsEqual('', ''), false);
+  assert.equal(normalizeSlackTs('ts_1784266535.690180'), '1784266535.69018');
+  assert.equal(normalizeSlackTs(' abc '), 'abc');
+});
 
 test('weightedTweetLength: 半角は1、全角は2', () => {
   assert.equal(weightedTweetLength(''), 0);

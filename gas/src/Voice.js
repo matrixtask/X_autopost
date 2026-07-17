@@ -6,6 +6,32 @@
  * 多いほど精度が上がる。20〜50本を推奨。
  */
 
+/**
+ * ポストの配列をVoiceシートへ取り込む共通処理。
+ * - RT・URLだけのポスト・20字未満は文体サンプルとして薄いので除外
+ * - 既存分・同一バッチ内の重複はスキップ
+ * @returns {number} 追加した件数
+ */
+function importVoicePosts(texts, note) {
+  var existing = {};
+  readTable(SHEET.VOICE).forEach(function (r) {
+    existing[String(r.text || '').trim()] = true;
+  });
+  var added = 0;
+  (texts || []).forEach(function (raw) {
+    var t = String(raw || '').trim();
+    if (!t || existing[t]) return;
+    if (/^RT @/.test(t)) return;
+    var withoutUrls = t.replace(/https?:\/\/[^\s]+/g, '').trim();
+    if (withoutUrls.length < 20) return;
+    appendRowObj(SHEET.VOICE, { text: t, note: note || '' });
+    existing[t] = true;
+    added++;
+  });
+  logEvent('voice_import', added + '件追加（入力' + (texts || []).length + '件）');
+  return added;
+}
+
 function getVoiceSamples(limit) {
   var rows = readTable(SHEET.VOICE)
     .map(function (r) { return String(r.text || '').trim(); })

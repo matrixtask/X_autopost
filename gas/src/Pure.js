@@ -121,7 +121,37 @@ function computeNextSlots(count, opts) {
   return result;
 }
 
+/**
+ * Slackのts（例 "1784266535.690189"）まわりのヘルパー。
+ * スプレッドシートがtsを数値として解釈すると精度落ちで下位桁が失われる
+ * （1784266535.690189 → 1784266535.69018）。そのため:
+ * - 保存時は 'ts_' 接頭辞を付けて数値化そのものを防ぐ（rawSlackTsで復元）
+ * - 照合は文字列一致に加えて、数値としての誤差 0.0001秒以内も同一とみなす
+ *   （インタビューは1日1スレッドなので誤衝突は実質起きない）
+ */
+function rawSlackTs(v) {
+  return String(v === null || v === undefined ? '' : v).trim().replace(/^ts_/, '');
+}
+
+function normalizeSlackTs(v) {
+  var s = rawSlackTs(v);
+  if (/^\d+\.\d+$/.test(s)) {
+    s = s.replace(/0+$/, '').replace(/\.$/, '');
+  }
+  return s;
+}
+
+function slackTsEqual(a, b) {
+  var na = normalizeSlackTs(a);
+  var nb = normalizeSlackTs(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  var fa = parseFloat(na);
+  var fb = parseFloat(nb);
+  return isFinite(fa) && isFinite(fb) && Math.abs(fa - fb) < 0.0001;
+}
+
 // Nodeテスト用（GASでは module は未定義なので無視される）
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { weightedTweetLength: weightedTweetLength, fitsInTweet: fitsInTweet, parseJsonLoose: parseJsonLoose, pickWeighted: pickWeighted, computeNextSlots: computeNextSlots };
+  module.exports = { weightedTweetLength: weightedTweetLength, fitsInTweet: fitsInTweet, parseJsonLoose: parseJsonLoose, pickWeighted: pickWeighted, computeNextSlots: computeNextSlots, normalizeSlackTs: normalizeSlackTs, slackTsEqual: slackTsEqual, rawSlackTs: rawSlackTs };
 }

@@ -16,15 +16,28 @@ var INTERVIEW_STATUS = { OPEN: 'open', DONE: 'done', EXPIRED: 'expired' };
 
 function startDailyInterview() {
   var today = fmtDate(nowJst());
+  // 追加インタビュー（_ivx_）は数に入れず、毎朝の定期分だけ1日1回に制限する
   var existing = readTable(SHEET.INTERVIEWS).filter(function (r) {
-    return String(r.session_id).indexOf(today) === 0;
+    return String(r.session_id).indexOf(today) === 0 && String(r.session_id).indexOf('_ivx_') < 0;
   });
   if (existing.length) {
     logEvent('interview_skip', '本日分は作成済み: ' + today);
     return;
   }
   expireOldSessions();
+  startInterviewSession('iv', ':microphone: 今日のインタビュー');
+}
 
+/**
+ * 追加インタビュー。回数制限なし。
+ * GASエディタから実行するか、Slackのチャンネルに「インタビュー」と
+ * 書き込むと開始される。
+ */
+function startExtraInterview() {
+  startInterviewSession('ivx', ':microphone: 追加インタビュー');
+}
+
+function startInterviewSession(kind, title) {
   var themes = pickThemesForToday();
   var headlines = themes.some(function (t) { return t.category === 'news'; })
     ? fetchNewsHeadlines(12)
@@ -33,9 +46,9 @@ function startDailyInterview() {
   var questionCount = Number(getProp('INTERVIEW_QUESTIONS', '4'));
   var questions = generateInterviewQuestions(themes, headlines, questionCount);
 
-  var sessionId = today + '_' + newId('iv');
+  var sessionId = fmtDate(nowJst()) + '_' + newId(kind);
   var intro = [
-    ':microphone: 今日のインタビュー（' + questions.length + '問）',
+    title + '（' + questions.length + '問）',
     'テーマ: ' + themes.map(function (t) { return t.theme + '（' + labelForCategory(t.category) + '）'; }).join(' / '),
     'このスレッドに普段の言葉のまま返信してください。走り書きでOK。',
     '「スキップ」で次へ、「終了」でそこまでの回答からポスト下書きを作ります。',
@@ -46,7 +59,7 @@ function startDailyInterview() {
   questions.forEach(function (q, idx) {
     appendRowObj(SHEET.INTERVIEWS, {
       session_id: sessionId,
-      thread_ts: threadTs,
+      thread_ts: 'ts_' + threadTs, // 'ts_'接頭辞でシートの数値化（精度落ち）を防ぐ
       idx: idx + 1,
       theme: q.theme,
       category: q.category,
@@ -93,12 +106,21 @@ function generateInterviewQuestions(themes, headlines, count) {
  * Slackスレッドへの返信を処理する（doPost から呼ばれる）。
  */
 function handleInterviewReply(threadTs, text) {
+  // シートが数値解釈でtsの末尾0を落とすことがあるため、正規化して照合する
   var rows = readTable(SHEET.INTERVIEWS).filter(function (r) {
-    return String(r.thread_ts) === String(threadTs) && String(r.status) === INTERVIEW_STATUS.OPEN;
+    return slackTsEqual(r.thread_ts, threadTs) && String(r.status) === INTERVIEW_STATUS.OPEN;
   });
-  if (!rows.length) return false;
+  if (!rows.length) {
+    logEvent('interview_no_match', 'thread_ts=' + threadTs + ' に一致する進行中セッションなし');
+    return false;
+  }
   rows.sort(function (a, b) { return Number(a.idx) - Number(b.idx); });
   var sessionId = String(rows[0].session_id);
+  // 保存値が欠損していたら、イベントの正確なtsでシートを自己修復する
+  if (String(rows[0].thread_ts) !== 'ts_' + String(threadTs)) {
+    updateRowsWhere(SHEET.INTERVIEWS, 'session_id', sessionId, { thread_ts: 'ts_' + String(threadTs) });
+    logEvent('interview_ts_healed', sessionId + ': ' + rows[0].thread_ts + ' -> ts_' + threadTs);
+  }
   var trimmed = String(text || '').trim();
 
   if (/^(終了|以上|おわり|done)/.test(trimmed)) {
@@ -118,13 +140,19 @@ function handleInterviewReply(threadTs, text) {
     answered_at: isSkip ? 'skipped' : fmtDateTime(nowJst()),
   });
 
+  // 記録できたことを必ず返信で知らせる
+  var ack = isSkip
+    ? ':fast_forward: Q' + current.idx + ' をスキップしました。'
+    : ':white_check_mark: Q' + current.idx + ' の回答を記録しました。';
+
   var remaining = rows.filter(function (r) {
     return Number(r.idx) > Number(current.idx);
   });
   if (remaining.length) {
     var next = remaining[0];
-    sendSlack('Q' + next.idx + '. ' + next.question, threadTs);
+    sendSlack(ack + '\n\nQ' + next.idx + '. ' + next.question, threadTs);
   } else {
+    sendSlack(ack, threadTs);
     finishInterview(sessionId, threadTs);
   }
   return true;
@@ -165,6 +193,25 @@ function finishInterview(sessionId, threadTs) {
     logEvent('draft_error', sessionId + ': ' + e);
     sendSlack(':warning: 下書き生成でエラー: ' + e, threadTs);
   }
+}
+
+/**
+ * スレッド外（チャンネル直下）に書かれたメッセージの救済。
+ * 進行中セッションが1つあれば、そのスレッドへの返信として扱う。
+ */
+function handleChannelMessage(text) {
+  var trimmed = String(text || '').trim();
+  // 「インタビュー」と書き込むと追加インタビューを開始する
+  if (/^(インタビュー|追加インタビュー|interview)$/i.test(trimmed)) {
+    startExtraInterview();
+    return true;
+  }
+  var open = readTable(SHEET.INTERVIEWS).filter(function (r) {
+    return String(r.status) === INTERVIEW_STATUS.OPEN && r.thread_ts;
+  });
+  if (!open.length) return false;
+  var threadTs = rawSlackTs(open[0].thread_ts);
+  return handleInterviewReply(threadTs, text);
 }
 
 /** 前日以前の未完了セッションを期限切れにする（回答が来ても誤反応しないように） */
