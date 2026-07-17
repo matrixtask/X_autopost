@@ -11,7 +11,7 @@ function percentEncode(str) {
   });
 }
 
-function oauth1Header(method, url) {
+function oauth1Header(method, url, queryParams) {
   var p = props();
   ['X_API_KEY', 'X_API_SECRET', 'X_ACCESS_TOKEN', 'X_ACCESS_SECRET'].forEach(function (k) {
     if (!p[k]) throw new Error('スクリプトプロパティ ' + k + ' が未設定です');
@@ -24,9 +24,12 @@ function oauth1Header(method, url) {
     oauth_token: p.X_ACCESS_TOKEN,
     oauth_version: '1.0',
   };
-  // JSONボディはOAuth1署名のパラメータに含めない（フォームエンコードのみ対象）
-  var paramString = Object.keys(oauth).sort().map(function (k) {
-    return percentEncode(k) + '=' + percentEncode(oauth[k]);
+  // 署名対象 = oauthパラメータ + クエリパラメータ（JSONボディは含めない）
+  var all = {};
+  Object.keys(oauth).forEach(function (k) { all[k] = oauth[k]; });
+  Object.keys(queryParams || {}).forEach(function (k) { all[k] = queryParams[k]; });
+  var paramString = Object.keys(all).sort().map(function (k) {
+    return percentEncode(k) + '=' + percentEncode(all[k]);
   }).join('&');
   var base = [method.toUpperCase(), percentEncode(url), percentEncode(paramString)].join('&');
   var signingKey = percentEncode(p.X_API_SECRET) + '&' + percentEncode(p.X_ACCESS_SECRET);
@@ -93,4 +96,39 @@ function syncSafe(id) {
   } catch (e) {
     logEvent('notion_error', id + ': ' + e);
   }
+}
+
+/** X API v2 のGET呼び出し（クエリパラメータ込みでOAuth1署名する） */
+function xApiGet(path, params) {
+  var url = 'https://api.twitter.com/2' + path;
+  var qs = Object.keys(params || {}).map(function (k) {
+    return percentEncode(k) + '=' + percentEncode(params[k]);
+  }).join('&');
+  var res = UrlFetchApp.fetch(url + (qs ? '?' + qs : ''), {
+    headers: { Authorization: oauth1Header('GET', url, params) },
+    muteHttpExceptions: true,
+  });
+  var code = res.getResponseCode();
+  var body = res.getContentText();
+  if (code >= 300) throw new Error('X API error ' + code + ': ' + body.slice(0, 300));
+  return JSON.parse(body);
+}
+
+/**
+ * 自分の直近ポストをX APIから取得してVoiceシートに投入する（手動で1回実行）。
+ * X_API_KEY等の4プロパティが必要。RT・リプライは除外し、既存分と重複しない
+ * ものだけ追加する。
+ * 注意: X APIのFreeプランは読み取り上限が非常に小さい。403/429で失敗する場合は
+ * アーカイブ取り込み（importVoicePosts）を使うこと。
+ */
+function importVoiceFromX() {
+  var me = xApiGet('/users/me', {});
+  var userId = me.data.id;
+  var result = xApiGet('/users/' + userId + '/tweets', {
+    max_results: '100',
+    exclude: 'retweets,replies',
+  });
+  var texts = (result.data || []).map(function (t) { return String(t.text || ''); });
+  var added = importVoicePosts(texts, 'X import ' + fmtDate(nowJst()));
+  return added + '件をVoiceシートに追加しました（取得' + texts.length + '件）';
 }

@@ -35,6 +35,16 @@ function doPost(e) {
     return ContentService.createTextOutput(payload.challenge);
   }
 
+  // 文体サンプルの一括取り込み（Xアーカイブ等から。ADMIN_TOKEN必須）
+  // 例: POST {"action":"import_voice","token":"...","posts":["...","..."],"note":"archive"}
+  if (payload.action === 'import_voice') {
+    if (!payload.token || payload.token !== getProp('ADMIN_TOKEN')) {
+      return ContentService.createTextOutput(JSON.stringify({ ok: false, error: 'unauthorized' }));
+    }
+    var added = importVoicePosts(payload.posts || [], payload.note || 'import');
+    return ContentService.createTextOutput(JSON.stringify({ ok: true, added: added }));
+  }
+
   if (payload.type === 'event_callback') {
     // GASはリクエストヘッダを読めないため署名検証ができない。
     // 代わりにチャンネルIDの一致を確認し、event_idで重複排除する。
