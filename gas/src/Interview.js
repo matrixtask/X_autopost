@@ -16,15 +16,28 @@ var INTERVIEW_STATUS = { OPEN: 'open', DONE: 'done', EXPIRED: 'expired' };
 
 function startDailyInterview() {
   var today = fmtDate(nowJst());
+  // 追加インタビュー（_ivx_）は数に入れず、毎朝の定期分だけ1日1回に制限する
   var existing = readTable(SHEET.INTERVIEWS).filter(function (r) {
-    return String(r.session_id).indexOf(today) === 0;
+    return String(r.session_id).indexOf(today) === 0 && String(r.session_id).indexOf('_ivx_') < 0;
   });
   if (existing.length) {
     logEvent('interview_skip', '本日分は作成済み: ' + today);
     return;
   }
   expireOldSessions();
+  startInterviewSession('iv', ':microphone: 今日のインタビュー');
+}
 
+/**
+ * 追加インタビュー。回数制限なし。
+ * GASエディタから実行するか、Slackのチャンネルに「インタビュー」と
+ * 書き込むと開始される。
+ */
+function startExtraInterview() {
+  startInterviewSession('ivx', ':microphone: 追加インタビュー');
+}
+
+function startInterviewSession(kind, title) {
   var themes = pickThemesForToday();
   var headlines = themes.some(function (t) { return t.category === 'news'; })
     ? fetchNewsHeadlines(12)
@@ -33,9 +46,9 @@ function startDailyInterview() {
   var questionCount = Number(getProp('INTERVIEW_QUESTIONS', '4'));
   var questions = generateInterviewQuestions(themes, headlines, questionCount);
 
-  var sessionId = today + '_' + newId('iv');
+  var sessionId = fmtDate(nowJst()) + '_' + newId(kind);
   var intro = [
-    ':microphone: 今日のインタビュー（' + questions.length + '問）',
+    title + '（' + questions.length + '問）',
     'テーマ: ' + themes.map(function (t) { return t.theme + '（' + labelForCategory(t.category) + '）'; }).join(' / '),
     'このスレッドに普段の言葉のまま返信してください。走り書きでOK。',
     '「スキップ」で次へ、「終了」でそこまでの回答からポスト下書きを作ります。',
@@ -187,6 +200,12 @@ function finishInterview(sessionId, threadTs) {
  * 進行中セッションが1つあれば、そのスレッドへの返信として扱う。
  */
 function handleChannelMessage(text) {
+  var trimmed = String(text || '').trim();
+  // 「インタビュー」と書き込むと追加インタビューを開始する
+  if (/^(インタビュー|追加インタビュー|interview)$/i.test(trimmed)) {
+    startExtraInterview();
+    return true;
+  }
   var open = readTable(SHEET.INTERVIEWS).filter(function (r) {
     return String(r.status) === INTERVIEW_STATUS.OPEN && r.thread_ts;
   });
