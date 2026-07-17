@@ -59,14 +59,21 @@ function doPost(e) {
       event.type === 'message' &&
       !event.bot_id &&
       !event.subtype &&
-      event.thread_ts &&
-      String(event.channel) === String(getProp('SLACK_CHANNEL_ID'))
+      String(event.channel).trim() === String(getProp('SLACK_CHANNEL_ID') || '').trim()
     ) {
       try {
-        handleInterviewReply(event.thread_ts, event.text);
+        if (event.thread_ts) {
+          handleInterviewReply(event.thread_ts, event.text);
+        } else {
+          // スレッド外に書かれた場合も、進行中インタビューへの回答として救済する
+          handleChannelMessage(event.text);
+        }
       } catch (err) {
         logEvent('slack_event_error', String(err));
       }
+    } else if (event.type === 'message' && !event.bot_id) {
+      // チャンネル不一致の切り分け用ログ（SLACK_CHANNEL_ID設定ミスの検出）
+      logEvent('slack_event_ignored', 'channel=' + event.channel + ' subtype=' + (event.subtype || '') + ' expected=' + getProp('SLACK_CHANNEL_ID'));
     }
   }
   return ContentService.createTextOutput('ok');

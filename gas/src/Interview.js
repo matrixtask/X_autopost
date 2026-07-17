@@ -118,13 +118,19 @@ function handleInterviewReply(threadTs, text) {
     answered_at: isSkip ? 'skipped' : fmtDateTime(nowJst()),
   });
 
+  // 記録できたことを必ず返信で知らせる
+  var ack = isSkip
+    ? ':fast_forward: Q' + current.idx + ' をスキップしました。'
+    : ':white_check_mark: Q' + current.idx + ' の回答を記録しました。';
+
   var remaining = rows.filter(function (r) {
     return Number(r.idx) > Number(current.idx);
   });
   if (remaining.length) {
     var next = remaining[0];
-    sendSlack('Q' + next.idx + '. ' + next.question, threadTs);
+    sendSlack(ack + '\n\nQ' + next.idx + '. ' + next.question, threadTs);
   } else {
+    sendSlack(ack, threadTs);
     finishInterview(sessionId, threadTs);
   }
   return true;
@@ -165,6 +171,19 @@ function finishInterview(sessionId, threadTs) {
     logEvent('draft_error', sessionId + ': ' + e);
     sendSlack(':warning: 下書き生成でエラー: ' + e, threadTs);
   }
+}
+
+/**
+ * スレッド外（チャンネル直下）に書かれたメッセージの救済。
+ * 進行中セッションが1つあれば、そのスレッドへの返信として扱う。
+ */
+function handleChannelMessage(text) {
+  var open = readTable(SHEET.INTERVIEWS).filter(function (r) {
+    return String(r.status) === INTERVIEW_STATUS.OPEN && r.thread_ts;
+  });
+  if (!open.length) return false;
+  var threadTs = String(open[0].thread_ts);
+  return handleInterviewReply(threadTs, text);
 }
 
 /** 前日以前の未完了セッションを期限切れにする（回答が来ても誤反応しないように） */

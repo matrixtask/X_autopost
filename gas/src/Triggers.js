@@ -28,6 +28,32 @@ function deleteManagedTriggers() {
   });
 }
 
+/**
+ * トラブルシュート用: 現在の状態をまとめて返す（GASエディタから実行して
+ * 実行ログで確認する）。
+ */
+function debugStatus() {
+  var stock = readTable(SHEET.STOCK);
+  var counts = {};
+  stock.forEach(function (r) { counts[r.status] = (counts[r.status] || 0) + 1; });
+  var openSessions = readTable(SHEET.INTERVIEWS).filter(function (r) {
+    return String(r.status) === 'open';
+  });
+  var logs = readTable(SHEET.LOG).slice(-10);
+  var report = [
+    '=== Stock: ' + stock.length + '件 ' + JSON.stringify(counts),
+    '=== 進行中インタビュー: ' + openSessions.length + '問が未完了',
+    openSessions.map(function (r) { return '  Q' + r.idx + ' answered=' + (r.answer ? 'yes' : 'no') + ' thread_ts=' + r.thread_ts; }).join('\n'),
+    '=== 直近ログ10件:',
+    logs.map(function (l) { return '  ' + l.timestamp + ' ' + l.event + ' ' + String(l.detail).slice(0, 80); }).join('\n'),
+    '=== 設定: DRY_RUN=' + isDryRun() + ' AUTO_APPROVE=' + isAutoApprove() + ' 閾値=' + qualityThreshold(),
+    '=== WEBAPP_URL: ' + (getProp('WEBAPP_URL') || '(未設定)'),
+    '=== SLACK_CHANNEL_ID: ' + (getProp('SLACK_CHANNEL_ID') || '(未設定)'),
+  ].join('\n');
+  console.log(report);
+  return report;
+}
+
 /** 毎週月曜: ストックの健康状態をSlackに */
 function weeklyDigest() {
   var stock = readTable(SHEET.STOCK);
