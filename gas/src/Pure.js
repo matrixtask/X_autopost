@@ -121,7 +121,24 @@ function computeNextSlots(count, opts) {
   return result;
 }
 
+/**
+ * Slackのts（例 "1784266535.690180"）を比較用に正規化する。
+ * スプレッドシートが数値として解釈すると末尾の0が落ちるため
+ * （1784266535.690180 → 1784266535.69018）、小数部の末尾0を除いて比較する。
+ */
+function normalizeSlackTs(v) {
+  var s = String(v === null || v === undefined ? '' : v).trim();
+  if (/^\d+\.\d+$/.test(s)) {
+    s = s.replace(/0+$/, '').replace(/\.$/, '');
+  }
+  return s;
+}
+
+function slackTsEqual(a, b) {
+  return normalizeSlackTs(a) !== '' && normalizeSlackTs(a) === normalizeSlackTs(b);
+}
+
 // Nodeテスト用（GASでは module は未定義なので無視される）
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { weightedTweetLength: weightedTweetLength, fitsInTweet: fitsInTweet, parseJsonLoose: parseJsonLoose, pickWeighted: pickWeighted, computeNextSlots: computeNextSlots };
+  module.exports = { weightedTweetLength: weightedTweetLength, fitsInTweet: fitsInTweet, parseJsonLoose: parseJsonLoose, pickWeighted: pickWeighted, computeNextSlots: computeNextSlots, normalizeSlackTs: normalizeSlackTs, slackTsEqual: slackTsEqual };
 }

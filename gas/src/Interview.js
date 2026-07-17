@@ -93,12 +93,21 @@ function generateInterviewQuestions(themes, headlines, count) {
  * Slackスレッドへの返信を処理する（doPost から呼ばれる）。
  */
 function handleInterviewReply(threadTs, text) {
+  // シートが数値解釈でtsの末尾0を落とすことがあるため、正規化して照合する
   var rows = readTable(SHEET.INTERVIEWS).filter(function (r) {
-    return String(r.thread_ts) === String(threadTs) && String(r.status) === INTERVIEW_STATUS.OPEN;
+    return slackTsEqual(r.thread_ts, threadTs) && String(r.status) === INTERVIEW_STATUS.OPEN;
   });
-  if (!rows.length) return false;
+  if (!rows.length) {
+    logEvent('interview_no_match', 'thread_ts=' + threadTs + ' に一致する進行中セッションなし');
+    return false;
+  }
   rows.sort(function (a, b) { return Number(a.idx) - Number(b.idx); });
   var sessionId = String(rows[0].session_id);
+  // 保存値が欠損していたら、イベントの正確なtsでシートを自己修復する
+  if (String(rows[0].thread_ts) !== String(threadTs)) {
+    updateRowsWhere(SHEET.INTERVIEWS, 'session_id', sessionId, { thread_ts: String(threadTs) });
+    logEvent('interview_ts_healed', sessionId + ': ' + rows[0].thread_ts + ' -> ' + threadTs);
+  }
   var trimmed = String(text || '').trim();
 
   if (/^(終了|以上|おわり|done)/.test(trimmed)) {

@@ -9,7 +9,16 @@ const code = readFileSync(new URL('../gas/src/Pure.js', import.meta.url), 'utf8'
 const context = { module: { exports: {} } };
 vm.createContext(context);
 vm.runInContext(code, context);
-const { weightedTweetLength, fitsInTweet, parseJsonLoose, pickWeighted, computeNextSlots } = context.module.exports;
+const { weightedTweetLength, fitsInTweet, parseJsonLoose, pickWeighted, computeNextSlots, normalizeSlackTs, slackTsEqual } = context.module.exports;
+
+test('slackTsEqual: シートの数値解釈で末尾0が落ちても一致する', () => {
+  assert.equal(slackTsEqual('1784266535.69018', '1784266535.690180'), true);
+  assert.equal(slackTsEqual(1784266535.69018, '1784266535.690180'), true);
+  assert.equal(slackTsEqual('1784266535.690181', '1784266535.690180'), false);
+  assert.equal(slackTsEqual('', ''), false);
+  assert.equal(normalizeSlackTs('1784266535.690180'), '1784266535.69018');
+  assert.equal(normalizeSlackTs(' abc '), 'abc');
+});
 
 test('weightedTweetLength: 半角は1、全角は2', () => {
   assert.equal(weightedTweetLength(''), 0);
