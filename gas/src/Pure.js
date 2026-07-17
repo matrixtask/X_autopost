@@ -122,12 +122,19 @@ function computeNextSlots(count, opts) {
 }
 
 /**
- * Slackのts（例 "1784266535.690180"）を比較用に正規化する。
- * スプレッドシートが数値として解釈すると末尾の0が落ちるため
- * （1784266535.690180 → 1784266535.69018）、小数部の末尾0を除いて比較する。
+ * Slackのts（例 "1784266535.690189"）まわりのヘルパー。
+ * スプレッドシートがtsを数値として解釈すると精度落ちで下位桁が失われる
+ * （1784266535.690189 → 1784266535.69018）。そのため:
+ * - 保存時は 'ts_' 接頭辞を付けて数値化そのものを防ぐ（rawSlackTsで復元）
+ * - 照合は文字列一致に加えて、数値としての誤差 0.0001秒以内も同一とみなす
+ *   （インタビューは1日1スレッドなので誤衝突は実質起きない）
  */
+function rawSlackTs(v) {
+  return String(v === null || v === undefined ? '' : v).trim().replace(/^ts_/, '');
+}
+
 function normalizeSlackTs(v) {
-  var s = String(v === null || v === undefined ? '' : v).trim();
+  var s = rawSlackTs(v);
   if (/^\d+\.\d+$/.test(s)) {
     s = s.replace(/0+$/, '').replace(/\.$/, '');
   }
@@ -135,10 +142,16 @@ function normalizeSlackTs(v) {
 }
 
 function slackTsEqual(a, b) {
-  return normalizeSlackTs(a) !== '' && normalizeSlackTs(a) === normalizeSlackTs(b);
+  var na = normalizeSlackTs(a);
+  var nb = normalizeSlackTs(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  var fa = parseFloat(na);
+  var fb = parseFloat(nb);
+  return isFinite(fa) && isFinite(fb) && Math.abs(fa - fb) < 0.0001;
 }
 
 // Nodeテスト用（GASでは module は未定義なので無視される）
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { weightedTweetLength: weightedTweetLength, fitsInTweet: fitsInTweet, parseJsonLoose: parseJsonLoose, pickWeighted: pickWeighted, computeNextSlots: computeNextSlots, normalizeSlackTs: normalizeSlackTs, slackTsEqual: slackTsEqual };
+  module.exports = { weightedTweetLength: weightedTweetLength, fitsInTweet: fitsInTweet, parseJsonLoose: parseJsonLoose, pickWeighted: pickWeighted, computeNextSlots: computeNextSlots, normalizeSlackTs: normalizeSlackTs, slackTsEqual: slackTsEqual, rawSlackTs: rawSlackTs };
 }

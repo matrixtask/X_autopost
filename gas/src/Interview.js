@@ -46,7 +46,7 @@ function startDailyInterview() {
   questions.forEach(function (q, idx) {
     appendRowObj(SHEET.INTERVIEWS, {
       session_id: sessionId,
-      thread_ts: threadTs,
+      thread_ts: 'ts_' + threadTs, // 'ts_'接頭辞でシートの数値化（精度落ち）を防ぐ
       idx: idx + 1,
       theme: q.theme,
       category: q.category,
@@ -104,9 +104,9 @@ function handleInterviewReply(threadTs, text) {
   rows.sort(function (a, b) { return Number(a.idx) - Number(b.idx); });
   var sessionId = String(rows[0].session_id);
   // 保存値が欠損していたら、イベントの正確なtsでシートを自己修復する
-  if (String(rows[0].thread_ts) !== String(threadTs)) {
-    updateRowsWhere(SHEET.INTERVIEWS, 'session_id', sessionId, { thread_ts: String(threadTs) });
-    logEvent('interview_ts_healed', sessionId + ': ' + rows[0].thread_ts + ' -> ' + threadTs);
+  if (String(rows[0].thread_ts) !== 'ts_' + String(threadTs)) {
+    updateRowsWhere(SHEET.INTERVIEWS, 'session_id', sessionId, { thread_ts: 'ts_' + String(threadTs) });
+    logEvent('interview_ts_healed', sessionId + ': ' + rows[0].thread_ts + ' -> ts_' + threadTs);
   }
   var trimmed = String(text || '').trim();
 
@@ -191,7 +191,7 @@ function handleChannelMessage(text) {
     return String(r.status) === INTERVIEW_STATUS.OPEN && r.thread_ts;
   });
   if (!open.length) return false;
-  var threadTs = String(open[0].thread_ts);
+  var threadTs = rawSlackTs(open[0].thread_ts);
   return handleInterviewReply(threadTs, text);
 }
 
