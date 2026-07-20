@@ -49,6 +49,7 @@ function pickThemesForToday() {
   function pickFrom(categories, exclude) {
     var pool = all.filter(function (t) {
       return categories.indexOf(String(t.category)) >= 0 &&
+        (Number(t.weight) || 0) > 0 && // 重み0 = 停止テーマは選ばない
         (!exclude || exclude.indexOf(t.theme) < 0);
     });
     if (!pool.length) return null;

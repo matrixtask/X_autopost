@@ -67,6 +67,70 @@ function syncStockRowToNotion(id) {
   }
 }
 
+/** NotionのプロパティからプレーンテキストをJavaScriptの文字列にする */
+function notionPlainText(richArray) {
+  return (richArray || []).map(function (t) { return t.plain_text || ''; }).join('').trim();
+}
+
+/**
+ * Notionの「トークテーマ（運用中）_X」データベース → Themesシート同期。
+ * Notionに行を足す/重み・メモを変える/状態を「停止」にする だけで
+ * 毎朝のインタビューのテーマ選定に反映される（Notionがテーマのマスター）。
+ *
+ * 必要プロパティ: NOTION_TOKEN, NOTION_THEMES_DATABASE_ID
+ * Notion側スキーマ: Name(タイトル) / カテゴリ(定番|時事|ネタ) / 重み(数値) /
+ *                  状態(運用中|停止) / メモ / 出典
+ */
+function syncThemesFromNotion() {
+  if (!getProp('NOTION_TOKEN') || !getProp('NOTION_THEMES_DATABASE_ID')) {
+    return 'スキップ（NOTION_TOKEN / NOTION_THEMES_DATABASE_ID 未設定）';
+  }
+  var dbId = getProp('NOTION_THEMES_DATABASE_ID');
+  var pages = [];
+  var cursor = null;
+  do {
+    var payload = { page_size: 100 };
+    if (cursor) payload.start_cursor = cursor;
+    var res = notionApi('post', '/databases/' + dbId + '/query', payload);
+    pages = pages.concat(res.results || []);
+    cursor = res.has_more ? res.next_cursor : null;
+  } while (cursor);
+
+  var catMap = { '定番': 'evergreen', '時事': 'news', 'ネタ': 'neta' };
+  var existing = {};
+  readTable(SHEET.THEMES).forEach(function (r) {
+    existing[String(r.theme).trim()] = r;
+  });
+
+  var added = 0;
+  var updated = 0;
+  pages.forEach(function (page) {
+    var p = page.properties || {};
+    var theme = notionPlainText(p['Name'] && p['Name'].title);
+    if (!theme) return;
+    var stopped = p['状態'] && p['状態'].select && p['状態'].select.name === '停止';
+    var category = catMap[(p['カテゴリ'] && p['カテゴリ'].select && p['カテゴリ'].select.name) || ''] || 'evergreen';
+    // 停止は重み0にして選定対象から外す（行は残す）
+    var weight = stopped ? 0 : (p['重み'] && typeof p['重み'].number === 'number' ? p['重み'].number : 1);
+    var memo = notionPlainText(p['メモ'] && p['メモ'].rich_text);
+    var source = notionPlainText(p['出典'] && p['出典'].rich_text);
+    var notes = memo + (source ? '（出典: ' + source + '）' : '');
+
+    var row = existing[theme];
+    if (!row) {
+      appendRowObj(SHEET.THEMES, { theme: theme, category: category, weight: weight, last_used: '', notes: notes });
+      added++;
+    } else if (String(row.category) !== category || Number(row.weight) !== weight || String(row.notes) !== notes) {
+      updateRowsWhere(SHEET.THEMES, 'theme', theme, { category: category, weight: weight, notes: notes });
+      updated++;
+    }
+  });
+
+  var msg = 'Notionテーマ同期: ' + pages.length + '件中 追加' + added + ' / 更新' + updated;
+  logEvent('themes_sync', msg);
+  return msg;
+}
+
 /** 手動実行用: 全ストックをNotionへ同期し直す */
 function syncAllStockToNotion() {
   if (!notionEnabled()) return 'Notion未設定のためスキップ';

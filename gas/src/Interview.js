@@ -25,6 +25,12 @@ function startDailyInterview() {
     return;
   }
   expireOldSessions();
+  // Notionのテーマデータベースをマスターとして取り込んでから選定する
+  try {
+    syncThemesFromNotion();
+  } catch (e) {
+    logEvent('themes_sync_error', String(e));
+  }
   startInterviewSession('iv', ':microphone: 今日のインタビュー');
 }
 
