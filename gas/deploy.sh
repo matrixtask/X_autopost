@@ -40,6 +40,22 @@ if [ -z "$DEPLOYMENT_ID" ]; then
   exit 0
 fi
 
+# プレースホルダのままや形式不正をここで弾く（WebアプリURLの /macros/s/◯/exec の◯部分）
+if ! printf '%s' "$DEPLOYMENT_ID" | grep -Eq '^AKfycb[A-Za-z0-9_-]{20,}$'; then
+  echo "エラー: デプロイIDの形式が不正です: $DEPLOYMENT_ID" >&2
+  echo "WebアプリURLの /macros/s/ と /exec の間の文字列を指定してください。" >&2
+  exit 1
+fi
+
 echo "==> Webアプリを新バージョンで更新: $DEPLOYMENT_ID"
-clasp deploy -i "$DEPLOYMENT_ID" -d "cli $(date '+%Y-%m-%d %H:%M')"
+DEPLOY_OUT="$(clasp deploy -i "$DEPLOYMENT_ID" -d "cli $(date '+%Y-%m-%d %H:%M')" 2>&1)" || {
+  echo "$DEPLOY_OUT" >&2
+  exit 1
+}
+echo "$DEPLOY_OUT"
+# claspはエラーでも終了コード0を返すことがあるため、出力からも失敗を検出する
+if printf '%s' "$DEPLOY_OUT" | grep -qiE 'invalid|error|not found'; then
+  echo "エラー: デプロイ更新に失敗しました。上の出力を確認してください。" >&2
+  exit 1
+fi
 echo "完了。URLは変わりません。"
