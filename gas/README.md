@@ -18,7 +18,7 @@
 2. [script.google.com](https://script.google.com) で新規プロジェクトを作成
 3. `gas/src/` の各ファイルをプロジェクトに追加する
    - `*.js` はスクリプトファイル（GAS上では `.gs` になる）、`Index.html` はHTMLファイルとして作成
-   - claspを使う場合: `npm i -g @google/clasp && clasp login`、`.clasp.json.example` を `.clasp.json` にコピーしてscriptIdを記入し、`gas/` ディレクトリで `clasp push`
+   - claspを使う場合は下の「CLIでの反映（clasp）」を参照（以後の更新がコマンド1発になるので推奨）
 4. プロジェクトの設定 > スクリプト プロパティに以下を登録:
 
 | プロパティ | 値 |
@@ -103,6 +103,38 @@ GASエディタで `installTriggers` を実行すると以下が登録されま�
 | `MAX_POSTS_PER_DAY` | `3` | 1日の最大投稿数 |
 | `INTERVIEW_QUESTIONS` | `4` | 毎朝の質問数 |
 | `CLAUDE_MODEL` | `claude-sonnet-5` | 生成・採点に使うモデル |
+
+## CLIでの反映（clasp / Ubuntu）
+
+初回セットアップ:
+
+```bash
+# Node.js 20+ が無ければ
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt-get install -y nodejs
+
+sudo npm install -g @google/clasp
+clasp login                     # ブラウザが開くのでGoogleアカウントで許可
+
+# Apps Script APIを有効化（1回だけ。下のURLを開いてONにする）
+#   https://script.google.com/home/usersettings
+
+git clone https://github.com/matrixtask/X_autopost.git && cd X_autopost/gas
+cp .clasp.json.example .clasp.json
+#   .clasp.json の scriptId を記入（GASエディタ > プロジェクトの設定 > スクリプトID）
+
+# WebアプリのデプロイIDを保存しておくと ./deploy.sh だけで済む
+#   デプロイIDは WebアプリURLの /macros/s/◯◯◯/exec の ◯◯◯ 部分（AKfycb…）
+echo 'AKfycb…' > .deployment-id
+```
+
+以後の反映はこれだけ:
+
+```bash
+cd X_autopost && git pull && cd gas && ./deploy.sh
+```
+
+- `clasp push` はローカルの `src/` をそのままGASに同期します（GAS側だけにあるファイルは消えるので、**手貼りしていた `コード.gs` 等が残っていれば初回pushで整理されます**。初回push後にGASエディタを開いて、`Code`という結合ファイルが二重に残っていないか確認してください）
+- push だけでも時間トリガー（インタビュー・採点・投稿）には即反映されます。**doGet/doPost（Webアプリ・Slack受信）への反映にはデプロイ更新が必要**で、`deploy.sh` がデプロイIDを使って同じURLのまま新バージョンにします
 
 ## トラブルシューティング
 

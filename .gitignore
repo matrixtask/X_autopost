@@ -7,3 +7,4 @@ android/build/
 android/app/build/
 *.log
 gas/.clasp.json
+gas/.deployment-id
