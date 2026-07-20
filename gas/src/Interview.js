@@ -180,18 +180,45 @@ function finishInterview(sessionId, threadTs) {
     logEvent('interview_empty', sessionId);
     return;
   }
-  sendSlack('ありがとうございます。回答からポストの下書きを作ってストックします…', threadTs);
+  sendSlack('ありがとうございます。下書きを作って、その場で採点までやります…', threadTs);
   try {
     var drafts = generateDraftsFromInterview(sessionId);
-    var lines = drafts.map(function (d, i) { return (i + 1) + '. ' + d.text; });
+    // 即時品質ゲート: 待たずに合否を返し、足りなければすぐ追加インタビューできるようにする
+    runQualityGate();
+
+    var rows = readTable(SHEET.STOCK).filter(function (r) {
+      return String(r.session_id) === sessionId;
+    });
+    var passStatuses = [STATUS.READY, STATUS.APPROVED, STATUS.SCHEDULED];
+    var passed = rows.filter(function (r) { return passStatuses.indexOf(String(r.status)) >= 0; });
+
+    var lines = rows.map(function (r) {
+      var ok = passStatuses.indexOf(String(r.status)) >= 0;
+      var head = (ok ? ':white_check_mark:' : ':no_entry_sign:') + ' *' + (r.score === '' ? '-' : r.score) + '点* ';
+      var reason = String(r.score_reason || '');
+      return head + String(r.text) + (reason ? '\n　└ ' + reason : '');
+    });
+
+    var footer;
+    if (!passed.length) {
+      footer = ':arrows_counterclockwise: 合格なし。チャンネルに「インタビュー」と書けば、すぐ次のインタビューを始めます。';
+    } else if (isAutoApprove()) {
+      var scheduled = scheduleApprovedPosts();
+      footer = ':calendar: 合格' + passed.length + '件のうち' + scheduled.length + '件を予約しました。';
+    } else {
+      var url = getProp('WEBAPP_URL');
+      footer = ':hourglass: 合格' + passed.length + '件は承認待ちです。' +
+        (url ? '承認: ' + url + '?token=' + getProp('ADMIN_TOKEN') : 'Webアプリから承認してください。');
+    }
+
     sendSlack(
-      ':inbox_tray: ' + drafts.length + '件をストックに追加しました。\n\n' + lines.join('\n\n') +
-      '\n\n今夜の品質ゲートで採点して、良いものだけ予約に回します。',
+      ':inbox_tray: ' + drafts.length + '件をストックし、採点しました（合格 ' + passed.length + '/' + rows.length + '、閾値' + qualityThreshold() + '点）\n\n' +
+      lines.join('\n\n') + '\n\n' + footer,
       threadTs
     );
   } catch (e) {
     logEvent('draft_error', sessionId + ': ' + e);
-    sendSlack(':warning: 下書き生成でエラー: ' + e, threadTs);
+    sendSlack(':warning: 下書き生成/採点でエラー: ' + e + '\n下書きが残っていれば今夜の品質ゲートで再処理されます。', threadTs);
   }
 }
 
