@@ -15,6 +15,8 @@
  * 任意:
  *   NOTION_TOKEN        Notionインテグレーションのシークレット
  *   NOTION_DATABASE_ID  ストック同期先NotionデータベースID
+ *   NOTION_THEMES_DATABASE_ID  テーマ管理DB（トークテーマ（運用中）_X）のID。
+ *                       設定するとNotionの行がThemesシートへ毎朝同期される
  *   CLAUDE_MODEL        既定: claude-sonnet-5
  *   DRY_RUN             "false" にするまでXへは投稿しない（既定: true）
  *   AUTO_APPROVE        "true" で品質ゲート通過分を承認なしで予約（既定: false）
