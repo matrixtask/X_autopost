@@ -8,7 +8,7 @@
  *   毎週月 9時台 weeklyDigest         … ストック残量と先週の実績を通知
  */
 
-var TRIGGER_FUNCS = ['startDailyInterview', 'nightlyGateAndSchedule', 'postTick', 'weeklyDigest'];
+var TRIGGER_FUNCS = ['startDailyInterview', 'nightlyGateAndSchedule', 'postTick', 'weeklyDigest', 'weeklyMetricsReport'];
 
 function installTriggers() {
   deleteManagedTriggers();
@@ -16,6 +16,7 @@ function installTriggers() {
   ScriptApp.newTrigger('nightlyGateAndSchedule').timeBased().atHour(21).everyDays(1).create();
   ScriptApp.newTrigger('postTick').timeBased().everyHours(1).create();
   ScriptApp.newTrigger('weeklyDigest').timeBased().onWeekDay(ScriptApp.WeekDay.MONDAY).atHour(9).create();
+  ScriptApp.newTrigger('weeklyMetricsReport').timeBased().onWeekDay(ScriptApp.WeekDay.MONDAY).atHour(8).create();
   logEvent('triggers', 'トリガーを登録しました');
   return 'OK';
 }
