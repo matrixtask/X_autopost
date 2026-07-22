@@ -69,10 +69,88 @@ function runQualityGate() {
 }
 
 /**
- * 夜のトリガー本体: 採点 → 予約 → Slack通知
+ * 採点 → 不合格分を採点コメントに基づいて自己批判リライト → 再採点、を
+ * 最大 REFINE_ROUNDS 回（既定2回）繰り返す。
+ * リライト回数は refines 列に記録し、上限に達したものは stock のまま残す。
+ */
+function runQualityGateWithRefinement() {
+  var total = runQualityGate();
+  var rounds = Number(getProp('REFINE_ROUNDS', '2'));
+  for (var r = 0; r < rounds; r++) {
+    var refined = refineFailedDrafts();
+    if (!refined) break;
+    var g = runQualityGate();
+    total.scored += g.scored;
+    total.passed += g.passed;
+  }
+  return total;
+}
+
+/**
+ * 閾値未満(stock)の下書きを、採点コメントを踏まえて「独り言のつぶやき」へ
+ * 書き直し、draftに戻して再採点対象にする。1回の実行で最大10件。
+ */
+function refineFailedDrafts() {
+  ensureHeaders(SHEET.STOCK);
+  var maxRefines = 2;
+  var targets = readTable(SHEET.STOCK).filter(function (r) {
+    return String(r.status) === STATUS.STOCK && Number(r.refines || 0) < maxRefines;
+  }).slice(0, 10);
+  if (!targets.length) return 0;
+
+  var system = buildStylePrompt();
+  var user = [
+    '以下は品質ゲートで不合格になったXのポスト下書きと、その採点コメントです。',
+    '指摘を踏まえて書き直してください。',
+    '',
+    targets.map(function (d) {
+      return 'id: ' + d.id + '\n採点: ' + d.score + '点 / 指摘: ' + d.score_reason + '\n本文:\n' + d.text;
+    }).join('\n\n====\n\n'),
+    '',
+    'ルール:',
+    '- 「質問に答えた文」を「ふと思いついた独り言のつぶやき」に変換する。前置きなしで1行目から本題',
+    '- 指摘された弱点（抽象的・評論調・説教臭い・文脈依存など）を具体的に直す。固有名詞や数字が足せるなら足す',
+    '- 教訓やまとめで締めない。本音・オチ・言い切りで終わる',
+    '- 元の内容の事実を変えない。全角換算140字以内',
+    '- どう直しても良くならないものは "skip": true を返す',
+    '',
+    'JSON配列で出力: [{"id": "...", "text": "...", "skip": false}]',
+  ].join('\n');
+
+  var results = askClaudeJson(system, user, 3000);
+  if (!Array.isArray(results)) throw new Error('リライト結果の出力が不正です');
+  var byId = {};
+  results.forEach(function (r) { byId[String(r.id)] = r; });
+
+  var refined = 0;
+  targets.forEach(function (d) {
+    var r = byId[String(d.id)];
+    var count = Number(d.refines || 0) + 1;
+    if (!r || r.skip || !String(r.text || '').trim()) {
+      // 改善不能と判断されたものは上限扱いにして毎回のリライト対象から外す
+      updateStockById(d.id, { refines: maxRefines });
+      return;
+    }
+    var text = String(r.text).trim();
+    if (!fitsInTweet(text)) text = truncateForTweet(text);
+    updateStockById(d.id, {
+      text: text,
+      status: STATUS.DRAFT,
+      score: '',
+      score_reason: '',
+      refines: count,
+    });
+    refined++;
+  });
+  if (refined) logEvent('refine', refined + '件をリライトして再採点へ');
+  return refined;
+}
+
+/**
+ * 夜のトリガー本体: 採点(+リライトループ) → 予約 → Slack通知
  */
 function nightlyGateAndSchedule() {
-  var gate = runQualityGate();
+  var gate = runQualityGateWithRefinement();
   var scheduled = scheduleApprovedPosts();
 
   var stock = readTable(SHEET.STOCK);

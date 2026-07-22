@@ -91,14 +91,22 @@ function generateInterviewQuestions(themes, headlines, count) {
     '質問のルール:',
     '- 1問1トピック、話し言葉で短く（40字以内目安）',
     '- 「はい/いいえ」で終わらない、具体的なエピソードや本音が出る聞き方',
-    '- 時事テーマにはニュース見出しを1つ選んで絡める',
+    '- 固有名詞・数字・「今日/最近あったこと」が答えに出てくる聞き方を最優先。抽象的な回想・ビジョン語りを誘う質問（「当時の自分に何て言う？」等）は避ける',
+    '- 時事テーマにはニュース見出しを1つ選んで絡める。大企業の既出ニュースの繰り返しより、国際ニュースや小さなスタートアップの「まだ知られていない話」を優先する',
     '- ネタテーマはゆるく、笑える話や人間味が出る話を引き出す',
   ].join('\n');
+  // 直近に聞いた時事質問を出し、同じ話題の連発（例: トヨタ3連発）を防ぐ
+  var recentNewsQs = readTable(SHEET.INTERVIEWS)
+    .filter(function (r) { return String(r.category) === 'news'; })
+    .slice(-12)
+    .map(function (r) { return '- ' + r.question; });
   var user = [
     '今日のテーマ:',
     themes.map(function (t) { return '- ' + t.theme + '（カテゴリ: ' + t.category + (t.notes ? ' / メモ: ' + t.notes : '') + '）'; }).join('\n'),
     '',
-    headlines.length ? '今日のニュース見出し:\n' + headlines.map(function (h) { return '- ' + h; }).join('\n') : '',
+    headlines.length ? '今日のニュース見出し（英語見出しは日本語で聞いてよい）:\n' + headlines.map(function (h) { return '- ' + h; }).join('\n') : '',
+    '',
+    recentNewsQs.length ? '最近すでに聞いた時事質問（同じ話題・同じ企業の質問は禁止）:\n' + recentNewsQs.join('\n') : '',
     '',
     '合計' + count + '問。各テーマから最低1問。',
     'JSON配列で出力: [{"theme": "...", "category": "evergreen|news|neta", "question": "..."}]',
@@ -189,8 +197,8 @@ function finishInterview(sessionId, threadTs) {
   sendSlack('ありがとうございます。下書きを作って、その場で採点までやります…', threadTs);
   try {
     var drafts = generateDraftsFromInterview(sessionId);
-    // 即時品質ゲート: 待たずに合否を返し、足りなければすぐ追加インタビューできるようにする
-    runQualityGate();
+    // 即時品質ゲート: 不合格分は自己批判リライトを挟んで合格点が出るまで(最大2周)改造する
+    runQualityGateWithRefinement();
 
     var rows = readTable(SHEET.STOCK).filter(function (r) {
       return String(r.session_id) === sessionId;

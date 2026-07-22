@@ -3,7 +3,7 @@
  */
 
 var SHEET_HEADERS = {
-  Stock: ['id', 'created_at', 'theme', 'category', 'session_id', 'text', 'score', 'score_reason', 'status', 'scheduled_at', 'posted_at', 'tweet_id', 'notion_page_id'],
+  Stock: ['id', 'created_at', 'theme', 'category', 'session_id', 'text', 'score', 'score_reason', 'status', 'scheduled_at', 'posted_at', 'tweet_id', 'notion_page_id', 'impressions', 'likes', 'retweets', 'replies', 'metrics_at', 'refines'],
   Interviews: ['session_id', 'thread_ts', 'idx', 'theme', 'category', 'question', 'answer', 'answered_at', 'status'],
   Themes: ['theme', 'category', 'weight', 'last_used', 'notes'],
   Voice: ['text', 'note'],
@@ -41,6 +41,18 @@ function setupSpreadsheet() {
   seedThemesIfEmpty();
   logEvent('setup', 'シートを初期化しました');
   return 'OK: ' + spreadsheet.getUrl();
+}
+
+/** 既存シートに後から増えた列（メトリクス等）のヘッダーを追記する */
+function ensureHeaders(sheetName) {
+  var sheet = getSheet(sheetName);
+  var headers = SHEET_HEADERS[sheetName];
+  var width = sheet.getLastColumn();
+  var current = width > 0 ? sheet.getRange(1, 1, 1, width).getValues()[0].map(String) : [];
+  if (current.length < headers.length) {
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    sheet.getRange(1, 1, sheet.getMaxRows(), headers.length).setNumberFormat('@');
+  }
 }
 
 /** シート全体をオブジェクト配列で読む。_row に行番号（1始まり）を持たせる */
