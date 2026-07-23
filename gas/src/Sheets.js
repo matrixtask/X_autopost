@@ -8,6 +8,7 @@ var SHEET_HEADERS = {
   Themes: ['theme', 'category', 'weight', 'last_used', 'notes'],
   Voice: ['text', 'note'],
   Log: ['timestamp', 'event', 'detail'],
+  Memory: ['created_at', 'note', 'source', 'status'],
 };
 
 function ss() {

@@ -247,6 +247,13 @@ function handleChannelMessage(text) {
     startExtraInterview();
     return true;
   }
+  // 「メモ: 〜」は運用メモとして取り込む（インタビュー進行中でも回答扱いにしない）
+  var memoMatch = trimmed.match(/^(?:メモ|memo)[:：]\s*([\s\S]+)$/i);
+  if (memoMatch) {
+    addMemory(memoMatch[1], 'チャンネルのメモ');
+    notifySlack(':memo: メモとして取り込みました。今後の生成・採点に反映します。');
+    return true;
+  }
   var open = readTable(SHEET.INTERVIEWS).filter(function (r) {
     return String(r.status) === INTERVIEW_STATUS.OPEN && r.thread_ts;
   });

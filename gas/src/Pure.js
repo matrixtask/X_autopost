@@ -151,7 +151,29 @@ function slackTsEqual(a, b) {
   return isFinite(fa) && isFinite(fb) && Math.abs(fa - fb) < 0.0001;
 }
 
+/**
+ * ピアソン相関係数。データ点が2未満・分散0の場合はnull。
+ * 自己採点スコアと実測インプレッションの整合チェックに使う。
+ */
+function pearson(xs, ys) {
+  var n = Math.min(xs.length, ys.length);
+  if (n < 2) return null;
+  var sx = 0, sy = 0;
+  for (var i = 0; i < n; i++) { sx += Number(xs[i]); sy += Number(ys[i]); }
+  var mx = sx / n, my = sy / n;
+  var cov = 0, vx = 0, vy = 0;
+  for (var j = 0; j < n; j++) {
+    var dx = Number(xs[j]) - mx;
+    var dy = Number(ys[j]) - my;
+    cov += dx * dy;
+    vx += dx * dx;
+    vy += dy * dy;
+  }
+  if (vx === 0 || vy === 0) return null;
+  return cov / Math.sqrt(vx * vy);
+}
+
 // Nodeテスト用（GASでは module は未定義なので無視される）
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { weightedTweetLength: weightedTweetLength, fitsInTweet: fitsInTweet, parseJsonLoose: parseJsonLoose, pickWeighted: pickWeighted, computeNextSlots: computeNextSlots, normalizeSlackTs: normalizeSlackTs, slackTsEqual: slackTsEqual, rawSlackTs: rawSlackTs };
+  module.exports = { weightedTweetLength: weightedTweetLength, fitsInTweet: fitsInTweet, parseJsonLoose: parseJsonLoose, pickWeighted: pickWeighted, computeNextSlots: computeNextSlots, normalizeSlackTs: normalizeSlackTs, slackTsEqual: slackTsEqual, rawSlackTs: rawSlackTs, pearson: pearson };
 }

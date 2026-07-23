@@ -9,7 +9,16 @@ const code = readFileSync(new URL('../gas/src/Pure.js', import.meta.url), 'utf8'
 const context = { module: { exports: {} } };
 vm.createContext(context);
 vm.runInContext(code, context);
-const { weightedTweetLength, fitsInTweet, parseJsonLoose, pickWeighted, computeNextSlots, normalizeSlackTs, slackTsEqual } = context.module.exports;
+const { weightedTweetLength, fitsInTweet, parseJsonLoose, pickWeighted, computeNextSlots, normalizeSlackTs, slackTsEqual, pearson } = context.module.exports;
+
+test('pearson: 相関係数の基本ケース', () => {
+  assert.equal(pearson([1, 2, 3], [2, 4, 6]), 1); // 完全正相関
+  assert.equal(pearson([1, 2, 3], [6, 4, 2]), -1); // 完全負相関
+  assert.equal(pearson([1], [1]), null); // データ不足
+  assert.equal(pearson([1, 1, 1], [2, 4, 6]), null); // 分散0
+  const weak = pearson([80, 60, 70, 90], [100, 5000, 300, 200]);
+  assert.ok(weak !== null && weak > -1 && weak < 1);
+});
 
 test('slackTsEqual: シートの数値解釈で下位桁が失われても一致する', () => {
   assert.equal(slackTsEqual('1784266535.69018', '1784266535.690180'), true); // 末尾0落ち
