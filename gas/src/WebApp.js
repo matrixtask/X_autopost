@@ -122,10 +122,41 @@ function api_updateText(token, id, text) {
   var t = String(text || '').trim();
   if (!t) throw new Error('本文が空です');
   if (!fitsInTweet(t)) throw new Error('長すぎます（280重み超過）。現在: ' + weightedTweetLength(t));
-  updateStockById(id, { text: t });
+
+  var row = readTable(SHEET.STOCK).filter(function (r) { return String(r.id) === String(id); })[0];
+  var rescoreTargets = [STATUS.DRAFT, STATUS.STOCK, STATUS.READY];
+  var shouldRescore = row && rescoreTargets.indexOf(String(row.status)) >= 0;
+
+  updateStockById(id, shouldRescore
+    ? { text: t, status: STATUS.DRAFT, score: '', score_reason: '' } // 編集分は再採点にかける
+    : { text: t });
   logEvent('webapp_edit', id);
+
+  var message = '保存しました';
+  if (shouldRescore) {
+    try {
+      runQualityGate(); // 編集直後に即再採点（リライトはかけず、あなたの文をそのまま採点）
+      var updated = readTable(SHEET.STOCK).filter(function (r) { return String(r.id) === String(id); })[0];
+      if (updated && updated.score !== '') {
+        var passed = [STATUS.READY, STATUS.APPROVED].indexOf(String(updated.status)) >= 0;
+        message = '再採点: ' + updated.score + '点（' + (passed ? '合格' : '保留') + '）' +
+          (updated.score_reason ? ' / ' + updated.score_reason : '');
+      }
+    } catch (e) {
+      logEvent('rescore_error', id + ': ' + e);
+      message = '保存しました（再採点は次回ゲートで実行）';
+    }
+  }
   try { syncStockRowToNotion(id); } catch (e) { logEvent('notion_error', id + ': ' + e); }
-  return 'ok';
+  return message;
+}
+
+/** ストック・不合格分の自己批判リライト＋再採点をその場で回す */
+function api_refineNow(token) {
+  assertToken(token);
+  var gate = runQualityGateWithRefinement();
+  logEvent('webapp_refine', JSON.stringify(gate));
+  return 'リライト＋再採点を実行: 採点' + gate.scored + '件 / 合格' + gate.passed + '件';
 }
 
 function api_scheduleNow(token) {

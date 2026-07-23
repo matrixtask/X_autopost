@@ -17,6 +17,8 @@ function runQualityGate() {
 
   var threshold = qualityThreshold();
   var samples = getVoiceSamples(10);
+  // 実測インプレッションから学習した追加基準（evaluateScoring()が更新する）
+  var learnedRubric = getProp('QUALITY_RUBRIC_LEARNED', '');
   var system = [
     'あなたはXアカウント運用の編集長です。ポスト下書きを採点します。',
     '採点基準（各25点、計100点）:',
@@ -25,6 +27,7 @@ function runQualityGate() {
     '3. 引き: 続きを読みたくなるか、反応（リプ・いいね）したくなるか',
     '4. 完成度: 誤字・冗長さ・文字数・単体で意味が通るか',
     '',
+    learnedRubric ? '実測インプレッションの分析から学習した追加基準（採点に反映すること）:\n' + learnedRubric + '\n' : '',
     '文体サンプル:',
     samples.map(function (s, i) { return '--- ' + (i + 1) + ' ---\n' + s; }).join('\n'),
   ].join('\n');
@@ -98,18 +101,30 @@ function refineFailedDrafts() {
   }).slice(0, 10);
   if (!targets.length) return 0;
 
+  // 捏造防止: 本人がインタビューで実際に話した内容を「一次情報」として渡す
+  var qaBySession = {};
+  readTable(SHEET.INTERVIEWS).forEach(function (r) {
+    if (!String(r.answer || '').trim()) return;
+    var sid = String(r.session_id);
+    if (!qaBySession[sid]) qaBySession[sid] = [];
+    qaBySession[sid].push('Q: ' + r.question + ' / A: ' + r.answer);
+  });
+
   var system = buildStylePrompt();
   var user = [
-    '以下は品質ゲートで不合格になったXのポスト下書きと、その採点コメントです。',
-    '指摘を踏まえて書き直してください。',
+    '以下は品質ゲートで不合格になったXのポスト下書きと、その採点コメント、',
+    'および本人がインタビューで実際に話した一次情報です。指摘を踏まえて書き直してください。',
     '',
     targets.map(function (d) {
-      return 'id: ' + d.id + '\n採点: ' + d.score + '点 / 指摘: ' + d.score_reason + '\n本文:\n' + d.text;
+      var qa = qaBySession[String(d.session_id)] || [];
+      return 'id: ' + d.id + '\n採点: ' + d.score + '点 / 指摘: ' + d.score_reason + '\n本文:\n' + d.text +
+        (qa.length ? '\n一次情報（本人の回答）:\n' + qa.join('\n') : '\n一次情報: なし（本文にある事実だけで書き直すこと）');
     }).join('\n\n====\n\n'),
     '',
     'ルール:',
     '- 「質問に答えた文」を「ふと思いついた独り言のつぶやき」に変換する。前置きなしで1行目から本題',
-    '- 指摘された弱点（抽象的・評論調・説教臭い・文脈依存など）を具体的に直す。固有名詞や数字が足せるなら足す',
+    '- 指摘された弱点（抽象的・評論調・説教臭い・文脈依存など）を具体的に直す',
+    '- 【最重要】事実の追加は「一次情報」にあるものだけ。数字・固有名詞・エピソードの捏造は絶対にしない。足せる事実がなければ、盛らずに削って研ぐ',
     '- 教訓やまとめで締めない。本音・オチ・言い切りで終わる',
     '- 元の内容の事実を変えない。全角換算140字以内',
     '- どう直しても良くならないものは "skip": true を返す',

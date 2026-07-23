@@ -39,6 +39,7 @@
 <header>
   <h1>X Autopost ストック</h1>
   <button class="ghost" onclick="load()">再読込</button>
+  <button class="ghost" onclick="refineNow()">リライト</button>
   <button class="ghost" onclick="scheduleNow()">予約実行</button>
 </header>
 <div class="tabs" id="tabs"></div>
@@ -144,10 +145,19 @@
 
   function saveText(id) {
     var value = document.getElementById('ta-' + id).value;
+    toast('保存して再採点中…');
     google.script.run
-      .withSuccessHandler(function () { toast('保存しました'); load(); })
+      .withSuccessHandler(function (msg) { toast(msg || '保存しました'); load(); })
       .withFailureHandler(function (e) { toast(e.message); })
       .api_updateText(TOKEN, id, value);
+  }
+
+  function refineNow() {
+    toast('リライト＋再採点を実行中…（1分ほどかかります）');
+    google.script.run
+      .withSuccessHandler(function (msg) { toast(msg); load(); })
+      .withFailureHandler(function (e) { toast(e.message); })
+      .api_refineNow(TOKEN);
   }
 
   function scheduleNow() {

@@ -47,6 +47,68 @@ function fetchTweetMetrics() {
 }
 
 /**
+ * 自己採点の妥当性検証と、実測ベースの採点基準の学習。
+ * - 採点スコアと実測インプレッションの相関を計算して報告
+ * - インプレッション上位/下位の共通点から「追加採点基準」を生成し、
+ *   スクリプトプロパティ QUALITY_RUBRIC_LEARNED に保存
+ *   （以後の品質ゲートの採点プロンプトに自動で組み込まれる）
+ * 手動実行可。週次メトリクス収集後にデータが8件以上あれば自動実行される。
+ */
+function evaluateScoring() {
+  var rows = readTable(SHEET.STOCK).filter(function (r) {
+    return String(r.status) === STATUS.POSTED && r.metrics_at && r.score !== '';
+  });
+  if (rows.length < 8) {
+    return 'データ不足（メトリクス付き投稿が' + rows.length + '件。8件以上で実行可能）';
+  }
+
+  var scores = rows.map(function (r) { return Number(r.score); });
+  var imps = rows.map(function (r) { return Number(r.impressions || 0); });
+  var corr = pearson(scores, imps);
+  var corrText = corr === null ? '計算不能' : corr.toFixed(2);
+
+  var sorted = rows.slice().sort(function (a, b) { return Number(b.impressions || 0) - Number(a.impressions || 0); });
+  var list = sorted.map(function (r) {
+    return '採点' + r.score + '点 / インプ' + r.impressions + ' / いいね' + r.likes + ' / ' + r.category + '\n' + r.text;
+  }).join('\n\n----\n\n');
+
+  var result = askClaudeJson(
+    [
+      'あなたはXアカウント運用のデータアナリストです。',
+      'AIの自己採点（本人らしさ・具体性・引き・完成度の100点満点）と、実際のXでの反応を突き合わせて評価します。',
+    ].join('\n'),
+    [
+      '投稿実績（インプレッション降順）:',
+      '',
+      list,
+      '',
+      '採点とインプレッションのピアソン相関: ' + corrText,
+      '',
+      'タスク:',
+      '1. verdict: 自己採点はXの実際の反応を予測できているか。ズレている場合はどこがズレているかを150字以内で',
+      '2. rubric: インプレッションが高いポストの共通点・低いポストの共通点から、採点プロンプトにそのまま追記できる「追加採点基準」を箇条書き3〜5行で。憶測ではなく上のデータに現れている事実だけから作る',
+      '',
+      'JSONで出力: {"verdict": "...", "rubric": "..."}',
+    ].join('\n'),
+    2000
+  );
+
+  if (result && result.rubric) {
+    PropertiesService.getScriptProperties().setProperty('QUALITY_RUBRIC_LEARNED', String(result.rubric));
+  }
+  var report = [
+    ':bar_chart: 採点妥当性チェック（' + rows.length + '件 / 相関 ' + corrText + '）',
+    '判定: ' + (result && result.verdict ? result.verdict : '(取得失敗)'),
+    '',
+    '学習した追加採点基準（次回の品質ゲートから適用）:',
+    result && result.rubric ? result.rubric : '(なし)',
+  ].join('\n');
+  logEvent('scoring_eval', '相関=' + corrText);
+  notifySlack(report);
+  return report;
+}
+
+/**
  * 週次トリガー: メトリクス取得 → ベスト3をSlack通知
  */
 function weeklyMetricsReport() {
@@ -80,4 +142,11 @@ function weeklyMetricsReport() {
     lines.push('　' + String(r.text).slice(0, 60) + (String(r.text).length > 60 ? '…' : ''));
   });
   notifySlack(lines.join('\n'));
+
+  // データが溜まっていれば採点基準の妥当性検証と学習も回す
+  try {
+    if (rows.length >= 8) evaluateScoring();
+  } catch (e) {
+    logEvent('scoring_eval_error', String(e));
+  }
 }
