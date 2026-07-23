@@ -208,7 +208,9 @@ function finishInterview(sessionId, threadTs) {
 
     var lines = rows.map(function (r) {
       var ok = passStatuses.indexOf(String(r.status)) >= 0;
-      var head = (ok ? ':white_check_mark:' : ':no_entry_sign:') + ' *' + (r.score === '' ? '-' : r.score) + '点* ';
+      var refines = Number(r.refines || 0);
+      var head = (ok ? ':white_check_mark:' : ':no_entry_sign:') + ' *' + (r.score === '' ? '-' : r.score) + '点* ' +
+        (refines > 0 ? '(リライト' + refines + '回) ' : '');
       var reason = String(r.score_reason || '');
       return head + String(r.text) + (reason ? '\n　└ ' + reason : '');
     });

@@ -153,12 +153,18 @@ function api_updateText(token, id, text) {
   return message;
 }
 
-/** ストック・不合格分の自己批判リライト＋再採点をその場で回す */
+/**
+ * ストック・不合格分の自己批判リライト＋再採点をその場で回す。
+ * 手動実行なので、自動リライトの上限(REFINE_ROUNDS)に達したものも
+ * もう一度書き直しの対象にする。
+ */
 function api_refineNow(token) {
   assertToken(token);
-  var gate = runQualityGateWithRefinement();
-  logEvent('webapp_refine', JSON.stringify(gate));
-  return 'リライト＋再採点を実行: 採点' + gate.scored + '件 / 合格' + gate.passed + '件';
+  var refined = refineFailedDrafts(true);
+  if (!refined) return 'リライト対象がありません（不合格ストックが0件）';
+  var gate = runQualityGate();
+  logEvent('webapp_refine', 'リライト' + refined + '件 / 合格' + gate.passed + '件');
+  return 'リライト' + refined + '件 → 再採点で合格' + gate.passed + '件';
 }
 
 function api_scheduleNow(token) {
