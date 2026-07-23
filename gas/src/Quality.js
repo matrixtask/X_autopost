@@ -93,12 +93,14 @@ function runQualityGateWithRefinement() {
 /**
  * 閾値未満(stock)の下書きを、採点コメントを踏まえて「独り言のつぶやき」へ
  * 書き直し、draftに戻して再採点対象にする。1回の実行で最大10件。
+ * @param {boolean} force 上限(REFINE_ROUNDS)到達分も対象にする（手動リライト用）
  */
-function refineFailedDrafts() {
+function refineFailedDrafts(force) {
   ensureHeaders(SHEET.STOCK);
-  var maxRefines = 2;
+  var maxRefines = Number(getProp('REFINE_ROUNDS', '2'));
   var targets = readTable(SHEET.STOCK).filter(function (r) {
-    return String(r.status) === STATUS.STOCK && Number(r.refines || 0) < maxRefines;
+    if (String(r.status) !== STATUS.STOCK) return false;
+    return force || Number(r.refines || 0) < maxRefines;
   }).slice(0, 10);
   if (!targets.length) return 0;
 
