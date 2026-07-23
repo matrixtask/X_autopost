@@ -59,17 +59,18 @@ function buildMemoryPrompt() {
 }
 
 /**
- * 完了済みインタビューのスレッドへの返信をメモとして取り込む。
- * doPost から、進行中セッションに一致しなかった場合に呼ばれる。
+ * スレッドへの返信をメモとして取り込む。
+ * doPost から、進行中インタビューに一致しなかった場合に呼ばれる。
+ * 専用チャンネルなので、完了済みインタビューだけでなく品質ゲート結果や
+ * 週次サマリなど、どの通知メッセージのスレッドへの返信でもメモ扱いにする。
  */
 function handleThreadFeedback(threadTs, text) {
   var t = String(text || '').trim();
   if (!t) return false;
-  var known = readTable(SHEET.INTERVIEWS).some(function (r) {
+  var isInterviewThread = readTable(SHEET.INTERVIEWS).some(function (r) {
     return slackTsEqual(r.thread_ts, threadTs);
   });
-  if (!known) return false;
-  addMemory(t, 'スレッド自由記述');
+  addMemory(t, isInterviewThread ? 'インタビュースレッドの自由記述' : '通知スレッドへの返信');
   sendSlack(':memo: メモとして取り込みました。今後の生成・採点に反映します。', threadTs);
   return true;
 }
