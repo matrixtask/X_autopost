@@ -68,6 +68,11 @@ function buildStylePrompt() {
     '- ハッシュタグはサンプルで使われている場合のみ、同じ頻度で使う',
     '',
   ];
+  var memory = buildMemoryPrompt();
+  if (memory) {
+    lines.push(memory);
+    lines.push('');
+  }
   if (samples.length) {
     lines.push('本人の文体サンプル:');
     samples.forEach(function (s, i) {

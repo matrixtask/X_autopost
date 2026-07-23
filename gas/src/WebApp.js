@@ -63,7 +63,9 @@ function doPost(e) {
     ) {
       try {
         if (event.thread_ts) {
-          handleInterviewReply(event.thread_ts, event.text);
+          var handled = handleInterviewReply(event.thread_ts, event.text);
+          // 完了済みインタビューのスレッドへの自由記述は運用メモとして取り込む
+          if (!handled) handleThreadFeedback(event.thread_ts, event.text);
         } else {
           // スレッド外に書かれた場合も、進行中インタビューへの回答として救済する
           handleChannelMessage(event.text);

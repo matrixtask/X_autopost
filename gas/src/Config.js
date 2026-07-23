@@ -32,6 +32,7 @@ var SHEET = {
   THEMES: 'Themes',
   VOICE: 'Voice',
   LOG: 'Log',
+  MEMORY: 'Memory',
 };
 
 var STATUS = {

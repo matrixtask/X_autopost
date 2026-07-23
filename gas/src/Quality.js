@@ -28,6 +28,7 @@ function runQualityGate() {
     '4. 完成度: 誤字・冗長さ・文字数・単体で意味が通るか',
     '',
     learnedRubric ? '実測インプレッションの分析から学習した追加基準（採点に反映すること）:\n' + learnedRubric + '\n' : '',
+    (function () { var m = buildMemoryPrompt(); return m ? m + '\n' : ''; })(),
     '文体サンプル:',
     samples.map(function (s, i) { return '--- ' + (i + 1) + ' ---\n' + s; }).join('\n'),
   ].join('\n');
