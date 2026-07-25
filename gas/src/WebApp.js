@@ -172,3 +172,18 @@ function api_scheduleNow(token) {
   var scheduled = scheduleApprovedPosts();
   return JSON.stringify(scheduled);
 }
+
+/** 承認待ち(ready)を一括で承認する */
+function api_approveAll(token) {
+  assertToken(token);
+  var readyRows = readTable(SHEET.STOCK).filter(function (r) {
+    return String(r.status) === STATUS.READY;
+  });
+  if (!readyRows.length) return '承認待ちが0件です';
+  readyRows.forEach(function (r) {
+    updateStockById(r.id, { status: STATUS.APPROVED });
+    try { syncStockRowToNotion(r.id); } catch (e) { logEvent('notion_error', r.id + ': ' + e); }
+  });
+  logEvent('webapp_approve_all', readyRows.length + '件を一括承認');
+  return readyRows.length + '件を承認しました。「予約実行」で枠に割り当てられます';
+}
