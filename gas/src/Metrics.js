@@ -47,6 +47,67 @@ function fetchTweetMetrics() {
 }
 
 /**
+ * 手動投稿の取り込み。
+ * Xの自分のタイムラインから直近ポスト（最大100件、RT・リプライ除く）を取得し、
+ * システム経由でない投稿を「手動投稿」としてStockに登録、メトリクスも記録する。
+ * 以後は週次計測・時間帯分析の対象に含まれる。
+ * 週次のメトリクス収集時に自動実行される（手動実行も可）。
+ * 注意: X APIのFreeプランの読み取り枠を消費するため実行は週1目安。
+ */
+function importManualPosts() {
+  ensureHeaders(SHEET.STOCK);
+  // /users/me も読み取り枠を消費するため、ユーザーIDは初回取得後にキャッシュする
+  var userId = getProp('X_USER_ID');
+  if (!userId) {
+    var me = xApiGet('/users/me', {});
+    userId = String(me.data.id);
+    PropertiesService.getScriptProperties().setProperty('X_USER_ID', userId);
+  }
+  var res = xApiGet('/users/' + userId + '/tweets', {
+    max_results: '100',
+    exclude: 'retweets,replies',
+    'tweet.fields': 'created_at,public_metrics',
+  });
+
+  var known = {};
+  readTable(SHEET.STOCK).forEach(function (r) {
+    if (r.tweet_id) known[String(r.tweet_id)] = true;
+  });
+
+  var now = fmtDateTime(nowJst());
+  var added = 0;
+  (res.data || []).forEach(function (t) {
+    if (known[String(t.id)]) return;
+    var m = t.public_metrics || {};
+    var postedAt = t.created_at ? fmtDateTime(new Date(t.created_at)) : '';
+    appendRowObj(SHEET.STOCK, {
+      id: newId('m'),
+      created_at: postedAt,
+      theme: '手動投稿',
+      category: 'manual',
+      session_id: '',
+      text: String(t.text || ''),
+      score: '',
+      score_reason: '',
+      status: STATUS.POSTED,
+      scheduled_at: '',
+      posted_at: postedAt,
+      tweet_id: String(t.id),
+      notion_page_id: '',
+      impressions: m.impression_count || 0,
+      likes: m.like_count || 0,
+      retweets: m.retweet_count || 0,
+      replies: m.reply_count || 0,
+      metrics_at: now,
+      refines: '',
+    });
+    added++;
+  });
+  logEvent('manual_import', added + '件の手動投稿を取り込み（取得' + ((res.data || []).length) + '件）');
+  return added + '件の手動投稿を取り込みました';
+}
+
+/**
  * 自己採点の妥当性検証と、実測ベースの採点基準の学習。
  * - 採点スコアと実測インプレッションの相関を計算して報告
  * - インプレッション上位/下位の共通点から「追加採点基準」を生成し、
@@ -112,6 +173,12 @@ function evaluateScoring() {
  * 週次トリガー: メトリクス取得 → ベスト3をSlack通知
  */
 function weeklyMetricsReport() {
+  // 手動投稿を先に取り込んでから全件のメトリクスを更新する
+  try {
+    importManualPosts();
+  } catch (e) {
+    logEvent('manual_import_error', String(e));
+  }
   var result;
   try {
     result = fetchTweetMetrics();
