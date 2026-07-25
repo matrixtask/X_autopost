@@ -83,8 +83,21 @@
     });
   }
 
+  // タブごとの並び順: 予約済み=時刻昇順 / 承認待ち・承認済み・ストック=スコア降順 / 投稿済み=投稿時刻の新しい順
+  function sortForTab(items, key) {
+    var arr = items.slice();
+    if (key === 'scheduled') {
+      arr.sort(function (a, b) { return String(a.scheduled_at || '9999').localeCompare(String(b.scheduled_at || '9999')); });
+    } else if (key === 'ready' || key === 'approved' || key === 'stock') {
+      arr.sort(function (a, b) { return (Number(b.score) || 0) - (Number(a.score) || 0); });
+    } else if (key === 'posted') {
+      arr.sort(function (a, b) { return String(b.posted_at || '').localeCompare(String(a.posted_at || '')); });
+    }
+    return arr;
+  }
+
   function renderList() {
-    var items = activeTab === 'all' ? posts : posts.filter(function (p) { return p.status === activeTab; });
+    var items = sortForTab(activeTab === 'all' ? posts : posts.filter(function (p) { return p.status === activeTab; }), activeTab);
     var el = document.getElementById('list');
     if (!items.length) { el.innerHTML = '<div class="empty">ここにはまだ何もありません</div>'; return; }
     el.innerHTML = items.map(function (p) {
