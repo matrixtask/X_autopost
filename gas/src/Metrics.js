@@ -21,9 +21,10 @@ function fetchTweetMetrics() {
 
   var now = fmtDateTime(nowJst());
   var updated = 0;
-  // X APIは1リクエスト100件まで
-  for (var i = 0; i < ids.length; i += 100) {
-    var chunk = ids.slice(i, i + 100);
+  // X APIは1リクエスト100件までだが、GASのURL長制限(約2KB)があるため
+  // ID(約19桁+エンコード済みカンマ)を40件ずつに分割する
+  for (var i = 0; i < ids.length; i += 40) {
+    var chunk = ids.slice(i, i + 40);
     var res = xApiGet('/tweets', {
       ids: chunk.join(','),
       'tweet.fields': 'public_metrics',
