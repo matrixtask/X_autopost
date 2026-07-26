@@ -21,29 +21,57 @@ function fetchTweetMetrics() {
 
   var now = fmtDateTime(nowJst());
   var updated = 0;
+  // organic_metrics(広告分を除いた実測)はユーザー認証の自分のツイートで取得可能。
+  // プランや期間の制約で拒否された場合はpublic_metricsのみにフォールバックする
+  var withOrganic = true;
   // X APIは1リクエスト100件までだが、GASのURL長制限(約2KB)があるため
   // ID(約19桁+エンコード済みカンマ)を40件ずつに分割する
   for (var i = 0; i < ids.length; i += 40) {
     var chunk = ids.slice(i, i + 40);
-    var res = xApiGet('/tweets', {
-      ids: chunk.join(','),
-      'tweet.fields': 'public_metrics',
-    });
+    var res;
+    try {
+      res = xApiGet('/tweets', {
+        ids: chunk.join(','),
+        'tweet.fields': withOrganic ? 'public_metrics,organic_metrics' : 'public_metrics',
+      });
+    } catch (e) {
+      if (withOrganic) {
+        logEvent('metrics_organic_unavailable', String(e).slice(0, 200));
+        withOrganic = false;
+        res = xApiGet('/tweets', {
+          ids: chunk.join(','),
+          'tweet.fields': 'public_metrics',
+        });
+      } else {
+        throw e;
+      }
+    }
     (res.data || []).forEach(function (t) {
       var row = byTweetId[String(t.id)];
-      var m = t.public_metrics || {};
       if (!row) return;
-      updateStockById(row.id, {
-        impressions: m.impression_count || 0,
-        likes: m.like_count || 0,
-        retweets: m.retweet_count || 0,
-        replies: m.reply_count || 0,
+      var pub = t.public_metrics || {};
+      var org = t.organic_metrics;
+      var hasOrganic = org && typeof org.impression_count === 'number';
+      // 分析に使うimpressions/likesはオーガニック値。広告分はpaid_impressionsに分離
+      var imp = hasOrganic ? org.impression_count : (pub.impression_count || 0);
+      var paid = hasOrganic ? Math.max(0, (pub.impression_count || 0) - org.impression_count) : '';
+      var updates = {
+        impressions: imp,
+        likes: hasOrganic && typeof org.like_count === 'number' ? org.like_count : (pub.like_count || 0),
+        retweets: pub.retweet_count || 0,
+        replies: pub.reply_count || 0,
         metrics_at: now,
-      });
+      };
+      if (hasOrganic) {
+        updates.paid_impressions = paid;
+        if (paid > 0) updates.promoted = 'yes';
+      }
+      // 手動で promoted=yes を付けた行は上書きで消さない（organic取得不可時の逃げ道）
+      updateStockById(row.id, updates);
       updated++;
     });
   }
-  logEvent('metrics', updated + '件のメトリクスを更新');
+  logEvent('metrics', updated + '件のメトリクスを更新' + (withOrganic ? '（広告分を自動分離）' : '（organic取得不可: public値のみ）'));
   return updated + '件のメトリクスを更新しました';
 }
 
@@ -118,7 +146,10 @@ function importManualPosts() {
  */
 function evaluateScoring() {
   var rows = readTable(SHEET.STOCK).filter(function (r) {
-    return String(r.status) === STATUS.POSTED && r.metrics_at && r.score !== '';
+    if (String(r.status) !== STATUS.POSTED || !r.metrics_at || r.score === '') return false;
+    // 広告インプを分離できていないプロモ投稿は学習を歪めるため除外
+    if (String(r.promoted) === 'yes' && r.paid_impressions === '') return false;
+    return true;
   });
   if (rows.length < 8) {
     return 'データ不足（メトリクス付き投稿が' + rows.length + '件。8件以上で実行可能）';
@@ -188,10 +219,15 @@ function weeklyMetricsReport() {
     notifySlack(':rotating_light: メトリクス取得に失敗: ' + e);
     return;
   }
-  var rows = readTable(SHEET.STOCK).filter(function (r) {
+  var all = readTable(SHEET.STOCK).filter(function (r) {
     return String(r.status) === STATUS.POSTED && r.metrics_at;
   });
-  if (!rows.length) return;
+  if (!all.length) return;
+  // 広告インプを分離できていないプロモ投稿(手動フラグのみ)はランキングから外す
+  var rows = all.filter(function (r) {
+    return !(String(r.promoted) === 'yes' && r.paid_impressions === '');
+  });
+  var excluded = all.length - rows.length;
   rows.sort(function (a, b) { return Number(b.impressions || 0) - Number(a.impressions || 0); });
 
   var totalImp = 0, totalLikes = 0;
@@ -201,14 +237,19 @@ function weeklyMetricsReport() {
   });
 
   var lines = [
-    ':trophy: 投稿トラクション（累計 ' + rows.length + '件 / インプ ' + totalImp + ' / いいね ' + totalLikes + '）',
+    ':trophy: 投稿トラクション（累計 ' + rows.length + '件 / オーガニックインプ ' + totalImp + ' / いいね ' + totalLikes + '）',
     '',
-    'インプレッション Top3:',
+    'オーガニックインプレッション Top3:',
   ];
   rows.slice(0, 3).forEach(function (r, i) {
-    lines.push((i + 1) + '. 👁' + r.impressions + ' ❤️' + r.likes + ' 🔁' + r.retweets + ' 〔' + String(r.category) + '/' + r.score + '点〕');
+    var promoTag = String(r.promoted) === 'yes' ? ' 💰広告分' + r.paid_impressions + 'は除外済み' : '';
+    lines.push((i + 1) + '. 👁' + r.impressions + ' ❤️' + r.likes + ' 🔁' + r.retweets + ' 〔' + String(r.category) + '/' + (r.score === '' ? '手動' : r.score + '点') + '〕' + promoTag);
     lines.push('　' + String(r.text).slice(0, 60) + (String(r.text).length > 60 ? '…' : ''));
   });
+  if (excluded > 0) {
+    lines.push('');
+    lines.push('※広告インプを分離できない' + excluded + '件(promoted=yes・分離データなし)は集計から除外');
+  }
   notifySlack(lines.join('\n'));
 
   // データが溜まっていれば採点基準の妥当性検証と学習も回す
