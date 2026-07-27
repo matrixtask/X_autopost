@@ -1,20 +1,86 @@
 /**
  * WebApp.js — Webアプリのエンドポイント
  *
- * doGet  : モバイル対応の確認・承認UI（?token=ADMIN_TOKEN）
- * doPost : Slack Events APIの受け口（インタビューのスレッド返信）
+ * doGet  : 確認・承認UI。Googleアカウント認証が必須（下記アクセス制御を参照）
+ * doPost : Slack Events APIの受け口。Slackは匿名POSTのためGoogle認証は使えない
  *
- * デプロイ: GASエディタ > デプロイ > 新しいデプロイ > ウェブアプリ
- *   実行ユーザー: 自分 / アクセス: 全員
- * デプロイURLを Script Properties の WEBAPP_URL に保存し、
- * SlackアプリのEvent SubscriptionsのRequest URLにも設定する。
+ * 【デプロイは2本に分ける】
+ *  A. 管理UI用: アクセス = 「テトラ・アビエーション内のユーザー」（ドメイン制限）
+ *     → 人間が使うURL。Googleが認証し、さらにコード側でもメールを検証する
+ *  B. Slack用:  アクセス = 「全員」
+ *     → SlackのRequest URL専用。このURLでUIを開いても匿名なので必ず拒否される
+ *
+ * アクセス制御の設定（スクリプトプロパティ）:
+ *   ALLOWED_DOMAINS  許可するメールドメイン（既定: tetra-aviation.com、カンマ区切り）
+ *   ALLOWED_EMAILS   個別に許可するメールアドレス（任意、カンマ区切り）
+ *   REQUIRE_TOKEN    "false" にするとURLの ?token= を不要にできる（既定: true）
+ *   ACCESS_MODE      "token" にすると旧方式（トークンのみ）に一時的に戻せる。
+ *                    ドメイン制限デプロイでメール取得に失敗した場合の緊急避難用
  */
+
+/** アクセス中のGoogleアカウント。匿名アクセスや取得不可なら空文字 */
+function currentUserEmail() {
+  try {
+    return String(Session.getActiveUser().getEmail() || '').toLowerCase();
+  } catch (e) {
+    return '';
+  }
+}
+
+function csvProp(key, fallback) {
+  return String(getProp(key, fallback || ''))
+    .split(',')
+    .map(function (s) { return s.trim().toLowerCase(); })
+    .filter(Boolean);
+}
+
+/**
+ * Googleアカウント + トークンの二重チェック。
+ * 認可されていればメールアドレスを返し、そうでなければ例外を投げる。
+ */
+function assertAccess(token) {
+  var legacyMode = String(getProp('ACCESS_MODE', 'account')).toLowerCase() === 'token';
+  var email = currentUserEmail();
+
+  if (!legacyMode) {
+    if (!email) {
+      throw new Error('Googleアカウントで認証されていません。ドメイン制限デプロイのURLを、テトラのアカウントでログインした状態で開いてください。');
+    }
+    var domain = email.indexOf('@') >= 0 ? email.split('@')[1] : '';
+    var allowedDomains = csvProp('ALLOWED_DOMAINS', 'tetra-aviation.com');
+    var allowedEmails = csvProp('ALLOWED_EMAILS', '');
+    var ok = allowedEmails.indexOf(email) >= 0 || allowedDomains.indexOf(domain) >= 0;
+    if (!ok) {
+      logEvent('access_denied', email);
+      throw new Error('このアカウントには権限がありません: ' + email);
+    }
+  }
+
+  // URL共有事故に備えた二次防御。REQUIRE_TOKEN=false で省略できる
+  if (String(getProp('REQUIRE_TOKEN', 'true')).toLowerCase() !== 'false') {
+    if (!token || token !== getProp('ADMIN_TOKEN')) throw new Error('認証エラー（token不一致）');
+  }
+  return email;
+}
+
+function denyPage(message) {
+  return HtmlService.createHtmlOutput(
+    '<div style="font-family:-apple-system,sans-serif;padding:24px;line-height:1.7">' +
+    '<h2 style="font-size:17px;margin:0 0 8px">アクセスできません</h2>' +
+    '<p style="color:#5A5F68;font-size:14px">' + message.replace(/[<>&]/g, '') + '</p>' +
+    '</div>'
+  );
+}
 
 function doGet(e) {
   var token = e && e.parameter ? e.parameter.token : '';
-  if (!token || token !== getProp('ADMIN_TOKEN')) {
-    return HtmlService.createHtmlOutput('<p>token が違います。URL末尾の ?token=... を確認してください。</p>');
+  var email;
+  try {
+    email = assertAccess(token);
+  } catch (err) {
+    return denyPage(String(err.message || err));
   }
+  logEvent('webapp_open', email || '(token mode)');
   var template = HtmlService.createTemplateFromFile('Index');
   template.token = token;
   return template.evaluate()
@@ -83,12 +149,9 @@ function doPost(e) {
 
 // ---- Web UI から google.script.run で呼ばれるAPI ----
 
-function assertToken(token) {
-  if (!token || token !== getProp('ADMIN_TOKEN')) throw new Error('認証エラー');
-}
 
 function api_listPosts(token) {
-  assertToken(token);
+  assertAccess(token);
   var rows = readTable(SHEET.STOCK).map(function (r) {
     return {
       id: String(r.id),
@@ -108,7 +171,7 @@ function api_listPosts(token) {
 }
 
 function api_setStatus(token, id, status) {
-  assertToken(token);
+  assertAccess(token);
   var allowed = [STATUS.APPROVED, STATUS.REJECTED, STATUS.READY, STATUS.STOCK];
   if (allowed.indexOf(status) < 0) throw new Error('不正なステータス: ' + status);
   var updates = { status: status };
@@ -120,7 +183,7 @@ function api_setStatus(token, id, status) {
 }
 
 function api_updateText(token, id, text) {
-  assertToken(token);
+  assertAccess(token);
   var t = String(text || '').trim();
   if (!t) throw new Error('本文が空です');
   if (!fitsInTweet(t)) throw new Error('長すぎます（280重み超過）。現在: ' + weightedTweetLength(t));
@@ -159,7 +222,7 @@ function api_updateText(token, id, text) {
  * もう一度書き直しの対象にする。
  */
 function api_refineNow(token) {
-  assertToken(token);
+  assertAccess(token);
   var refined = refineFailedDrafts(true);
   if (!refined) return 'リライト対象がありません（不合格ストックが0件）';
   var gate = runQualityGate();
@@ -168,7 +231,7 @@ function api_refineNow(token) {
 }
 
 function api_scheduleNow(token) {
-  assertToken(token);
+  assertAccess(token);
   var scheduled = scheduleApprovedPosts();
   return JSON.stringify(scheduled);
 }
@@ -178,7 +241,7 @@ function api_scheduleNow(token) {
  * 時間帯・曜日・カテゴリ別の平均と、インプレッションTop10を返す。
  */
 function api_analytics(token) {
-  assertToken(token);
+  assertAccess(token);
   var rows = readTable(SHEET.STOCK).filter(function (r) {
     if (String(r.status) !== STATUS.POSTED || !r.metrics_at) return false;
     if (String(r.promoted) === 'yes' && r.paid_impressions === '') return false;
@@ -264,7 +327,7 @@ function api_analytics(token) {
 
 /** 承認待ち(ready)を一括で承認する */
 function api_approveAll(token) {
-  assertToken(token);
+  assertAccess(token);
   var readyRows = readTable(SHEET.STOCK).filter(function (r) {
     return String(r.status) === STATUS.READY;
   });
