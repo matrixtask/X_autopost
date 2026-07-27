@@ -187,10 +187,11 @@ function api_analytics(token) {
 
   var DAYS = ['日', '月', '火', '水', '木', '金', '土'];
   function agg(map, key, r) {
-    if (!map[key]) map[key] = { n: 0, imp: 0, likes: 0 };
+    if (!map[key]) map[key] = { n: 0, imp: 0, likes: 0, points: [] };
     map[key].n++;
     map[key].imp += Number(r.impressions || 0);
     map[key].likes += Number(r.likes || 0);
+    map[key].points.push(Number(r.impressions || 0));
   }
 
   var bySlot = {}, byDay = {}, byCat = {};
@@ -207,24 +208,45 @@ function api_analytics(token) {
     totalLikes += Number(r.likes || 0);
   });
 
-  var top10 = rows.slice().sort(function (a, b) {
+  var sorted = rows.slice().sort(function (a, b) {
     return Number(b.impressions || 0) - Number(a.impressions || 0);
-  }).slice(0, 10).map(function (r) {
+  });
+  function rowView(r) {
+    var postedAt = String(r.posted_at || '');
     return {
       text: String(r.text).slice(0, 90),
       imp: Number(r.impressions || 0),
       likes: Number(r.likes || 0),
       rt: Number(r.retweets || 0),
+      rep: Number(r.replies || 0),
       category: String(r.category || ''),
       score: r.score === '' ? null : Number(r.score),
-      posted_at: String(r.posted_at || ''),
+      posted_at: postedAt,
+      slot: postedAt.length >= 16 ? postedAt.slice(11, 13) + '時台' : '',
       promoted: String(r.promoted) === 'yes',
     };
+  }
+  var top10 = sorted.slice(0, 10).map(rowView);
+  var table = sorted.map(rowView);
+
+  // 採点スコアと実測インプの相関（採点のある自動投稿のみ）
+  var scored = rows.filter(function (r) { return r.score !== ''; });
+  var scatter = scored.map(function (r) {
+    return { score: Number(r.score), imp: Number(r.impressions || 0), text: String(r.text).slice(0, 40) };
   });
+  var corr = pearson(scored.map(function (r) { return Number(r.score); }),
+    scored.map(function (r) { return Number(r.impressions || 0); }));
 
   function toList(map) {
     return Object.keys(map).map(function (k) {
-      return { key: k, n: map[k].n, impAvg: Math.round(map[k].imp / map[k].n), likesAvg: Math.round(map[k].likes / map[k].n * 10) / 10 };
+      var m = map[k];
+      return {
+        key: k, n: m.n,
+        impAvg: Math.round(m.imp / m.n),
+        likesAvg: Math.round(m.likes / m.n * 10) / 10,
+        engRate: m.imp > 0 ? Math.round(1000 * m.likes / m.imp) / 10 : 0,
+        points: m.points,
+      };
     }).sort(function (a, b) { return b.impAvg - a.impAvg; });
   }
 
@@ -234,6 +256,9 @@ function api_analytics(token) {
     byDay: toList(byDay),
     byCat: toList(byCat),
     top10: top10,
+    table: table,
+    scatter: scatter,
+    corr: corr === null ? null : Math.round(corr * 100) / 100,
   });
 }
 
