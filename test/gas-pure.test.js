@@ -9,7 +9,16 @@ const code = readFileSync(new URL('../gas/src/Pure.js', import.meta.url), 'utf8'
 const context = { module: { exports: {} } };
 vm.createContext(context);
 vm.runInContext(code, context);
-const { weightedTweetLength, fitsInTweet, parseJsonLoose, pickWeighted, computeNextSlots, normalizeSlackTs, slackTsEqual, pearson } = context.module.exports;
+const { weightedTweetLength, fitsInTweet, parseJsonLoose, pickWeighted, computeNextSlots, normalizeSlackTs, slackTsEqual, pearson, dateKey } = context.module.exports;
+
+test('dateKey: 日時に変換された日付でも同じ日として扱える', () => {
+  assert.equal(dateKey('2026-07-27'), '2026-07-27');
+  assert.equal(dateKey('2026-07-27 00:00'), '2026-07-27'); // シートが日時化したケース
+  assert.equal(dateKey(' 2026-07-27 19:36 '), '2026-07-27');
+  assert.equal(dateKey(''), '');
+  assert.equal(dateKey('週次'), '');
+  assert.equal(dateKey(null), '');
+});
 
 test('pearson: 相関係数の基本ケース', () => {
   assert.equal(pearson([1, 2, 3], [2, 4, 6]), 1); // 完全正相関

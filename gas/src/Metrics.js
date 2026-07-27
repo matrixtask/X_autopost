@@ -102,7 +102,10 @@ function snapshotFollowers(note) {
   var today = fmtDate(nowJst());
 
   var rows = readTable(SHEET.FOLLOWERS);
-  var prior = rows.filter(function (r) { return String(r.date) !== today; });
+  // シートが日付を日時に変換して返すことがある（2026-07-27 → "2026-07-27 00:00"）ため、
+  // 先頭10文字（yyyy-MM-dd）で突き合わせる
+  var todaysRows = rows.filter(function (r) { return dateKey(r.date) === today; });
+  var prior = rows.filter(function (r) { return dateKey(r.date) !== today; });
   var last = prior.length ? prior[prior.length - 1] : null;
   var delta = last ? followers - Number(last.followers || 0) : '';
 
@@ -111,15 +114,21 @@ function snapshotFollowers(note) {
     return String(r.status) === STATUS.POSTED && String(r.posted_at || '').indexOf(today) === 0;
   }).length;
 
-  var existingToday = rows.filter(function (r) { return String(r.date) === today; })[0];
-  if (existingToday) {
-    updateRowsWhere(SHEET.FOLLOWERS, 'date', today, {
-      followers: followers, delta: delta, posts_that_day: postsToday, note: note || '',
+  var headers = SHEET_HEADERS.Followers;
+  var sheet2 = getSheet(SHEET.FOLLOWERS);
+  var values = { date: today, followers: followers, delta: delta, posts_that_day: postsToday, note: note || '' };
+  if (todaysRows.length) {
+    // 同じ日の行は1本にまとめる（過去に重複して追記された分もここで掃除する）
+    var keep = todaysRows[0];
+    headers.forEach(function (col, i) {
+      sheet2.getRange(keep._row, i + 1).setValue(values[col]);
     });
+    todaysRows.slice(1).sort(function (a, b) { return b._row - a._row; }).forEach(function (dup) {
+      sheet2.deleteRow(dup._row);
+    });
+    if (todaysRows.length > 1) logEvent('followers_dedup', today + ': 重複' + (todaysRows.length - 1) + '行を削除');
   } else {
-    appendRowObj(SHEET.FOLLOWERS, {
-      date: today, followers: followers, delta: delta, posts_that_day: postsToday, note: note || '',
-    });
+    appendRowObj(SHEET.FOLLOWERS, values);
   }
   logEvent('followers', today + ': ' + followers + '人（前回比 ' + (delta === '' ? '初回' : (delta >= 0 ? '+' : '') + delta) + '）');
   return followers + '人（' + (delta === '' ? '初回記録' : (delta >= 0 ? '+' : '') + delta) + '）';
@@ -136,7 +145,7 @@ function dailyFollowerSnapshot() {
 
 /** 直近days日のフォロワー増減サマリ */
 function followerSummary(days) {
-  var rows = readTable(SHEET.FOLLOWERS);
+  var rows = readTable(SHEET.FOLLOWERS).filter(function (r) { return dateKey(r.date); });
   if (rows.length < 2) return null;
   var n = Math.min(days || 7, rows.length - 1);
   var latest = rows[rows.length - 1];
@@ -145,8 +154,8 @@ function followerSummary(days) {
     current: Number(latest.followers || 0),
     gained: Number(latest.followers || 0) - Number(base.followers || 0),
     days: n,
-    from: String(base.date),
-    to: String(latest.date),
+    from: dateKey(base.date),
+    to: dateKey(latest.date),
   };
 }
 
