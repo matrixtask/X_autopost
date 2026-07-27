@@ -34,6 +34,14 @@
   .empty { text-align: center; color: var(--sub); padding: 48px 0; }
   #toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 10px 18px; border-radius: 999px; font-size: 13px; opacity: 0; transition: opacity .25s; pointer-events: none; }
   #toast.show { opacity: 1; }
+  .sec { font-size: 14px; margin: 0 0 10px; }
+  .bar-row { display: grid; grid-template-columns: 4.2em 1fr 9.5em; gap: 8px; align-items: center; margin-bottom: 6px; font-size: 12.5px; }
+  .bar-lbl { color: var(--sub); text-align: right; }
+  .bar-track { background: var(--bg); border: 1px solid var(--line); border-radius: 4px; height: 16px; position: relative; }
+  .bar-fill { position: absolute; inset: 0 auto 0 0; background: var(--accent); border-radius: 4px; opacity: .75; }
+  .bar-val { color: var(--sub); white-space: nowrap; }
+  .top-row { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 10px; }
+  .top-row:first-of-type { border-top: none; margin-top: 0; padding-top: 0; }
 </style>
 
 <header>
@@ -56,6 +64,7 @@
     { key: 'stock', label: 'ストック' },
     { key: 'posted', label: '投稿済み' },
     { key: 'all', label: 'すべて' },
+    { key: 'analytics', label: '分析' },
   ];
   var STATUS_LABEL = { draft: '未採点', stock: '保留', ready: '承認待ち', approved: '承認済み', scheduled: '予約済み', posted: '投稿済み', rejected: '却下', failed: '失敗' };
   var CATEGORY_LABEL = { evergreen: '定番', news: '時事', neta: 'ネタ', manual: '手動' };
@@ -71,12 +80,57 @@
 
   function renderTabs() {
     document.getElementById('tabs').innerHTML = TABS.map(function (t) {
-      var count = t.key === 'all' ? posts.length : posts.filter(function (p) { return p.status === t.key; }).length;
-      return '<button class="tab' + (activeTab === t.key ? ' active' : '') + '" onclick="setTab(\'' + t.key + '\')">' + t.label + ' ' + count + '</button>';
+      var count = t.key === 'analytics' ? '' :
+        ' ' + (t.key === 'all' ? posts.length : posts.filter(function (p) { return p.status === t.key; }).length);
+      return '<button class="tab' + (activeTab === t.key ? ' active' : '') + '" onclick="setTab(\'' + t.key + '\')">' + t.label + count + '</button>';
     }).join('');
   }
 
-  function setTab(key) { activeTab = key; renderTabs(); renderList(); }
+  var analyticsData = null;
+  function setTab(key) {
+    activeTab = key;
+    renderTabs();
+    if (key === 'analytics') { renderAnalytics(); } else { renderList(); }
+  }
+
+  function renderAnalytics() {
+    var el = document.getElementById('list');
+    if (!analyticsData) {
+      el.innerHTML = '<div class="empty">集計中…</div>';
+      google.script.run
+        .withSuccessHandler(function (json) { analyticsData = JSON.parse(json); renderAnalytics(); })
+        .withFailureHandler(function (e) { el.innerHTML = '<div class="empty">' + esc(e.message) + '</div>'; })
+        .api_analytics(TOKEN);
+      return;
+    }
+    var d = analyticsData;
+    function bars(list) {
+      var max = Math.max.apply(null, list.map(function (x) { return x.impAvg; }).concat([1]));
+      return list.map(function (x) {
+        return '<div class="bar-row"><span class="bar-lbl">' + esc(x.key) + '</span>' +
+          '<span class="bar-track"><span class="bar-fill" style="width:' + Math.round(100 * x.impAvg / max) + '%"></span></span>' +
+          '<span class="bar-val">' + x.impAvg + ' / ❤️' + x.likesAvg + ' (n=' + x.n + ')</span></div>';
+      }).join('');
+    }
+    var catLabel = function (c) { return CATEGORY_LABEL[c] || c; };
+    el.innerHTML =
+      '<div class="card"><div class="meta"><span class="badge b-posted">オーガニック基準</span>' +
+      '<span>計測済み ' + d.total.n + '件 / インプ計 ' + d.total.imp + ' / いいね計 ' + d.total.likes + '</span></div>' +
+      '<div class="reason">広告インプは分離済み。分離できないプロモ投稿は集計から除外しています。</div></div>' +
+      '<div class="card"><h3 class="sec">時間帯別 平均インプ</h3>' + bars(d.bySlot) + '</div>' +
+      '<div class="card"><h3 class="sec">曜日別 平均インプ</h3>' + bars(d.byDay) + '</div>' +
+      '<div class="card"><h3 class="sec">カテゴリ別 平均インプ</h3>' + bars(d.byCat.map(function (x) { return { key: catLabel(x.key), n: x.n, impAvg: x.impAvg, likesAvg: x.likesAvg }; })) + '</div>' +
+      '<div class="card"><h3 class="sec">インプレッション Top10</h3>' +
+      d.top10.map(function (p, i) {
+        return '<div class="top-row"><div class="meta">' +
+          '<span class="badge b-posted">' + (i + 1) + '位</span>' +
+          '<span>👁' + p.imp + '</span><span>❤️' + p.likes + '</span><span>🔁' + p.rt + '</span>' +
+          '<span>' + esc(catLabel(p.category)) + (p.score !== null ? ' / ' + p.score + '点' : '') + '</span>' +
+          (p.promoted ? '<span>💰広告分除外済</span>' : '') +
+          '<span>' + esc(p.posted_at) + '</span></div>' +
+          '<div class="body-text" style="font-size:13.5px">' + esc(p.text) + '</div></div>';
+      }).join('') + '</div>';
+  }
 
   function esc(s) {
     return String(s).replace(/[&<>"']/g, function (c) {
@@ -135,9 +189,13 @@
     }).join('');
   }
 
+  function renderCurrent() {
+    if (activeTab === 'analytics') { analyticsData = null; renderAnalytics(); } else { renderList(); }
+  }
+
   function load() {
     google.script.run
-      .withSuccessHandler(function (json) { posts = JSON.parse(json); renderTabs(); renderList(); })
+      .withSuccessHandler(function (json) { posts = JSON.parse(json); renderTabs(); renderCurrent(); })
       .withFailureHandler(function (e) { toast('読み込み失敗: ' + e.message); })
       .api_listPosts(TOKEN);
   }

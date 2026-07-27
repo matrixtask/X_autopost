@@ -239,9 +239,9 @@ function weeklyMetricsReport() {
   var lines = [
     ':trophy: 投稿トラクション（累計 ' + rows.length + '件 / オーガニックインプ ' + totalImp + ' / いいね ' + totalLikes + '）',
     '',
-    'オーガニックインプレッション Top3:',
+    'オーガニックインプレッション Top10:',
   ];
-  rows.slice(0, 3).forEach(function (r, i) {
+  rows.slice(0, 10).forEach(function (r, i) {
     var promoTag = String(r.promoted) === 'yes' ? ' 💰広告分' + r.paid_impressions + 'は除外済み' : '';
     lines.push((i + 1) + '. 👁' + r.impressions + ' ❤️' + r.likes + ' 🔁' + r.retweets + ' 〔' + String(r.category) + '/' + (r.score === '' ? '手動' : r.score + '点') + '〕' + promoTag);
     lines.push('　' + String(r.text).slice(0, 60) + (String(r.text).length > 60 ? '…' : ''));
