@@ -152,6 +152,16 @@ function slackTsEqual(a, b) {
 }
 
 /**
+ * 日付キーの正規化。シートが日付を日時として返す場合があるため
+ * （"2026-07-27" が "2026-07-27 00:00" になる）、先頭のyyyy-MM-dd部分だけを取る。
+ */
+function dateKey(v) {
+  var s = String(v === null || v === undefined ? '' : v).trim();
+  var m = s.match(/^(\d{4}-\d{2}-\d{2})/);
+  return m ? m[1] : '';
+}
+
+/**
  * ピアソン相関係数。データ点が2未満・分散0の場合はnull。
  * 自己採点スコアと実測インプレッションの整合チェックに使う。
  */
@@ -175,5 +185,5 @@ function pearson(xs, ys) {
 
 // Nodeテスト用（GASでは module は未定義なので無視される）
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { weightedTweetLength: weightedTweetLength, fitsInTweet: fitsInTweet, parseJsonLoose: parseJsonLoose, pickWeighted: pickWeighted, computeNextSlots: computeNextSlots, normalizeSlackTs: normalizeSlackTs, slackTsEqual: slackTsEqual, rawSlackTs: rawSlackTs, pearson: pearson };
+  module.exports = { weightedTweetLength: weightedTweetLength, fitsInTweet: fitsInTweet, parseJsonLoose: parseJsonLoose, pickWeighted: pickWeighted, computeNextSlots: computeNextSlots, normalizeSlackTs: normalizeSlackTs, slackTsEqual: slackTsEqual, rawSlackTs: rawSlackTs, pearson: pearson, dateKey: dateKey };
 }
