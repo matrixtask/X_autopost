@@ -33,6 +33,7 @@ var SHEET = {
   VOICE: 'Voice',
   LOG: 'Log',
   MEMORY: 'Memory',
+  FOLLOWERS: 'Followers',
 };
 
 var STATUS = {
