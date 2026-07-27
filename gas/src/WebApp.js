@@ -173,6 +173,70 @@ function api_scheduleNow(token) {
   return JSON.stringify(scheduled);
 }
 
+/**
+ * 分析タブ用の集計。オーガニックインプ基準(広告分離不能なプロモ行は除外)で
+ * 時間帯・曜日・カテゴリ別の平均と、インプレッションTop10を返す。
+ */
+function api_analytics(token) {
+  assertToken(token);
+  var rows = readTable(SHEET.STOCK).filter(function (r) {
+    if (String(r.status) !== STATUS.POSTED || !r.metrics_at) return false;
+    if (String(r.promoted) === 'yes' && r.paid_impressions === '') return false;
+    return true;
+  });
+
+  var DAYS = ['日', '月', '火', '水', '木', '金', '土'];
+  function agg(map, key, r) {
+    if (!map[key]) map[key] = { n: 0, imp: 0, likes: 0 };
+    map[key].n++;
+    map[key].imp += Number(r.impressions || 0);
+    map[key].likes += Number(r.likes || 0);
+  }
+
+  var bySlot = {}, byDay = {}, byCat = {};
+  var totalImp = 0, totalLikes = 0;
+  rows.forEach(function (r) {
+    var postedAt = String(r.posted_at || '');
+    var d = new Date(postedAt.replace(' ', 'T') + ':00+09:00');
+    if (postedAt.length >= 16 && !isNaN(d.getTime())) {
+      agg(bySlot, postedAt.slice(11, 13) + '時台', r);
+      agg(byDay, DAYS[d.getDay()], r);
+    }
+    agg(byCat, String(r.category || '不明'), r);
+    totalImp += Number(r.impressions || 0);
+    totalLikes += Number(r.likes || 0);
+  });
+
+  var top10 = rows.slice().sort(function (a, b) {
+    return Number(b.impressions || 0) - Number(a.impressions || 0);
+  }).slice(0, 10).map(function (r) {
+    return {
+      text: String(r.text).slice(0, 90),
+      imp: Number(r.impressions || 0),
+      likes: Number(r.likes || 0),
+      rt: Number(r.retweets || 0),
+      category: String(r.category || ''),
+      score: r.score === '' ? null : Number(r.score),
+      posted_at: String(r.posted_at || ''),
+      promoted: String(r.promoted) === 'yes',
+    };
+  });
+
+  function toList(map) {
+    return Object.keys(map).map(function (k) {
+      return { key: k, n: map[k].n, impAvg: Math.round(map[k].imp / map[k].n), likesAvg: Math.round(map[k].likes / map[k].n * 10) / 10 };
+    }).sort(function (a, b) { return b.impAvg - a.impAvg; });
+  }
+
+  return JSON.stringify({
+    total: { n: rows.length, imp: totalImp, likes: totalLikes },
+    bySlot: toList(bySlot),
+    byDay: toList(byDay),
+    byCat: toList(byCat),
+    top10: top10,
+  });
+}
+
 /** 承認待ち(ready)を一括で承認する */
 function api_approveAll(token) {
   assertToken(token);
