@@ -130,20 +130,45 @@
         var dots = withDots ? (x.points || []).map(function (v) {
           return '<span class="bdot" style="left:' + Math.round(100 * v / maxPt) + '%" title="' + v + ' imp"></span>';
         }).join('') : '';
+        var clickPart = x.clickRate !== null && x.clickRate !== undefined ? ' / 👤' + x.clickRate + '%' : '';
         return '<div class="bar-row"><span class="bar-lbl">' + esc(x.key) + '</span>' +
           '<span class="bar-track"><span class="bar-fill' + (i === 0 ? ' best' : '') + '" style="width:' + Math.round(100 * x.impAvg / max) + '%"></span>' + dots + '</span>' +
-          '<span class="bar-val">' + x.impAvg + ' / ❤️' + x.likesAvg + ' / 率' + x.engRate + '% (n=' + x.n + ')</span></div>';
+          '<span class="bar-val">' + x.impAvg + ' / ❤️' + x.likesAvg + clickPart + ' (n=' + x.n + ')</span></div>';
       }).join('');
     }
 
-    // 統計タイル
+    // 統計タイル（フォロワーが最終目的なので先頭）
     var bestSlot = d.bySlot[0];
+    var f = d.follow;
+    var followTile = f
+      ? '<div class="atile hero"><div class="acap">フォロワー</div><div class="abig">' + f.current + '人</div><div class="acap">' +
+        (f.gained7 === null ? '記録開始（増減は明日から）' : '直近7日 ' + (f.gained7 >= 0 ? '+' : '') + f.gained7 + ' / 記録開始から ' + (f.gainedAll >= 0 ? '+' : '') + f.gainedAll + '（' + f.days + '日）') +
+        '</div></div>'
+      : '<div class="atile hero"><div class="acap">フォロワー</div><div class="abig">未記録</div><div class="acap">snapshotFollowers を実行すると記録開始</div></div>';
     var tiles =
-      '<div class="atiles">' +
-      '<div class="atile hero"><div class="acap">最強時間帯</div><div class="abig">' + (bestSlot ? esc(bestSlot.key) : '-') + '</div><div class="acap">' + (bestSlot ? '平均 ' + bestSlot.impAvg + ' imp (n=' + bestSlot.n + ')' : '') + '</div></div>' +
+      '<div class="atiles">' + followTile +
+      '<div class="atile"><div class="acap">最強時間帯</div><div class="abig">' + (bestSlot ? esc(bestSlot.key) : '-') + '</div><div class="acap">' + (bestSlot ? '平均 ' + bestSlot.impAvg + ' imp (n=' + bestSlot.n + ')' : '') + '</div></div>' +
       '<div class="atile"><div class="acap">計測済み投稿</div><div class="abig">' + d.total.n + '件</div><div class="acap">インプ計 ' + d.total.imp + ' / ❤️計 ' + d.total.likes + '</div></div>' +
       '<div class="atile"><div class="acap">採点×インプ相関</div><div class="abig">' + (d.corr === null ? '-' : 'r = ' + d.corr) + '</div><div class="acap">自動投稿 ' + d.scatter.length + '件で算出</div></div>' +
       '</div>';
+
+    // フォロワー推移
+    var followChart = '';
+    if (f && f.series.length >= 2) {
+      var fs = f.series;
+      var lo = Math.min.apply(null, fs.map(function (p) { return p.followers; }));
+      var hi = Math.max.apply(null, fs.map(function (p) { return p.followers; }));
+      var span = Math.max(1, hi - lo);
+      var pts = fs.map(function (p, i) {
+        return (20 + i / Math.max(1, fs.length - 1) * 520).toFixed(1) + ',' + (110 - (p.followers - lo) / span * 90).toFixed(1);
+      }).join(' ');
+      followChart = '<div class="card"><h3 class="sec">フォロワー推移（直近' + fs.length + '日）</h3>' +
+        '<svg viewBox="0 0 560 130" class="scatter" role="img" aria-label="フォロワー数の推移">' +
+        '<polyline points="' + pts + '" fill="none" stroke="var(--accent)" stroke-width="2"/>' +
+        '<text x="20" y="126">' + esc(fs[0].date) + '（' + lo + '人）</text>' +
+        '<text x="540" y="126" text-anchor="end">' + esc(fs[fs.length - 1].date) + '（' + hi + '人）</text>' +
+        '</svg></div>';
+    }
 
     // 採点×インプの散布図(SVG)
     var scatterSvg = '';
@@ -179,15 +204,16 @@
       }).join('') + '</tbody></table></div></details></div>';
 
     el.innerHTML =
-      tiles +
-      '<div class="card"><h3 class="sec">時間帯別 平均インプ（バー=平均 / 点=個々の投稿）</h3>' + bars(d.bySlot, true) + '</div>' +
+      tiles + followChart +
+      '<div class="card"><h3 class="sec">時間帯別 平均インプ（バー=平均 / 点=個々の投稿 / 👤=プロフクリック率）</h3>' + bars(d.bySlot, true) + '</div>' +
       '<div class="card"><h3 class="sec">曜日別 平均インプ</h3>' + bars(d.byDay, false) + '</div>' +
-      '<div class="card"><h3 class="sec">カテゴリ別 平均インプ</h3>' + bars(d.byCat.map(function (x) { return { key: catLabel(x.key), n: x.n, impAvg: x.impAvg, likesAvg: x.likesAvg, engRate: x.engRate, points: x.points }; }), false) + '</div>' +
+      '<div class="card"><h3 class="sec">カテゴリ別 平均インプ</h3>' + bars(d.byCat.map(function (x) { return { key: catLabel(x.key), n: x.n, impAvg: x.impAvg, likesAvg: x.likesAvg, engRate: x.engRate, clickRate: x.clickRate, points: x.points }; }), false) + '</div>' +
       scatterSvg +
-      '<div class="card"><h3 class="sec">オーガニックインプレッション Top10</h3>' +
+      '<div class="card"><h3 class="sec">' + (d.hasClicks ? 'プロフィールクリック Top10（フォローに一番近い指標）' : 'オーガニックインプレッション Top10') + '</h3>' +
       d.top10.map(function (p, i) {
         return '<div class="top-row"><div class="meta">' +
           '<span class="badge b-posted">' + (i + 1) + '位</span>' +
+          (p.clicks !== null ? '<span>👤' + p.clicks + (p.clickRate !== null ? '(' + p.clickRate + '%)' : '') + '</span>' : '') +
           '<span>👁' + p.imp + '</span><span>❤️' + p.likes + '</span><span>🔁' + p.rt + '</span>' +
           '<span>' + esc(catLabel(p.category)) + (p.score !== null ? ' / ' + p.score + '点' : '') + '</span>' +
           (p.promoted ? '<span>💰広告分除外済</span>' : '') +
@@ -196,7 +222,8 @@
       }).join('') + '</div>' +
       tableHtml +
       '<div class="card"><h3 class="sec">読むときの注意</h3><div class="reason">' +
-      'オーガニックインプ基準（広告分は分離済み。分離できないプロモ投稿は除外）。計測時点からの経過時間で有利不利が出るため、直近の投稿は値が育ちきっていません。いいねの発生時刻はAPIで取れないため、投稿時間帯ごとの獲得数で代替しています。' +
+      '最終目的はフォロワー増ですが、<b>Xは「どのポストで何人増えたか」を返しません</b>。そのため ①フォロワー数は日次スナップショットの差分、②ポスト単位は 👤プロフィールクリック（フォローの直前行動）で代替評価しています。<br>' +
+      'インプはオーガニック基準（広告分は分離済み。分離できないプロモ投稿は除外）。計測時点からの経過時間で有利不利が出るため、直近の投稿は値が育ちきっていません。プロフィールクリックはAPIの制約で直近30日程度の投稿のみ取得できます。' +
       '</div></div>';
   }
 

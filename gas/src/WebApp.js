@@ -250,10 +250,11 @@ function api_analytics(token) {
 
   var DAYS = ['日', '月', '火', '水', '木', '金', '土'];
   function agg(map, key, r) {
-    if (!map[key]) map[key] = { n: 0, imp: 0, likes: 0, points: [] };
+    if (!map[key]) map[key] = { n: 0, imp: 0, likes: 0, clicks: 0, clickN: 0, points: [] };
     map[key].n++;
     map[key].imp += Number(r.impressions || 0);
     map[key].likes += Number(r.likes || 0);
+    if (r.profile_clicks !== '') { map[key].clicks += Number(r.profile_clicks); map[key].clickN++; }
     map[key].points.push(Number(r.impressions || 0));
   }
 
@@ -287,10 +288,42 @@ function api_analytics(token) {
       posted_at: postedAt,
       slot: postedAt.length >= 16 ? postedAt.slice(11, 13) + '時台' : '',
       promoted: String(r.promoted) === 'yes',
+      clicks: r.profile_clicks === '' ? null : Number(r.profile_clicks),
+      clickRate: r.profile_clicks !== '' && Number(r.impressions) > 0
+        ? Math.round(1000 * Number(r.profile_clicks) / Number(r.impressions)) / 10 : null,
     };
+  }
+  // プロフィールクリック（フォローの直前行動）が取れていればそれ基準で並べる
+  var hasClicks = rows.some(function (r) { return r.profile_clicks !== ''; });
+  if (hasClicks) {
+    sorted.sort(function (a, b) { return Number(b.profile_clicks || 0) - Number(a.profile_clicks || 0); });
   }
   var top10 = sorted.slice(0, 10).map(rowView);
   var table = sorted.map(rowView);
+
+  // フォロワー推移（直近30日）
+  var fRows = [];
+  try {
+    fRows = readTable(SHEET.FOLLOWERS).slice(-30).map(function (r) {
+      return { date: String(r.date), followers: Number(r.followers || 0), delta: r.delta === '' ? null : Number(r.delta) };
+    });
+  } catch (e) {
+    fRows = [];
+  }
+  var follow = null;
+  if (fRows.length >= 2) {
+    var latest = fRows[fRows.length - 1];
+    var w = fRows[Math.max(0, fRows.length - 8)];
+    follow = {
+      current: latest.followers,
+      gained7: latest.followers - w.followers,
+      gainedAll: latest.followers - fRows[0].followers,
+      days: fRows.length - 1,
+      series: fRows,
+    };
+  } else if (fRows.length === 1) {
+    follow = { current: fRows[0].followers, gained7: null, gainedAll: null, days: 0, series: fRows };
+  }
 
   // 採点スコアと実測インプの相関（採点のある自動投稿のみ）
   var scored = rows.filter(function (r) { return r.score !== ''; });
@@ -308,6 +341,8 @@ function api_analytics(token) {
         impAvg: Math.round(m.imp / m.n),
         likesAvg: Math.round(m.likes / m.n * 10) / 10,
         engRate: m.imp > 0 ? Math.round(1000 * m.likes / m.imp) / 10 : 0,
+        clickAvg: m.clickN > 0 ? Math.round(m.clicks / m.clickN * 10) / 10 : null,
+        clickRate: m.clickN > 0 && m.imp > 0 ? Math.round(1000 * m.clicks / m.imp) / 10 : null,
         points: m.points,
       };
     }).sort(function (a, b) { return b.impAvg - a.impAvg; });
@@ -322,6 +357,8 @@ function api_analytics(token) {
     table: table,
     scatter: scatter,
     corr: corr === null ? null : Math.round(corr * 100) / 100,
+    hasClicks: hasClicks,
+    follow: follow,
   });
 }
 
