@@ -58,25 +58,38 @@ function runQualityGate() {
   var threshold = qualityThreshold();
   var system = axisScoringSystemPrompt(getVoiceSamples(10), false);
 
-  var user = [
-    '以下の下書きを採点してください。',
-    '',
-    drafts.map(function (d) {
-      return 'id: ' + d.id + '\ncategory: ' + d.category + '\n本文:\n' + d.text;
-    }).join('\n\n====\n\n'),
-    '',
-    'JSON配列で出力: [{"id": "...", "axes": {' +
-      AXES.map(function (a) { return '"' + a.key + '": 0-100'; }).join(', ') +
-      '}, "reason": "最も高い軸と最も低い軸に触れて50字以内で"}]',
-  ].join('\n');
+  // 軸名をキーで書かせると1件250トークン近くかかり、下書きが溜まっていると
+  // max_tokensの途中で応答が切れて全件無駄になる。AXES順の配列で受け取り、
+  // さらに10件ずつに分けて投げる。
+  var byId = {};
+  for (var i = 0; i < drafts.length; i += 10) {
+    var chunk = drafts.slice(i, i + 10);
+    var user = [
+      '以下の下書きを採点してください。',
+      '',
+      chunk.map(function (d) {
+        return 'id: ' + d.id + '\ncategory: ' + d.category + '\n本文:\n' + d.text;
+      }).join('\n\n====\n\n'),
+      '',
+      'JSON配列で出力: [{"id": "...", "axes": [下記の順に' + AXES.length + '個の整数(0-100)],' +
+        ' "reason": "最も高い軸と最も低い軸に触れて50字以内で"}]',
+      '軸の順序: ' + AXES.map(function (a) { return a.key; }).join(', '),
+    ].join('\n');
 
-  var results = askClaudeJson(system, user, 4000);
-  if (!Array.isArray(results)) throw new Error('採点結果の出力が不正です');
+    var results;
+    try {
+      results = askClaudeJsonSalvageable(system, user, 8000);
+    } catch (e) {
+      // 一部が採点できなくても、採点できた分は反映して先へ進む
+      logEvent('quality_gate_error', String(e).slice(0, 300));
+      continue;
+    }
+    if (!Array.isArray(results)) continue;
+    results.forEach(function (r) { if (r && r.id !== undefined) byId[String(r.id)] = r; });
+  }
+  if (!Object.keys(byId).length) throw new Error('採点結果が1件も得られませんでした');
 
   var passed = 0;
-  var byId = {};
-  results.forEach(function (r) { byId[String(r.id)] = r; });
-
   drafts.forEach(function (d) {
     var r = byId[String(d.id)];
     if (!r) return;
@@ -356,7 +369,11 @@ function refineFailedDrafts(force) {
   }).slice(0, 10);
   if (!targets.length) return 0;
 
-  // 捏造防止: 本人がインタビューで実際に話した内容を「一次情報」として渡す
+  // 捏造防止: 本人がインタビューで実際に話した内容を「一次情報」として渡す。
+  // 同じセッションの下書きは同じ一次情報を参照するので、下書きごとに全文を
+  // 繰り返すとプロンプトが10倍に膨らむ（長い回答をした日はそれで壊れる）。
+  // セッションごとに1回だけ載せて、下書きからは参照させる。
+  var MAX_QA_CHARS = 2000;
   var qaBySession = {};
   readTable(SHEET.INTERVIEWS).forEach(function (r) {
     if (!String(r.answer || '').trim()) return;
@@ -365,13 +382,28 @@ function refineFailedDrafts(force) {
     qaBySession[sid].push('Q: ' + r.question + ' / A: ' + r.answer);
   });
 
+  var usedSessions = {};
+  targets.forEach(function (d) { usedSessions[String(d.session_id)] = true; });
+  var sources = Object.keys(usedSessions).filter(function (sid) {
+    return qaBySession[sid] && qaBySession[sid].length;
+  }).map(function (sid) {
+    var body = qaBySession[sid].join('\n');
+    // 1回の回答が極端に長いこともあるので、セッションあたりの上限を設ける
+    if (body.length > MAX_QA_CHARS) body = body.slice(0, MAX_QA_CHARS) + '…(以下略)';
+    return '[' + sid + ']\n' + body;
+  });
+
   var system = buildStylePrompt();
   var user = [
     '以下は品質ゲートで不合格になったXのポスト下書きと、その採点コメント、',
     'および本人がインタビューで実際に話した一次情報です。指摘を踏まえて書き直してください。',
     '',
+    sources.length
+      ? '## 一次情報（本人の回答。各下書きの session が対応する）\n' + sources.join('\n\n')
+      : '## 一次情報: なし（本文にある事実だけで書き直すこと）',
+    '',
+    '## 下書き',
     targets.map(function (d) {
-      var qa = qaBySession[String(d.session_id)] || [];
       // 弱い軸を名指しして、そこを重点的に直させる
       var ax = parseAxes(d.axes);
       var weak = '';
@@ -382,8 +414,8 @@ function refineFailedDrafts(force) {
           return a.label + ' ' + ax[a.key] + '点';
         }).join(' / ');
       }
-      return 'id: ' + d.id + '\n採点: ' + d.score + '点 / 指摘: ' + d.score_reason + weak + '\n本文:\n' + d.text +
-        (qa.length ? '\n一次情報（本人の回答）:\n' + qa.join('\n') : '\n一次情報: なし（本文にある事実だけで書き直すこと）');
+      return 'id: ' + d.id + '\nsession: ' + d.session_id +
+        '\n採点: ' + d.score + '点 / 指摘: ' + d.score_reason + weak + '\n本文:\n' + d.text;
     }).join('\n\n====\n\n'),
     '',
     'ルール:',
@@ -397,7 +429,7 @@ function refineFailedDrafts(force) {
     'JSON配列で出力: [{"id": "...", "text": "...", "skip": false}]',
   ].join('\n');
 
-  var results = askClaudeJson(system, user, 3000);
+  var results = askClaudeJsonSalvageable(system, user, 6000);
   if (!Array.isArray(results)) throw new Error('リライト結果の出力が不正です');
   var byId = {};
   results.forEach(function (r) { byId[String(r.id)] = r; });

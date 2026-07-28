@@ -56,7 +56,7 @@ function askClaudeJson(systemPrompt, userPrompt, maxTokens) {
     try {
       return parseJsonLoose(text);
     } catch (e) {
-      if (attempt === 1) throw new Error('ClaudeのJSONパースに失敗: ' + text.slice(0, 300));
+      if (attempt === 1) throw new Error('ClaudeのJSONパースに失敗（応答' + text.length + '文字）: ' + text.slice(0, 300));
     }
   }
 }
@@ -83,7 +83,7 @@ function askClaudeJsonSalvageable(systemPrompt, userPrompt, maxTokens) {
       if (!full) logEvent('claude_json_salvaged', '応答が途中で切れたため一部のみ採用: ' + text.length + '文字');
       return partial;
     }
-    lastErr = new Error('ClaudeのJSONパースに失敗: ' + text.slice(0, 300));
+    lastErr = new Error('ClaudeのJSONパースに失敗（応答' + text.length + '文字）: ' + text.slice(0, 300));
   }
   throw lastErr;
 }

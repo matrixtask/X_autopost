@@ -38,7 +38,7 @@ function rewriteUnpostedDrafts(includeApproved) {
     'JSON配列で出力: [{"id": "...", "text": "..."}]',
   ].join('\n');
 
-  var results = askClaudeJson(system, user, 4000);
+  var results = askClaudeJsonSalvageable(system, user, 6000);
   if (!Array.isArray(results)) throw new Error('リライト結果の出力が不正です');
 
   var byId = {};
