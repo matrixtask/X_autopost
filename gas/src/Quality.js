@@ -115,11 +115,13 @@ function runQualityGate() {
  * GASの実行時間上限（6分）があるので、4分で打ち切って残件があれば
  * 1分後に自分を再実行するワンショットトリガーを仕込む。放置で完走する。
  */
+var MIN_BACKFILL_BATCH = 3;
+
 function backfillAxisScores() {
   ensureHeaders(SHEET.STOCK);
   var started = new Date().getTime();
   var budgetMs = 4 * 60 * 1000;
-  var batchSize = Number(getProp('BACKFILL_BATCH', '25'));
+  var batchSize = Number(getProp('BACKFILL_BATCH', '15'));
 
   var pendingAll = readTable(SHEET.STOCK).filter(function (r) {
     return String(r.status) === STATUS.POSTED && String(r.text).trim() && !parseAxes(r.axes);
@@ -155,14 +157,13 @@ function backfillAxisScores() {
       '全' + batch.length + '件を必ず含めること。説明や軸名は書かない（トークンの無駄なので）。',
     ].join('\n');
 
-    var results;
+    var results = null;
     try {
       results = askClaudeJsonSalvageable(system, user, 8000);
     } catch (e) {
-      logEvent('backfill_error', String(e).slice(0, 200));
-      break;
+      logEvent('backfill_error', 'batch=' + batchSize + ' ' + String(e).slice(0, 300));
     }
-    if (!results || typeof results !== 'object') break;
+
     // 指示に反して [{"id": ..., "axes": ...}] 形式で返ってきた場合も拾う
     if (Array.isArray(results)) {
       var byId = {};
@@ -173,19 +174,29 @@ function backfillAxisScores() {
     }
 
     var writes = [];
-    batch.forEach(function (d) {
-      var axes = compositeAxes(results[String(d.id)]);
-      if (axes) writes.push({ row: d._row, value: JSON.stringify(axes) });
-    });
+    if (results && typeof results === 'object') {
+      batch.forEach(function (d) {
+        var axes = compositeAxes(results[String(d.id)]);
+        if (axes) writes.push({ row: d._row, value: JSON.stringify(axes) });
+      });
+    }
+
+    if (!writes.length) {
+      // 件数が多すぎて応答が不安定なのかもしれないので、半分にして同じ位置から
+      // やり直す。それでも駄目なら諦めて次の実行に回す（無限に投げ続けない）。
+      if (batchSize > MIN_BACKFILL_BATCH) {
+        batchSize = Math.max(MIN_BACKFILL_BATCH, Math.floor(batchSize / 2));
+        logEvent('backfill_axes', 'バッチを' + batchSize + '件に縮小して再試行します');
+        continue;
+      }
+      logEvent('backfill_error', '最小バッチでも採点できませんでした（cursor=' + cursor + '）');
+      break;
+    }
+
     // updateStockById は1件ごとに全行を読み直すので、ここでは行番号直指定で書く
     setColumnByRows(SHEET.STOCK, 'axes', writes);
     scored += writes.length;
     cursor += batch.length;
-    if (!writes.length) {
-      // 1件も採点できないバッチが続くならプロンプト側の問題。無限に投げ続けない
-      logEvent('backfill_error', 'バッチ全件が不正な形式でした（cursor=' + cursor + '）');
-      break;
-    }
   }
 
   // 書けなかった分は残件に戻る（次の実行で拾い直す）
@@ -206,6 +217,52 @@ function backfillAxisScores() {
   notifySlack(':white_check_mark: 遡及採点が完了しました。軸スコア付きの投稿が増えたので、' +
     'reportAxisAnalysis を実行すると相関が出ます。');
   return scored + '件を採点しました。完了です。';
+}
+
+/**
+ * 遡及採点が失敗したときの切り分け用。未採点の先頭3件だけを採点して、
+ * Claudeの生の応答をそのまま返す。GASエディタで実行してログを見ると、
+ * 空応答なのか・形式違いなのか・途中で切れたのかが一目で分かる。
+ * シートは一切書き換えない。
+ */
+function debugBackfillSample() {
+  var pending = readTable(SHEET.STOCK).filter(function (r) {
+    return String(r.status) === STATUS.POSTED && String(r.text).trim() && !parseAxes(r.axes);
+  }).slice(0, 3);
+  if (!pending.length) return '未採点の投稿済みポストはありません';
+
+  var system = axisScoringSystemPrompt(getVoiceSamples(8), true);
+  var order = AXES.map(function (a) { return a.key; }).join(', ');
+  var user = [
+    '以下は過去に投稿されたポストです。各ポストの全軸を採点してください。',
+    '',
+    pending.map(function (d) {
+      return 'id: ' + d.id + '\n本文:\n' + String(d.text).slice(0, 400);
+    }).join('\n\n====\n\n'),
+    '',
+    '出力はJSONオブジェクト1つ。キーがid、値が下記の順に並べた' + AXES.length + '個の整数(0-100)。',
+    '順序: ' + order,
+    '全' + pending.length + '件を必ず含めること。説明や軸名は書かない。',
+  ].join('\n');
+
+  var out = ['system長=' + system.length + '文字 / user長=' + user.length + '文字'];
+  try {
+    var text = askClaude(system, user, 8000);
+    out.push('--- 生の応答 ---', text);
+    var parsed = salvageJson(text);
+    out.push('--- パース結果 ---', parsed ? JSON.stringify(parsed) : 'パース不能');
+    if (parsed) {
+      pending.forEach(function (d) {
+        out.push(d.id + ' → ' + (compositeAxes(parsed[String(d.id)]) ? 'OK' : '不正な形式: ' + JSON.stringify(parsed[String(d.id)])));
+      });
+    }
+  } catch (e) {
+    out.push('--- 例外 ---', String(e));
+  }
+  var report = out.join('\n');
+  logEvent('backfill_debug', report.slice(0, 800));
+  console.log(report);
+  return report;
 }
 
 /** 遡及採点の続きを1分後に実行するワンショットトリガーを仕込む */
