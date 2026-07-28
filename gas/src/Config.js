@@ -121,6 +121,32 @@ var DEFAULT_AXIS_WEIGHTS = {
   profile: 0.12,
 };
 
+/**
+ * 相関がいくら負に出ても、重みをこの値より下げない軸。
+ *
+ * 「本人らしさ」は成果指標ではなく制約条件。本人の文体で書くことは
+ * この仕組みの前提であって、フォロワーが増えないなら捨てる、という
+ * 性質のものではない。加えて、標本の大半が取り込んだ過去の手動投稿
+ * （＝定義上いちばん本人らしく、かつ雑談が多い）なので、この軸は
+ * 「本人らしさ」ではなく「昔の雑な呟きかどうか」を測っている疑いがある。
+ * analyzeAxesByOrigin() でその交絡を検証できる。
+ *
+ * 下限をかけても分析レポートには生の相関がそのまま出るので、
+ * 「データはこう出ているが、重みは下限で止めている」ことは隠れない。
+ */
+var DEFAULT_AXIS_FLOORS = { voice: 0.05 };
+
+function axisFloors() {
+  var raw = getProp('AXIS_FLOORS', '');
+  if (!raw) return DEFAULT_AXIS_FLOORS;
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    logEvent('axis_floors_parse_error', String(e));
+    return DEFAULT_AXIS_FLOORS;
+  }
+}
+
 /** スクリプトプロパティに入った {key: {c, n}} を読む。壊れていたら null */
 function parseCorrStore(key) {
   var raw = getProp(key, '');
@@ -181,6 +207,11 @@ function axisCorrelations() {
   var scale = learned.length ? learned.reduce(function (s, v) { return s + v; }, 0) / learned.length : 0.1;
   AXES.forEach(function (a) {
     if (out[a.key] === null) out[a.key] = (DEFAULT_AXIS_WEIGHTS[a.key] || 0.05) * scale * 5;
+  });
+  // 制約条件の軸は下限で止める（負の相関が出ても減点にしない）
+  var floors = axisFloors();
+  Object.keys(floors).forEach(function (key) {
+    if (out[key] !== undefined && out[key] < Number(floors[key])) out[key] = Number(floors[key]);
   });
   return out;
 }

@@ -272,12 +272,29 @@ function backfillManualPosts(maxPosts) {
  * 軸同士は相関が高い（良い投稿は全軸で高い）ため重回帰は過学習する。
  * この規模では単相関＋平滑化の方が素直で壊れにくい。
  */
-function analyzeAxes(mode) {
-  var rows = readTable(SHEET.STOCK).filter(function (r) {
+/** 各軸と成果指標の単相関。標本5件未満の軸は corr=null */
+function axisCorrelationsFor(target, outcomes) {
+  return AXES.map(function (a) {
+    var xs = [], ys = [];
+    target.forEach(function (r, i) {
+      var ax = parseAxes(r.axes);
+      if (ax && isFinite(Number(ax[a.key]))) { xs.push(Number(ax[a.key])); ys.push(outcomes[i]); }
+    });
+    return { key: a.key, label: a.label, n: xs.length, corr: xs.length >= 5 ? pearson(xs, ys) : null };
+  });
+}
+
+/** 分析対象になる投稿済み行（軸スコア付き・広告インプを分離できているもの） */
+function analyzableRows() {
+  return readTable(SHEET.STOCK).filter(function (r) {
     if (String(r.status) !== STATUS.POSTED || !r.metrics_at) return false;
     if (String(r.promoted) === 'yes' && r.paid_impressions === '') return false;
     return parseAxes(r.axes) !== null;
   });
+}
+
+function analyzeAxes(mode) {
+  var rows = analyzableRows();
 
   // 2つのモデルを使い分ける:
   //  follow: プロフィールクリック率。KGI(フォロワー増)に近いが直近30日分しか無い
@@ -302,14 +319,7 @@ function analyzeAxes(mode) {
     }), 30);
   }
 
-  var results = AXES.map(function (a) {
-    var xs = [], ys = [];
-    target.forEach(function (r, i) {
-      var ax = parseAxes(r.axes);
-      if (ax && isFinite(Number(ax[a.key]))) { xs.push(Number(ax[a.key])); ys.push(outcomes[i]); }
-    });
-    return { key: a.key, label: a.label, n: xs.length, corr: xs.length >= 5 ? pearson(xs, ys) : null };
-  });
+  var results = axisCorrelationsFor(target, outcomes);
 
   // 相関ベクトルをそのまま保存する（重みへの変換はせず、内積の係数として使う）。
   // 標本数も一緒に残し、読み出し側で n/(n+K) の縮小をかける。
@@ -335,6 +345,7 @@ function analyzeAxes(mode) {
   var absSum = 0;
   AXES.forEach(function (a) { absSum += Math.abs(Number(effective[a.key]) || 0); });
 
+  var floors = axisFloors();
   var ranked = results.slice().sort(function (a, b) {
     return (b.corr === null ? -2 : b.corr) - (a.corr === null ? -2 : a.corr);
   }).map(function (x) {
@@ -343,12 +354,86 @@ function analyzeAxes(mode) {
       key: x.key, label: x.label, n: x.n, corr: x.corr,
       effective: Math.round(eff * 1000) / 1000,
       share: absSum > 0 ? Math.round(Math.abs(eff) / absSum * 1000) / 10 : 0,
+      // 相関が下限を下回っていて、重みが下限で止められている軸
+      floored: floors[x.key] !== undefined && eff <= Number(floors[x.key]) + 1e-9,
     };
   });
   return {
     outcomeName: outcomeName, sampleSize: target.length, minSamples: minSamples,
     ranked: ranked, updated: updated,
   };
+}
+
+/**
+ * 交絡の検証: 取り込んだ手動投稿と、この仕組みが生成した投稿とで、
+ * 軸の効き方が違うかどうかを見る。
+ *
+ * 標本の大半は取り込んだ過去の手動投稿で、それらは定義上いちばん
+ * 「本人らしい」うえに雑談や短い呟きが多い。そのため「本人らしさ」の
+ * 負の相関が、文体そのものではなく「昔の雑な呟きかどうか」を拾って
+ * いる可能性がある。群を分けて符号が変わるなら、その疑いは濃い。
+ *
+ * 成果指標は analyzeAxes と同じ考え方で、群ごとに窓内インプ順位を使う
+ * （プロフィールクリックは直近30日分しかなく、群を割ると足りないため）。
+ */
+function analyzeAxesByOrigin() {
+  var rows = analyzableRows().filter(function (r) {
+    return Number(r.impressions || 0) > 0 && r.posted_at;
+  });
+  var groups = {
+    manual: rows.filter(function (r) { return String(r.category) === 'manual'; }),
+    generated: rows.filter(function (r) { return String(r.category) !== 'manual'; }),
+  };
+
+  var out = {};
+  Object.keys(groups).forEach(function (name) {
+    var g = groups[name];
+    if (g.length < 10) { out[name] = { n: g.length, ranked: null }; return; }
+    // 群ごとに窓内順位を取り直す（群をまたいで順位を比べても意味がないため）
+    var outcomes = percentileWithinWindow(g.map(function (r) {
+      return { t: new Date(String(r.posted_at).replace(' ', 'T') + ':00+09:00').getTime(), v: Number(r.impressions) };
+    }), 30);
+    out[name] = { n: g.length, ranked: axisCorrelationsFor(g, outcomes) };
+  });
+  return out;
+}
+
+/** 交絡検証をSlackに投げる。手動実行用 */
+function reportAxesByOrigin() {
+  var a = analyzeAxesByOrigin();
+  if (!a.manual.ranked || !a.generated.ranked) {
+    var msg = ':mag: 交絡検証: 群が足りません（手動投稿' + a.manual.n + '件 / 生成投稿' + a.generated.n +
+      '件。それぞれ10件以上必要です）';
+    notifySlack(msg);
+    return msg;
+  }
+  var byKey = {};
+  a.generated.ranked.forEach(function (x) { byKey[x.key] = x; });
+
+  var lines = [
+    ':mag: *交絡検証: 手動投稿 vs 生成投稿*（成果指標はどちらもインプレッション窓内順位）',
+    '手動' + a.manual.n + '件 / 生成' + a.generated.n + '件。',
+    '符号が入れ替わる軸は、その軸そのものではなく「どちらの群か」を測っている疑いがあります。',
+    '',
+  ];
+  var flipped = [];
+  a.manual.ranked.slice().sort(function (x, y) {
+    return (y.corr === null ? -2 : y.corr) - (x.corr === null ? -2 : x.corr);
+  }).forEach(function (m) {
+    var g = byKey[m.key];
+    if (m.corr === null || !g || g.corr === null) return;
+    var flip = (m.corr < -0.05 && g.corr > 0.05) || (m.corr > 0.05 && g.corr < -0.05);
+    if (flip) flipped.push(m.label);
+    lines.push((flip ? ':warning: ' : '') + m.label +
+      ': 手動 ' + (m.corr >= 0 ? '+' : '') + m.corr.toFixed(2) +
+      ' / 生成 ' + (g.corr >= 0 ? '+' : '') + g.corr.toFixed(2));
+  });
+  lines.push('');
+  lines.push(flipped.length
+    ? '符号が反転した軸: ' + flipped.join('、') + '。これらは交絡の疑いが濃いので、重みをそのまま信じないでください。'
+    : '符号が反転した軸はありません。群による交絡は見当たりません。');
+  notifySlack(lines.join('\n'));
+  return lines.join('\n');
 }
 
 /**
@@ -382,8 +467,11 @@ function reportAxisAnalysis() {
       if (x.corr === null) return;
       shown++;
       var bar = '█'.repeat(Math.max(1, Math.round(Math.abs(x.corr) * 12)));
+      // 寄与率は2モデルを合成した後の最終的な重みなので、両モデルで同じ値になる。
+      // モデルごとの数字と誤読されないよう、相関とは別物であることを明示する
       lines.push((x.corr >= 0 ? '+' : '−') + Math.abs(x.corr).toFixed(2) + ' ' + bar +
-        ' ' + x.label + '（寄与' + x.share + '% / n=' + x.n + '）');
+        ' ' + x.label + '（n=' + x.n + ' / 合成後の寄与' + x.share + '%' +
+        (x.floored ? '・下限で固定' : '') + '）');
     });
     if (!shown) lines.push('（このモデルはまだデータ不足）');
     var lacking = a.ranked.filter(function (x) { return x.corr === null; });
