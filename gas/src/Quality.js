@@ -114,11 +114,31 @@ function runQualityGate() {
  *
  * GASの実行時間上限（6分）があるので、4分で打ち切って残件があれば
  * 1分後に自分を再実行するワンショットトリガーを仕込む。放置で完走する。
+ *
+ * 継続トリガーの発火中に手動実行が重なると、両方が同じ未採点リストを読んで
+ * 同じポストを二重に採点してしまう。ロックで後発を弾く。
  */
 var MIN_BACKFILL_BATCH = 3;
 
 function backfillAxisScores() {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(100)) {
+    var busy = '遡及採点は既に実行中です（二重実行を防ぐためスキップしました）';
+    logEvent('backfill_axes', busy);
+    return busy;
+  }
+  try {
+    return backfillAxisScoresLocked();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function backfillAxisScoresLocked() {
   ensureHeaders(SHEET.STOCK);
+  // 発火済みの一回きりトリガーは無効のまま残り、溜まると上限に当たる。
+  // 予約済みの継続トリガーがあればそれも消す（この実行が引き継ぐため）。
+  clearBackfillTrigger();
   var started = new Date().getTime();
   var budgetMs = 4 * 60 * 1000;
   var batchSize = Number(getProp('BACKFILL_BATCH', '15'));
@@ -197,6 +217,10 @@ function backfillAxisScores() {
     setColumnByRows(SHEET.STOCK, 'axes', writes);
     scored += writes.length;
     cursor += batch.length;
+    // 4分間まるごと無言だと動いているのか分からないので、バッチごとに進捗を残す
+    logEvent('backfill_axes', '進捗 ' + scored + '/' + pendingAll.length + '件' +
+      '（今回のバッチ' + writes.length + '/' + batch.length + '件 / 経過' +
+      Math.round((new Date().getTime() - started) / 1000) + '秒）');
   }
 
   // 書けなかった分は残件に戻る（次の実行で拾い直す）
