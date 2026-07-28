@@ -260,44 +260,42 @@ function analyzeAxes() {
     return { key: a.key, label: a.label, n: xs.length, corr: xs.length >= 5 ? pearson(xs, ys) : null };
   });
 
-  var minSamples = Number(getProp('MIN_AXIS_SAMPLES', '15'));
+  // 相関ベクトルをそのまま保存する（重みへの変換はせず、内積の係数として使う）。
+  // 標本数も一緒に残し、読み出し側で n/(n+K) の縮小をかける。
+  var minSamples = Number(getProp('MIN_AXIS_SAMPLES', '10'));
   var usable = results.filter(function (x) { return x.corr !== null && x.n >= minSamples; });
   var updated = false;
-  var current = axisWeights();
-  var next = current;
 
-  if (usable.length >= Math.ceil(AXES.length / 2)) {
-    // 正の相関だけを重みの根拠にする（負・ゼロ相関の軸は下限へ寄る）
-    var raw = {}, sum = 0;
+  if (usable.length >= 3) {
+    var store = {};
     results.forEach(function (x) {
-      var v = x.corr === null ? 0 : Math.max(0, x.corr);
-      raw[x.key] = v;
-      sum += v;
+      if (x.corr !== null && x.n >= minSamples) {
+        store[x.key] = { c: Math.round(x.corr * 1000) / 1000, n: x.n };
+      }
     });
-    if (sum > 0) {
-      var blend = 0.6; // 現行:学習 = 6:4 で混ぜる
-      var mixed = {}, mixSum = 0;
-      AXES.forEach(function (a) {
-        var learned = raw[a.key] / sum;
-        var v = blend * (current[a.key] || 0) + (1 - blend) * learned;
-        v = Math.max(0.03, Math.min(0.35, v)); // 極端な偏りを防ぐ
-        mixed[a.key] = v;
-        mixSum += v;
-      });
-      next = {};
-      AXES.forEach(function (a) { next[a.key] = Math.round(mixed[a.key] / mixSum * 1000) / 1000; });
-      PropertiesService.getScriptProperties().setProperty('QUALITY_WEIGHTS', JSON.stringify(next));
-      updated = true;
-      logEvent('axis_weights', JSON.stringify(next));
-    }
+    PropertiesService.getScriptProperties().setProperty('AXIS_CORRELATIONS', JSON.stringify(store));
+    updated = true;
+    logEvent('axis_correlations', JSON.stringify(store));
   }
+
+  // 実際にスコア計算で使われている係数（縮小後）と、その寄与率
+  var effective = axisCorrelations();
+  var absSum = 0;
+  AXES.forEach(function (a) { absSum += Math.abs(Number(effective[a.key]) || 0); });
 
   var ranked = results.slice().sort(function (a, b) {
     return (b.corr === null ? -2 : b.corr) - (a.corr === null ? -2 : a.corr);
+  }).map(function (x) {
+    var eff = Number(effective[x.key]) || 0;
+    return {
+      key: x.key, label: x.label, n: x.n, corr: x.corr,
+      effective: Math.round(eff * 1000) / 1000,
+      share: absSum > 0 ? Math.round(Math.abs(eff) / absSum * 1000) / 10 : 0,
+    };
   });
   return {
     outcomeName: outcomeName, sampleSize: target.length, minSamples: minSamples,
-    ranked: ranked, weights: next, updated: updated,
+    ranked: ranked, updated: updated,
   };
 }
 
@@ -312,18 +310,29 @@ function reportAxisAnalysis() {
   }
   var lines = [
     ':microscope: *軸別の効き方分析*（成果指標: ' + a.outcomeName + ' / n=' + a.sampleSize + '）',
+    '全体スコアは「軸スコア × 下の相関」の内積で算出されます。',
     '',
-    '相関の強い順:',
   ];
   a.ranked.forEach(function (x) {
-    var bar = x.corr === null ? '(データ不足)' :
-      (x.corr >= 0 ? '+' : '') + x.corr.toFixed(2) + ' ' + '█'.repeat(Math.max(0, Math.round(Math.abs(x.corr) * 10)));
-    lines.push('・' + x.label + ': ' + bar + '  (n=' + x.n + ' / 重み ' + Math.round((a.weights[x.key] || 0) * 100) + '%)');
+    if (x.corr === null) return;
+    var bar = '█'.repeat(Math.max(1, Math.round(Math.abs(x.corr) * 12)));
+    lines.push((x.corr >= 0 ? '+' : '−') + Math.abs(x.corr).toFixed(2) + ' ' + bar +
+      ' ' + x.label + '（寄与' + x.share + '% / n=' + x.n + '）');
   });
+  var lacking = a.ranked.filter(function (x) { return x.corr === null; });
+  if (lacking.length) {
+    lines.push('');
+    lines.push('データ不足の軸: ' + lacking.map(function (x) { return x.label; }).join('、'));
+  }
   lines.push('');
   lines.push(a.updated
-    ? ':white_check_mark: 重みを更新しました。次回の採点から反映されます。'
-    : ':hourglass: 重みは未更新（各軸' + a.minSamples + '件以上たまると自動更新します）。');
+    ? ':white_check_mark: 相関を更新しました。次回の採点から全体スコアに反映されます。'
+    : ':hourglass: 相関は未更新（各軸' + a.minSamples + '件以上たまると自動更新します）。');
+  var negatives = a.ranked.filter(function (x) { return x.corr !== null && x.corr < -0.1; });
+  if (negatives.length) {
+    lines.push('※ ' + negatives.map(function (x) { return x.label; }).join('、') +
+      ' は負の相関です。この軸が高いポストほど成果が下がっているため、スコアでは減点として働きます。');
+  }
   notifySlack(lines.join('\n'));
   return lines.join('\n');
 }

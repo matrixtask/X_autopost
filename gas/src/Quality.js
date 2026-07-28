@@ -46,7 +46,6 @@ function runQualityGate() {
   ensureHeaders(SHEET.STOCK);
   var threshold = qualityThreshold();
   var samples = getVoiceSamples(10);
-  var weights = axisWeights();
   // 実測インプレッションから学習した追加基準（evaluateScoring()が更新する）
   var learnedRubric = getProp('QUALITY_RUBRIC_LEARNED', '');
   var system = [
@@ -92,10 +91,8 @@ function runQualityGate() {
     if (!r) return;
     var axes = compositeAxes(r.axes);
     if (!axes) return;
-    // 合成スコアはコード側で計算する（重みを学習で変えられるようにするため）
-    var score = 0;
-    AXES.forEach(function (a) { score += axes[a.key] * (weights[a.key] || 0); });
-    score = Math.round(score);
+    // 全体スコア = 軸スコア · 実測相関ベクトル（0〜100に正規化）
+    var score = compositeScoreFromAxes(axes);
 
     var pass = score >= threshold;
     if (pass) passed++;

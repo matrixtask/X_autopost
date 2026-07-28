@@ -209,18 +209,20 @@
     if (d.axes && d.axes.ranked && d.axes.ranked.some(function (x) { return x.corr !== null; })) {
       var maxAbs = Math.max.apply(null, d.axes.ranked.map(function (x) { return x.corr === null ? 0 : Math.abs(x.corr); }).concat([0.3]));
       axesHtml = '<div class="card"><h3 class="sec">軸別の効き方（成果指標: ' + esc(d.axes.outcomeName) + ' / n=' + d.axes.sampleSize + '）</h3>' +
-        d.axes.ranked.map(function (x) {
-          var w = x.corr === null ? 0 : Math.round(Math.abs(x.corr) / maxAbs * 50);
-          var neg = x.corr !== null && x.corr < 0;
+        d.axes.ranked.filter(function (x) { return x.corr !== null; }).map(function (x) {
+          var w = Math.round(Math.abs(x.corr) / maxAbs * 48);
+          var neg = x.corr < 0;
           return '<div class="bar-row"><span class="bar-lbl">' + esc(x.label) + '</span>' +
             '<span class="bar-track"><span class="bar-fill" style="left:50%;width:' + w + '%;' +
             (neg ? 'transform:translateX(-100%);opacity:.45;' : '') + '"></span>' +
             '<span class="axis-zero"></span></span>' +
-            '<span class="bar-val">' + (x.corr === null ? '不足' : (x.corr >= 0 ? '+' : '') + x.corr) +
-            ' / 重み' + x.weight + '% (n=' + x.n + ')</span></div>';
+            '<span class="bar-val">' + (x.corr >= 0 ? '+' : '') + x.corr +
+            ' / 寄与' + x.share + '% (n=' + x.n + ')</span></div>';
         }).join('') +
-        '<div class="reason">中央の線が相関0。右に伸びるほど「その軸が高いポストほど成果が出ている」。' +
-        (d.axes.updated ? '重みは実測に基づいて自動更新済みです。' : '各軸' + d.axes.minSamples + '件たまると重みを自動更新します。') +
+        '<div class="reason">全体スコア = 各軸のスコア × ここに出ている相関、の内積を0〜100に正規化したものです。' +
+        '中央の線が相関0で、右に伸びるほど「その軸が高いポストほど成果が出ている」。' +
+        '<b>左に伸びた軸は減点として働きます</b>（高いほど成果が下がっている軸）。' +
+        (d.axes.updated ? '相関は実測から自動更新済みです。' : '各軸' + d.axes.minSamples + '件たまると自動更新します。') +
         '</div></div>';
     }
 

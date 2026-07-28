@@ -86,39 +86,103 @@ function slotTimes() {
  * 重み付き平均して算出する（重みを学習で更新できるようにするため）。
  */
 var AXES = [
+  // 語り手としての特徴
   { key: 'voice', label: '本人らしさ', desc: '文体サンプルと同じ人が書いたように読めるか。AIっぽい定型・評論調は大減点' },
-  { key: 'concrete', label: '具体性', desc: '固有名詞・数字・その日の出来事があるか。一般論だけなら低得点' },
-  { key: 'expertise', label: '専門性', desc: 'この人にしか書けない知識・現場・当事者性があるか' },
-  { key: 'hook', label: '引き', desc: '1行目で止まるか。続きを読みたくなるか' },
   { key: 'emotion', label: '感情の温度', desc: '本音・熱・悔しさ・可笑しさが出ているか。優等生的な平熱は低得点' },
-  { key: 'surprise', label: '意外性', desc: '通説と違う、知らなかった、と思わせるか。予定調和は低得点' },
+  { key: 'humor', label: 'ユーモア', desc: '笑える・ニヤッとする要素があるか。自虐やズレの面白さを含む' },
+  { key: 'stance', label: '立場の明確さ', desc: '言い切っているか。両論併記・保留・玉虫色は低得点' },
+  // 情報としての強度
+  { key: 'concrete', label: '具体性', desc: '固有名詞・その日の出来事・実際の場面があるか。一般論だけなら低得点' },
+  { key: 'numbers', label: '数字の強度', desc: '意味のある数字・規模・比較があるか。飾りの数字は低得点' },
+  { key: 'expertise', label: '専門性', desc: 'この人にしか書けない知識・当事者性があるか' },
+  { key: 'insider', label: '内部情報性', desc: '普段見えない舞台裏・意思決定の内側が見えるか' },
+  { key: 'novelty', label: '新規情報性', desc: '読んだ人が知らなかったことを含むか。既知の再確認は低得点' },
+  { key: 'surprise', label: '意外性', desc: '通説と違う、逆張り、聞いて驚くか。予定調和は低得点' },
+  // 読ませる力
+  { key: 'hook', label: '冒頭の引き', desc: '1行目で指が止まるか' },
+  { key: 'story', label: '物語性', desc: '場面が立ち上がるか。起伏や落差があるか' },
+  { key: 'brevity', label: '簡潔さ', desc: '無駄がないか。説明が長い・回りくどいは低得点' },
+  { key: 'visual', label: '情景の喚起', desc: '読むと絵が浮かぶか。抽象語だけなら低得点' },
+  // 反応の引き出し
   { key: 'discussion', label: '議論喚起', desc: '返信・引用したくなるか。反論の余地や問いがあるか' },
+  { key: 'relatability', label: '共感性', desc: '誰にでも当てはまる「わかる」度。※高いほど良いとは限らない軸' },
   { key: 'profile', label: 'プロフィール誘引', desc: '読んだ人が「この人は何者だ」とプロフィールを見に行きたくなるか' },
 ];
 
-/** 既定の重み（合計1.0）。学習後は QUALITY_WEIGHTS に保存される */
+/**
+ * データが無い間の既定の相関ベクトル（＝重み）。合計1.0の正値。
+ * 実測がたまると analyzeAxes() が AXIS_CORRELATIONS を更新し、そちらが使われる。
+ */
 var DEFAULT_AXIS_WEIGHTS = {
-  voice: 0.15, concrete: 0.15, expertise: 0.15, hook: 0.10,
-  emotion: 0.05, surprise: 0.08, discussion: 0.07, profile: 0.25,
+  voice: 0.09, emotion: 0.04, humor: 0.03, stance: 0.05,
+  concrete: 0.09, numbers: 0.04, expertise: 0.10, insider: 0.07,
+  novelty: 0.06, surprise: 0.06, hook: 0.07, story: 0.04,
+  brevity: 0.04, visual: 0.03, discussion: 0.05, relatability: 0.02,
+  profile: 0.12,
 };
 
-function axisWeights() {
-  var raw = getProp('QUALITY_WEIGHTS', '');
+/**
+ * 各軸の「成果指標との相関係数」ベクトル。全体スコアはこれとの内積で決まる。
+ * AXIS_CORRELATIONS には {key: {c: 相関係数, n: 標本数}} が入る。
+ * 標本が少ない相関は信用できないので n/(n+K) で0へ縮小する（K=SHRINKAGE_K、既定10）。
+ * データが無い軸は既定重みで代替する。
+ */
+function axisCorrelations() {
+  var raw = getProp('AXIS_CORRELATIONS', '');
+  var K = Number(getProp('SHRINKAGE_K', '10'));
+  var out = {};
+  var parsed = null;
   if (raw) {
     try {
-      var w = JSON.parse(raw);
-      var sum = 0;
-      AXES.forEach(function (a) { sum += Number(w[a.key]) || 0; });
-      if (sum > 0) {
-        var norm = {};
-        AXES.forEach(function (a) { norm[a.key] = (Number(w[a.key]) || 0) / sum; });
-        return norm;
-      }
+      parsed = JSON.parse(raw);
     } catch (e) {
-      logEvent('weights_parse_error', String(e));
+      logEvent('correlations_parse_error', String(e));
     }
   }
-  return DEFAULT_AXIS_WEIGHTS;
+  var any = false;
+  AXES.forEach(function (a) {
+    var rec = parsed ? parsed[a.key] : null;
+    if (rec && isFinite(Number(rec.c))) {
+      var n = Number(rec.n) || 0;
+      out[a.key] = Number(rec.c) * (n / (n + K)); // 標本数による縮小
+      any = true;
+    } else {
+      out[a.key] = null; // 未学習
+    }
+  });
+  if (!any) return DEFAULT_AXIS_WEIGHTS;
+  // 未学習の軸は既定重みで埋める（学習済みの軸と桁を合わせるため縮尺を合わせる）
+  var learned = [];
+  AXES.forEach(function (a) { if (out[a.key] !== null) learned.push(Math.abs(out[a.key])); });
+  var scale = learned.length ? learned.reduce(function (s, v) { return s + v; }, 0) / learned.length : 0.1;
+  AXES.forEach(function (a) {
+    if (out[a.key] === null) out[a.key] = (DEFAULT_AXIS_WEIGHTS[a.key] || 0.05) * scale * 5;
+  });
+  return out;
+}
+
+/**
+ * 全体スコア = 軸スコアベクトル · 相関ベクトル を 0〜100 に正規化したもの。
+ *
+ * 相関が負の軸は「高いほど成果が下がる」ので、内積の中で自然に減点として働く。
+ * 取りうる範囲は
+ *   最小 = 正相関の軸すべて0点 かつ 負相関の軸すべて100点 → 100 * Σ(負の相関)
+ *   最大 = 正相関の軸すべて100点 かつ 負相関の軸すべて0点 → 100 * Σ(正の相関)
+ * なので、この区間を0〜100へ線形写像する。
+ */
+function compositeScoreFromAxes(axes) {
+  var c = axisCorrelations();
+  var raw = 0, pos = 0, neg = 0;
+  AXES.forEach(function (a) {
+    var w = Number(c[a.key]) || 0;
+    var v = Number(axes[a.key]);
+    raw += (isFinite(v) ? v : 50) * w;
+    if (w > 0) pos += w; else neg += w;
+  });
+  var min = 100 * neg;
+  var max = 100 * pos;
+  if (max - min <= 0) return 50;
+  return Math.max(0, Math.min(100, Math.round(100 * (raw - min) / (max - min))));
 }
 
 function nowJst() {

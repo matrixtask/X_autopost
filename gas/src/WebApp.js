@@ -366,7 +366,11 @@ function api_analytics(token) {
           outcomeName: a.outcomeName, sampleSize: a.sampleSize, minSamples: a.minSamples,
           updated: a.updated,
           ranked: a.ranked.map(function (x) {
-            return { label: x.label, corr: x.corr === null ? null : Math.round(x.corr * 100) / 100, n: x.n, weight: Math.round((a.weights[x.key] || 0) * 100) };
+            return {
+              label: x.label,
+              corr: x.corr === null ? null : Math.round(x.corr * 100) / 100,
+              n: x.n, share: x.share,
+            };
           }),
         };
       } catch (e) {
