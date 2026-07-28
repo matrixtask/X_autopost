@@ -152,6 +152,32 @@ function slackTsEqual(a, b) {
 }
 
 /**
+ * 時系列窓内でのパーセンタイル化。
+ *
+ * フォロワー数が数倍に増えていたり、アルゴリズムが変わっていたりすると、
+ * 生のインプレッションは時期をまたいで比較できない。そこで各投稿を
+ * 「前後windowDays日の投稿の中で上位何%か」に変換して比較可能にする。
+ *
+ * @param {Array} items [{t: 経過ミリ秒(またはDate.getTime()), v: 値}]
+ * @param {number} windowDays 前後何日を比較対象にするか
+ * @returns {Array<number>} 各要素のパーセンタイル(0-100)。窓内が1件なら50
+ */
+function percentileWithinWindow(items, windowDays) {
+  var span = (windowDays || 30) * 86400000;
+  return items.map(function (self) {
+    var peers = items.filter(function (o) { return Math.abs(o.t - self.t) <= span; });
+    if (peers.length < 2) return 50;
+    var below = 0, ties = 0;
+    peers.forEach(function (o) {
+      if (o.v < self.v) below++;
+      else if (o.v === self.v) ties++;
+    });
+    // 同値は中間順位として扱う
+    return Math.round((below + ties / 2) / peers.length * 1000) / 10;
+  });
+}
+
+/**
  * 日付キーの正規化。シートが日付を日時として返す場合があるため
  * （"2026-07-27" が "2026-07-27 00:00" になる）、先頭のyyyy-MM-dd部分だけを取る。
  */
@@ -185,5 +211,5 @@ function pearson(xs, ys) {
 
 // Nodeテスト用（GASでは module は未定義なので無視される）
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { weightedTweetLength: weightedTweetLength, fitsInTweet: fitsInTweet, parseJsonLoose: parseJsonLoose, pickWeighted: pickWeighted, computeNextSlots: computeNextSlots, normalizeSlackTs: normalizeSlackTs, slackTsEqual: slackTsEqual, rawSlackTs: rawSlackTs, pearson: pearson, dateKey: dateKey };
+  module.exports = { weightedTweetLength: weightedTweetLength, fitsInTweet: fitsInTweet, parseJsonLoose: parseJsonLoose, pickWeighted: pickWeighted, computeNextSlots: computeNextSlots, normalizeSlackTs: normalizeSlackTs, slackTsEqual: slackTsEqual, rawSlackTs: rawSlackTs, pearson: pearson, dateKey: dateKey, percentileWithinWindow: percentileWithinWindow };
 }

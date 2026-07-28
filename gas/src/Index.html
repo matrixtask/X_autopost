@@ -49,6 +49,7 @@
   .abig { font-size: 22px; font-weight: 700; line-height: 1.3; }
   .acap { font-size: 11.5px; color: var(--sub); }
   .bar-fill.best { opacity: 1; }
+  .axis-zero { position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--sub); opacity: .5; }
   .bdot { position: absolute; top: 50%; width: 7px; height: 7px; border-radius: 50%; background: var(--text); opacity: .5; transform: translate(-50%, -50%); }
   .scatter { width: 100%; height: auto; }
   .scatter text { fill: var(--sub); font-size: 11px; }
@@ -203,8 +204,31 @@
           '<td>' + esc(p.posted_at) + '</td></tr>';
       }).join('') + '</tbody></table></div></details></div>';
 
+    // 軸別の効き方（どの採点軸が成果と相関しているか）
+    var axesHtml = (d.axes || []).filter(function (m) {
+      return m.ranked && m.ranked.some(function (x) { return x.corr !== null; });
+    }).map(function (m) {
+      var maxAbs = Math.max.apply(null, m.ranked.map(function (x) { return x.corr === null ? 0 : Math.abs(x.corr); }).concat([0.3]));
+      return '<div class="card"><h3 class="sec">軸別の効き方（成果指標: ' + esc(m.outcomeName) + ' / n=' + m.sampleSize + '）</h3>' +
+        m.ranked.filter(function (x) { return x.corr !== null; }).map(function (x) {
+          var w = Math.round(Math.abs(x.corr) / maxAbs * 48);
+          var neg = x.corr < 0;
+          return '<div class="bar-row"><span class="bar-lbl">' + esc(x.label) + '</span>' +
+            '<span class="bar-track"><span class="bar-fill" style="left:50%;width:' + w + '%;' +
+            (neg ? 'transform:translateX(-100%);opacity:.45;' : '') + '"></span>' +
+            '<span class="axis-zero"></span></span>' +
+            '<span class="bar-val">' + (x.corr >= 0 ? '+' : '') + x.corr +
+            ' / 寄与' + x.share + '% (n=' + x.n + ')</span></div>';
+        }).join('') +
+        '<div class="reason">全体スコア = 各軸のスコア × ここに出ている相関、の内積を0〜100に正規化したものです。' +
+        '中央の線が相関0で、右に伸びるほど「その軸が高いポストほど成果が出ている」。' +
+        '<b>左に伸びた軸は減点として働きます</b>（高いほど成果が下がっている軸）。' +
+        (m.updated ? '相関は実測から自動更新済みです。' : '各軸' + m.minSamples + '件たまると自動更新します。') +
+        '</div></div>';
+    }).join('');
+
     el.innerHTML =
-      tiles + followChart +
+      tiles + followChart + axesHtml +
       '<div class="card"><h3 class="sec">時間帯別 平均インプ（バー=平均 / 点=個々の投稿 / 👤=プロフクリック率）</h3>' + bars(d.bySlot, true) + '</div>' +
       '<div class="card"><h3 class="sec">曜日別 平均インプ</h3>' + bars(d.byDay, false) + '</div>' +
       '<div class="card"><h3 class="sec">カテゴリ別 平均インプ</h3>' + bars(d.byCat.map(function (x) { return { key: catLabel(x.key), n: x.n, impAvg: x.impAvg, likesAvg: x.likesAvg, engRate: x.engRate, clickRate: x.clickRate, points: x.points }; }), false) + '</div>' +

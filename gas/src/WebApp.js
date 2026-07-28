@@ -359,6 +359,29 @@ function api_analytics(token) {
     corr: corr === null ? null : Math.round(corr * 100) / 100,
     hasClicks: hasClicks,
     follow: follow,
+    // リーチモデル（標本が多い）とフォローモデル（KGIに近い）を両方返す
+    axes: (function () {
+      try {
+        var models = [analyzeAxes('reach')];
+        var follow = analyzeAxes();
+        if (follow.outcomeName !== models[0].outcomeName) models.push(follow);
+        return models.map(function (a) {
+          return {
+            outcomeName: a.outcomeName, sampleSize: a.sampleSize, minSamples: a.minSamples,
+            updated: a.updated,
+            ranked: a.ranked.map(function (x) {
+              return {
+                label: x.label,
+                corr: x.corr === null ? null : Math.round(x.corr * 100) / 100,
+                n: x.n, share: x.share,
+              };
+            }),
+          };
+        });
+      } catch (e) {
+        return null;
+      }
+    })(),
   });
 }
 

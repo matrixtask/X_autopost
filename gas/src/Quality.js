@@ -6,6 +6,34 @@
  * 閾値未満 → stock（捨てずに保持。後で書き直しの種になる）
  */
 
+/** LLMが返した軸スコアを検証して0-100に丸める。1つも取れなければnull */
+function compositeAxes(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  var out = {};
+  var found = 0;
+  AXES.forEach(function (a) {
+    var v = Number(raw[a.key]);
+    if (isFinite(v)) {
+      out[a.key] = Math.max(0, Math.min(100, Math.round(v)));
+      found++;
+    } else {
+      out[a.key] = 50; // 欠損は中央値で埋める
+    }
+  });
+  return found >= Math.ceil(AXES.length / 2) ? out : null;
+}
+
+/** Stockの axes 列をパースする。壊れていればnull */
+function parseAxes(v) {
+  if (!v) return null;
+  try {
+    var o = typeof v === 'string' ? JSON.parse(v) : v;
+    return o && typeof o === 'object' ? o : null;
+  } catch (e) {
+    return null;
+  }
+}
+
 function runQualityGate() {
   var drafts = readTable(SHEET.STOCK).filter(function (r) {
     return String(r.status) === STATUS.DRAFT;
@@ -15,29 +43,9 @@ function runQualityGate() {
     return { scored: 0, passed: 0 };
   }
 
+  ensureHeaders(SHEET.STOCK);
   var threshold = qualityThreshold();
-  var samples = getVoiceSamples(10);
-  // 実測インプレッションから学習した追加基準（evaluateScoring()が更新する）
-  var learnedRubric = getProp('QUALITY_RUBRIC_LEARNED', '');
-  var system = [
-    'あなたはXアカウント運用の編集長です。ポスト下書きを採点します。',
-    'このアカウントの最終目的は「フォロワーを増やすこと」です。いいねが付くことではありません。',
-    '',
-    '採点基準（計100点）:',
-    '1. 本人らしさ [20点]: 下の文体サンプルと同じ人が書いたように読めるか。AIっぽい定型・評論調は大減点',
-    '2. 具体性 [20点]: 固有のエピソード・数字・現場感があるか。一般論だけなら低得点',
-    '3. 引き [20点]: 続きを読みたくなるか、反応（リプ・いいね）したくなるか',
-    '4. 完成度 [15点]: 誤字・冗長さ・文字数・単体で意味が通るか',
-    '5. プロフィールを見たくなるか [25点・最重要]: 読んだ人が「この人は何者だ」「もっと読みたい」と',
-    '   思うか。プロフィールを見に行く動機になるのは、この人にしか書けない専門性・現場・独自の視点。',
-    '   逆に、誰が書いても成立する共感ネタや一般論は、いいねは付いてもフォローには繋がらないので低得点。',
-    '   「わかる」で終わるポストと「この人の話をもっと聞きたい」と思わせるポストを厳しく区別すること。',
-    '',
-    learnedRubric ? '実測インプレッションの分析から学習した追加基準（採点に反映すること）:\n' + learnedRubric + '\n' : '',
-    (function () { var m = buildMemoryPrompt(); return m ? m + '\n' : ''; })(),
-    '文体サンプル:',
-    samples.map(function (s, i) { return '--- ' + (i + 1) + ' ---\n' + s; }).join('\n'),
-  ].join('\n');
+  var system = axisScoringSystemPrompt(getVoiceSamples(10), false);
 
   var user = [
     '以下の下書きを採点してください。',
@@ -46,10 +54,12 @@ function runQualityGate() {
       return 'id: ' + d.id + '\ncategory: ' + d.category + '\n本文:\n' + d.text;
     }).join('\n\n====\n\n'),
     '',
-    'JSON配列で出力: [{"id": "...", "score": 0-100の整数, "reason": "採点理由を50字以内で。基準5（プロフィールを見たくなるか）の評価に必ず触れること"}]',
+    'JSON配列で出力: [{"id": "...", "axes": {' +
+      AXES.map(function (a) { return '"' + a.key + '": 0-100'; }).join(', ') +
+      '}, "reason": "最も高い軸と最も低い軸に触れて50字以内で"}]',
   ].join('\n');
 
-  var results = askClaudeJson(system, user, 3000);
+  var results = askClaudeJson(system, user, 4000);
   if (!Array.isArray(results)) throw new Error('採点結果の出力が不正です');
 
   var passed = 0;
@@ -58,13 +68,19 @@ function runQualityGate() {
 
   drafts.forEach(function (d) {
     var r = byId[String(d.id)];
-    if (!r || typeof r.score !== 'number') return;
-    var pass = r.score >= threshold;
+    if (!r) return;
+    var axes = compositeAxes(r.axes);
+    if (!axes) return;
+    // 全体スコア = 軸スコア · 実測相関ベクトル（0〜100に正規化）
+    var score = compositeScoreFromAxes(axes);
+
+    var pass = score >= threshold;
     if (pass) passed++;
     var newStatus = pass ? (isAutoApprove() ? STATUS.APPROVED : STATUS.READY) : STATUS.STOCK;
     updateStockById(d.id, {
-      score: r.score,
+      score: score,
       score_reason: String(r.reason || ''),
+      axes: JSON.stringify(axes),
       status: newStatus,
     });
     try {
@@ -76,6 +92,118 @@ function runQualityGate() {
 
   logEvent('quality_gate', '採点' + drafts.length + '件 / 合格' + passed + '件（閾値' + threshold + '）');
   return { scored: drafts.length, passed: passed };
+}
+
+/**
+ * 投稿済みポストへの遡及採点。
+ *
+ * 相関分析の標本を増やすため、軸スコアが無い投稿済みポストを後から採点する。
+ * 合否やステータスは一切変えず、axes列だけを埋める（過去の投稿を今の基準で
+ * 落とすのは無意味なため）。
+ *
+ * GASの実行時間上限（6分）があるので、4分で打ち切って残件があれば
+ * 1分後に自分を再実行するワンショットトリガーを仕込む。放置で完走する。
+ */
+function backfillAxisScores() {
+  ensureHeaders(SHEET.STOCK);
+  var started = new Date().getTime();
+  var budgetMs = 4 * 60 * 1000;
+  var batchSize = Number(getProp('BACKFILL_BATCH', '25'));
+
+  var pendingAll = readTable(SHEET.STOCK).filter(function (r) {
+    return String(r.status) === STATUS.POSTED && String(r.text).trim() && !parseAxes(r.axes);
+  });
+  if (!pendingAll.length) {
+    clearBackfillTrigger();
+    var done = '遡及採点は完了しています（未採点の投稿済みポストなし）';
+    logEvent('backfill_axes', done);
+    return done;
+  }
+
+  var scored = 0;
+  var samples = getVoiceSamples(8);
+  var system = axisScoringSystemPrompt(samples, true);
+
+  while (new Date().getTime() - started < budgetMs) {
+    var batch = pendingAll.slice(scored, scored + batchSize);
+    if (!batch.length) break;
+    var user = [
+      '以下は過去に投稿されたポストです。各軸を採点してください。',
+      '',
+      batch.map(function (d) {
+        return 'id: ' + d.id + '\n本文:\n' + String(d.text).slice(0, 400);
+      }).join('\n\n====\n\n'),
+      '',
+      'JSON配列で出力: [{"id": "...", "axes": {' +
+        AXES.map(function (a) { return '"' + a.key + '": 0-100'; }).join(', ') + '}}]',
+    ].join('\n');
+
+    var results;
+    try {
+      results = askClaudeJson(system, user, 4000);
+    } catch (e) {
+      logEvent('backfill_error', String(e).slice(0, 200));
+      break;
+    }
+    if (!Array.isArray(results)) break;
+    var byId = {};
+    results.forEach(function (r) { byId[String(r.id)] = r; });
+    var writes = [];
+    batch.forEach(function (d) {
+      var r = byId[String(d.id)];
+      var axes = r ? compositeAxes(r.axes) : null;
+      if (axes) writes.push({ row: d._row, value: JSON.stringify(axes) });
+    });
+    // updateStockById は1件ごとに全行を読み直すので、ここでは行番号直指定で書く
+    setColumnByRows(SHEET.STOCK, 'axes', writes);
+    scored += batch.length;
+  }
+
+  var remaining = pendingAll.length - scored;
+  logEvent('backfill_axes', scored + '件を採点 / 残り' + remaining + '件');
+  if (remaining > 0) {
+    scheduleBackfillContinue();
+    return scored + '件を採点しました。残り' + remaining + '件は1分後に自動で続行します。';
+  }
+  clearBackfillTrigger();
+  notifySlack(':white_check_mark: 遡及採点が完了しました。軸スコア付きの投稿が増えたので、' +
+    'reportAxisAnalysis を実行すると相関が出ます。');
+  return scored + '件を採点しました。完了です。';
+}
+
+/** 遡及採点の続きを1分後に実行するワンショットトリガーを仕込む */
+function scheduleBackfillContinue() {
+  clearBackfillTrigger();
+  ScriptApp.newTrigger('backfillAxisScores').timeBased().after(60 * 1000).create();
+}
+
+function clearBackfillTrigger() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'backfillAxisScores') ScriptApp.deleteTrigger(t);
+  });
+}
+
+/** 軸採点の共通systemプロンプト。@param {boolean} terse 遡及採点用に短縮するか */
+function axisScoringSystemPrompt(samples, terse) {
+  var learnedRubric = getProp('QUALITY_RUBRIC_LEARNED', '');
+  return [
+    'あなたはXアカウント運用の編集長です。ポストを採点します。',
+    'このアカウントの最終目的は「フォロワーを増やすこと」です。いいねが付くことではありません。',
+    '',
+    '以下の各軸を、それぞれ独立に0〜100点で採点してください。',
+    '軸ごとの重み付けはこちらで行うので、あなたは各軸を純粋に評価することに集中してください。',
+    '中央値を50とし、平凡なら50前後、際立って良ければ80以上、明確に欠けていれば30以下を付けること。',
+    '全部の軸に似た点を付けるのは分析上まったく役に立ちません。軸ごとの差をはっきり付けてください。',
+    '',
+    AXES.map(function (a, i) {
+      return (i + 1) + '. ' + a.key + '（' + a.label + '）: ' + a.desc;
+    }).join('\n'),
+    '',
+    terse ? '' : (learnedRubric ? '実測データの分析から学習した追加基準（採点に反映すること）:\n' + learnedRubric + '\n' : ''),
+    terse ? '' : (function () { var m = buildMemoryPrompt(); return m ? m + '\n' : ''; })(),
+    '文体サンプル:',
+    samples.map(function (s, i) { return '--- ' + (i + 1) + ' ---\n' + s; }).join('\n'),
+  ].join('\n');
 }
 
 /**
@@ -126,7 +254,17 @@ function refineFailedDrafts(force) {
     '',
     targets.map(function (d) {
       var qa = qaBySession[String(d.session_id)] || [];
-      return 'id: ' + d.id + '\n採点: ' + d.score + '点 / 指摘: ' + d.score_reason + '\n本文:\n' + d.text +
+      // 弱い軸を名指しして、そこを重点的に直させる
+      var ax = parseAxes(d.axes);
+      var weak = '';
+      if (ax) {
+        var sorted = AXES.filter(function (a) { return isFinite(Number(ax[a.key])); })
+          .sort(function (a, b) { return Number(ax[a.key]) - Number(ax[b.key]); });
+        weak = '\n弱い軸（ここを重点的に直す）: ' + sorted.slice(0, 3).map(function (a) {
+          return a.label + ' ' + ax[a.key] + '点';
+        }).join(' / ');
+      }
+      return 'id: ' + d.id + '\n採点: ' + d.score + '点 / 指摘: ' + d.score_reason + weak + '\n本文:\n' + d.text +
         (qa.length ? '\n一次情報（本人の回答）:\n' + qa.join('\n') : '\n一次情報: なし（本文にある事実だけで書き直すこと）');
     }).join('\n\n====\n\n'),
     '',
@@ -162,6 +300,7 @@ function refineFailedDrafts(force) {
       status: STATUS.DRAFT,
       score: '',
       score_reason: '',
+      axes: '',
       refines: count,
     });
     refined++;

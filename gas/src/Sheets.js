@@ -3,7 +3,7 @@
  */
 
 var SHEET_HEADERS = {
-  Stock: ['id', 'created_at', 'theme', 'category', 'session_id', 'text', 'score', 'score_reason', 'status', 'scheduled_at', 'posted_at', 'tweet_id', 'notion_page_id', 'impressions', 'likes', 'retweets', 'replies', 'metrics_at', 'refines', 'promoted', 'paid_impressions', 'profile_clicks', 'link_clicks'],
+  Stock: ['id', 'created_at', 'theme', 'category', 'session_id', 'text', 'score', 'score_reason', 'status', 'scheduled_at', 'posted_at', 'tweet_id', 'notion_page_id', 'impressions', 'likes', 'retweets', 'replies', 'metrics_at', 'refines', 'promoted', 'paid_impressions', 'profile_clicks', 'link_clicks', 'axes'],
   Interviews: ['session_id', 'thread_ts', 'idx', 'theme', 'category', 'question', 'answer', 'answered_at', 'status'],
   Themes: ['theme', 'category', 'weight', 'last_used', 'notes'],
   Voice: ['text', 'note'],
@@ -81,6 +81,39 @@ function appendRowObj(sheetName, obj) {
   var headers = SHEET_HEADERS[sheetName];
   var row = headers.map(function (h) { return obj[h] === undefined ? '' : obj[h]; });
   getSheet(sheetName).appendRow(row);
+}
+
+/**
+ * 複数行をまとめて追記する。appendRowを繰り返すと1行あたり100ms前後かかり
+ * 数百行で実行時間上限に当たるため、setValuesで一括書き込みする。
+ */
+function appendRowsObj(sheetName, objs) {
+  if (!objs || !objs.length) return 0;
+  var headers = SHEET_HEADERS[sheetName];
+  var sheet = getSheet(sheetName);
+  var rows = objs.map(function (obj) {
+    return headers.map(function (h) { return obj[h] === undefined ? '' : obj[h]; });
+  });
+  var start = sheet.getLastRow() + 1;
+  if (start + rows.length > sheet.getMaxRows()) {
+    sheet.insertRowsAfter(sheet.getMaxRows(), start + rows.length - sheet.getMaxRows());
+  }
+  sheet.getRange(start, 1, rows.length, headers.length).setValues(rows);
+  return rows.length;
+}
+
+/**
+ * 行番号を指定して1列だけをまとめて書き込む。
+ * updateStockById は1回ごとにシート全体を読み直すため、数百件の一括更新には
+ * 使えない（遡及採点など）。readTable の _row をそのまま渡して使う。
+ * @param {Array} entries [{row: 12, value: '...'}]
+ */
+function setColumnByRows(sheetName, column, entries) {
+  var col = SHEET_HEADERS[sheetName].indexOf(column);
+  if (col < 0 || !entries || !entries.length) return 0;
+  var sheet = getSheet(sheetName);
+  entries.forEach(function (e) { sheet.getRange(e.row, col + 1).setValue(e.value); });
+  return entries.length;
 }
 
 /** keyColumn=value の行の複数カラムを更新する */
