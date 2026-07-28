@@ -11,6 +11,32 @@ vm.createContext(context);
 vm.runInContext(code, context);
 const { weightedTweetLength, fitsInTweet, parseJsonLoose, pickWeighted, computeNextSlots, normalizeSlackTs, slackTsEqual, pearson, dateKey } = context.module.exports;
 
+test('salvageJson: max_tokensで切れた応答から完成分だけ救出する', () => {
+  const { salvageJson } = context.module.exports;
+
+  // 実際に起きたケース: 一括採点の途中で切れる
+  const cut = '{"p_1": [75,55,30,60,55,20,25,20,25,20,10,30,40,35,25,45,30], "p_2": [80,60,35,"';
+  assert.deepEqual(salvageJson(cut), { p_1: [75, 55, 30, 60, 55, 20, 25, 20, 25, 20, 10, 30, 40, 35, 25, 45, 30] });
+
+  // 配列でも同じ
+  assert.deepEqual(salvageJson('[{"id":"a","v":1}, {"id":"b","v":'), [{ id: 'a', v: 1 }]);
+
+  // 3件中2件まで完成
+  assert.equal(salvageJson('[{"a":1},{"a":2},{"a":').length, 2);
+
+  // 文字列の中のカンマや括弧を切れ目と誤認しない
+  assert.deepEqual(salvageJson('[{"t":"a,b]"},{"t":"c'), [{ t: 'a,b]' }]);
+  assert.deepEqual(salvageJson('[{"t":"エスケープ\\""},{"t":'), [{ t: 'エスケープ"' }]);
+
+  // 1要素も完成していない・JSONですらない場合はnull
+  assert.equal(salvageJson('[{"a":'), null);
+  assert.equal(salvageJson('すみません、採点できません'), null);
+  assert.equal(salvageJson(''), null);
+
+  // 壊れていない入力はそのまま通る（最後の要素を落とさない）
+  assert.deepEqual(salvageJson('```json\n[{"a":1},{"a":2}]\n```'), [{ a: 1 }, { a: 2 }]);
+});
+
 test('percentileWithinWindow: 窓内での相対順位に変換する', () => {
   const { percentileWithinWindow } = context.module.exports;
   const day = 86400000;

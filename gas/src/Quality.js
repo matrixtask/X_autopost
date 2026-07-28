@@ -6,8 +6,19 @@
  * 閾値未満 → stock（捨てずに保持。後で書き直しの種になる）
  */
 
-/** LLMが返した軸スコアを検証して0-100に丸める。1つも取れなければnull */
+/**
+ * LLMが返した軸スコアを検証して0-100に丸める。1つも取れなければnull。
+ * 軸名をキーにしたオブジェクトと、AXES順に並んだ数値配列の両方を受け付ける
+ * （遡及採点では出力トークンを節約するため配列形式を使う）。
+ */
 function compositeAxes(raw) {
+  if (Array.isArray(raw)) {
+    // 順序でしか対応が取れないので、長さが違うものは取り違えを避けて捨てる
+    if (raw.length !== AXES.length) return null;
+    var byKey = {};
+    AXES.forEach(function (a, i) { byKey[a.key] = raw[i]; });
+    raw = byKey;
+  }
   if (!raw || typeof raw !== 'object') return null;
   var out = {};
   var found = 0;
@@ -120,50 +131,76 @@ function backfillAxisScores() {
     return done;
   }
 
+  var cursor = 0;
   var scored = 0;
   var samples = getVoiceSamples(8);
   var system = axisScoringSystemPrompt(samples, true);
+  // 軸名をキーにすると1件あたり250トークン近く使い、25件でmax_tokensを超えて
+  // JSONが途中で切れる。AXES順の数値配列にすると1件40トークン程度に収まる。
+  var order = AXES.map(function (a) { return a.key; }).join(', ');
 
   while (new Date().getTime() - started < budgetMs) {
-    var batch = pendingAll.slice(scored, scored + batchSize);
+    var batch = pendingAll.slice(cursor, cursor + batchSize);
     if (!batch.length) break;
     var user = [
-      '以下は過去に投稿されたポストです。各軸を採点してください。',
+      '以下は過去に投稿されたポストです。各ポストの全軸を採点してください。',
       '',
       batch.map(function (d) {
         return 'id: ' + d.id + '\n本文:\n' + String(d.text).slice(0, 400);
       }).join('\n\n====\n\n'),
       '',
-      'JSON配列で出力: [{"id": "...", "axes": {' +
-        AXES.map(function (a) { return '"' + a.key + '": 0-100'; }).join(', ') + '}}]',
+      '出力はJSONオブジェクト1つ。キーがid、値が下記の順に並べた' + AXES.length + '個の整数(0-100)。',
+      '順序: ' + order,
+      '例: {"' + batch[0].id + '": [' + AXES.map(function () { return '50'; }).join(',') + ']}',
+      '全' + batch.length + '件を必ず含めること。説明や軸名は書かない（トークンの無駄なので）。',
     ].join('\n');
 
     var results;
     try {
-      results = askClaudeJson(system, user, 4000);
+      results = askClaudeJsonSalvageable(system, user, 8000);
     } catch (e) {
       logEvent('backfill_error', String(e).slice(0, 200));
       break;
     }
-    if (!Array.isArray(results)) break;
-    var byId = {};
-    results.forEach(function (r) { byId[String(r.id)] = r; });
+    if (!results || typeof results !== 'object') break;
+    // 指示に反して [{"id": ..., "axes": ...}] 形式で返ってきた場合も拾う
+    if (Array.isArray(results)) {
+      var byId = {};
+      results.forEach(function (r) {
+        if (r && r.id !== undefined) byId[String(r.id)] = r.axes !== undefined ? r.axes : r;
+      });
+      results = byId;
+    }
+
     var writes = [];
     batch.forEach(function (d) {
-      var r = byId[String(d.id)];
-      var axes = r ? compositeAxes(r.axes) : null;
+      var axes = compositeAxes(results[String(d.id)]);
       if (axes) writes.push({ row: d._row, value: JSON.stringify(axes) });
     });
     // updateStockById は1件ごとに全行を読み直すので、ここでは行番号直指定で書く
     setColumnByRows(SHEET.STOCK, 'axes', writes);
-    scored += batch.length;
+    scored += writes.length;
+    cursor += batch.length;
+    if (!writes.length) {
+      // 1件も採点できないバッチが続くならプロンプト側の問題。無限に投げ続けない
+      logEvent('backfill_error', 'バッチ全件が不正な形式でした（cursor=' + cursor + '）');
+      break;
+    }
   }
 
+  // 書けなかった分は残件に戻る（次の実行で拾い直す）
   var remaining = pendingAll.length - scored;
   logEvent('backfill_axes', scored + '件を採点 / 残り' + remaining + '件');
-  if (remaining > 0) {
+  if (remaining > 0 && scored > 0) {
     scheduleBackfillContinue();
     return scored + '件を採点しました。残り' + remaining + '件は1分後に自動で続行します。';
+  }
+  if (remaining > 0) {
+    // 1件も進まなかった。トリガーで無限に回り続けないよう止めて知らせる
+    clearBackfillTrigger();
+    var stuck = '遡及採点が進みませんでした（残り' + remaining + '件）。Logシートの backfill_error を確認してください。';
+    notifySlack(':warning: ' + stuck);
+    return stuck;
   }
   clearBackfillTrigger();
   notifySlack(':white_check_mark: 遡及採点が完了しました。軸スコア付きの投稿が増えたので、' +
