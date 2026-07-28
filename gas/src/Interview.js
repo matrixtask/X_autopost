@@ -239,6 +239,73 @@ function finishInterview(sessionId, threadTs) {
 }
 
 /**
+ * 生成に失敗したインタビューのポストを作り直す。
+ *
+ * 「回答はあるのに Stock に下書きが1件も無い」セッションを取りこぼしとみなし、
+ * 生成→採点をやり直す。生成中にエラーが出た日の救済用で、GASエディタから
+ * 引数なしで実行できる。回答そのものは残っているので何度でもやり直せる。
+ *
+ * @param {number} maxSessions 1回で処理するセッション数（既定3。実行時間上限があるため）
+ */
+function regenerateFailedInterviews(maxSessions) {
+  var limit = Number(maxSessions || 3);
+  var stockSessions = {};
+  readTable(SHEET.STOCK).forEach(function (r) {
+    if (r.session_id) stockSessions[String(r.session_id)] = true;
+  });
+
+  var bySession = {};
+  readTable(SHEET.INTERVIEWS).forEach(function (r) {
+    if (!String(r.answer || '').trim()) return;
+    var sid = String(r.session_id);
+    if (!bySession[sid]) bySession[sid] = { sid: sid, threadTs: r.thread_ts, answers: 0 };
+    bySession[sid].answers++;
+  });
+
+  // session_id は先頭が日時なので、降順に並べると新しい順になる
+  var failed = Object.keys(bySession)
+    .filter(function (sid) { return !stockSessions[sid]; })
+    .sort().reverse();
+
+  if (!failed.length) {
+    var none = '作り直す対象はありません（回答があるのに下書きが無いセッションは0件）';
+    logEvent('regenerate', none);
+    return none;
+  }
+
+  var targets = failed.slice(0, limit);
+  var results = [];
+  targets.forEach(function (sid) {
+    var threadTs = rawSlackTs(bySession[sid].threadTs);
+    try {
+      var drafts = generateDraftsFromInterview(sid);
+      results.push(sid + ': ' + drafts.length + '件を生成');
+      logEvent('regenerate', sid + ': ' + drafts.length + '件を生成');
+      if (threadTs) sendSlack(':arrows_counterclockwise: 下書きを作り直しました（' + drafts.length + '件）。採点はこのあとまとめて行います。', threadTs);
+    } catch (e) {
+      results.push(sid + ': 失敗 ' + String(e).slice(0, 150));
+      logEvent('regenerate_error', sid + ': ' + String(e).slice(0, 300));
+      if (threadTs) sendSlack(':warning: 作り直しにも失敗しました: ' + String(e).slice(0, 200), threadTs);
+    }
+  });
+
+  // 採点は全セッション分をまとめて1回で済ませる（下書きはどれも draft 状態）
+  var gate = null;
+  try {
+    gate = runQualityGateWithRefinement();
+  } catch (e) {
+    logEvent('regenerate_error', '採点でエラー: ' + String(e).slice(0, 300));
+  }
+
+  var msg = ':arrows_counterclockwise: 生成し直しました（' + targets.length + '/' + failed.length + 'セッション）\n' +
+    results.join('\n') +
+    (gate ? '\n採点: ' + gate.scored + '件中' + gate.passed + '件が合格' : '\n採点: 失敗（今夜の品質ゲートで再処理されます）') +
+    (failed.length > targets.length ? '\n残り' + (failed.length - targets.length) + 'セッションは、もう一度実行すると処理します。' : '');
+  notifySlack(msg);
+  return msg;
+}
+
+/**
  * スレッド外（チャンネル直下）に書かれたメッセージの救済。
  * 進行中セッションが1つあれば、そのスレッドへの返信として扱う。
  */
