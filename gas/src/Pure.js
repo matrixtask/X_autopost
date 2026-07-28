@@ -51,6 +51,45 @@ function parseJsonLoose(text) {
 }
 
 /**
+ * 途中で切れたJSONから、完成している要素だけを救出する。
+ *
+ * LLMの応答がmax_tokensで打ち切られると配列の途中で終わるため、そのままでは
+ * パースできず1バッチ丸ごと無駄になる。最後に深さ1で現れたカンマまでを
+ * 有効な要素の切れ目とみなし、そこで閉じてパースする。
+ * 救出できなければ null。
+ */
+function salvageJson(text) {
+  try {
+    return parseJsonLoose(text); // そもそも切れていなければ全部返す
+  } catch (e) { /* 続けて救出を試みる */ }
+  var s = String(text === null || text === undefined ? '' : text).replace(/```(?:json)?/g, '');
+  var starts = [s.indexOf('['), s.indexOf('{')].filter(function (i) { return i >= 0; });
+  if (!starts.length) return null;
+  var start = Math.min.apply(null, starts);
+  var closer = s[start] === '[' ? ']' : '}';
+  var depth = 0, inStr = false, esc = false, lastComma = -1;
+  for (var i = start; i < s.length; i++) {
+    var ch = s[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === '\\') esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === '[' || ch === '{') depth++;
+    else if (ch === ']' || ch === '}') depth--;
+    else if (ch === ',' && depth === 1) lastComma = i;
+  }
+  if (lastComma < 0) return null; // 1要素も完成していない
+  try {
+    return JSON.parse(s.slice(start, lastComma) + closer);
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
  * 重み付きランダム抽選。rand は 0-1 を返す関数（テスト時に固定可能）。
  */
 function pickWeighted(items, weightFn, rand) {
@@ -211,5 +250,5 @@ function pearson(xs, ys) {
 
 // Nodeテスト用（GASでは module は未定義なので無視される）
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { weightedTweetLength: weightedTweetLength, fitsInTweet: fitsInTweet, parseJsonLoose: parseJsonLoose, pickWeighted: pickWeighted, computeNextSlots: computeNextSlots, normalizeSlackTs: normalizeSlackTs, slackTsEqual: slackTsEqual, rawSlackTs: rawSlackTs, pearson: pearson, dateKey: dateKey, percentileWithinWindow: percentileWithinWindow };
+  module.exports = { weightedTweetLength: weightedTweetLength, fitsInTweet: fitsInTweet, parseJsonLoose: parseJsonLoose, salvageJson: salvageJson, pickWeighted: pickWeighted, computeNextSlots: computeNextSlots, normalizeSlackTs: normalizeSlackTs, slackTsEqual: slackTsEqual, rawSlackTs: rawSlackTs, pearson: pearson, dateKey: dateKey, percentileWithinWindow: percentileWithinWindow };
 }

@@ -44,3 +44,22 @@ function askClaudeJson(systemPrompt, userPrompt, maxTokens) {
     }
   }
 }
+
+/**
+ * 一括採点のように「一部だけでも取れれば前に進める」呼び出し用。
+ * max_tokensで応答が切れた場合、完成している要素だけを救出して返す。
+ * 救出もできなければ askClaudeJson と同じくエラーを投げる。
+ */
+function askClaudeJsonSalvageable(systemPrompt, userPrompt, maxTokens) {
+  var text = askClaude(systemPrompt, userPrompt + '\n\n出力はJSONのみ。前置きや説明は書かない。', maxTokens);
+  try {
+    return parseJsonLoose(text);
+  } catch (e) {
+    var partial = salvageJson(text);
+    if (partial) {
+      logEvent('claude_json_salvaged', '応答が途中で切れたため一部のみ採用: ' + text.length + '文字');
+      return partial;
+    }
+    throw new Error('ClaudeのJSONパースに失敗: ' + text.slice(0, 300));
+  }
+}
