@@ -81,6 +81,46 @@ function slotTimes() {
     .filter(Boolean);
 }
 
+/**
+ * 採点の軸。各軸は独立して0〜100で採点し、合成スコアはコード側で
+ * 重み付き平均して算出する（重みを学習で更新できるようにするため）。
+ */
+var AXES = [
+  { key: 'voice', label: '本人らしさ', desc: '文体サンプルと同じ人が書いたように読めるか。AIっぽい定型・評論調は大減点' },
+  { key: 'concrete', label: '具体性', desc: '固有名詞・数字・その日の出来事があるか。一般論だけなら低得点' },
+  { key: 'expertise', label: '専門性', desc: 'この人にしか書けない知識・現場・当事者性があるか' },
+  { key: 'hook', label: '引き', desc: '1行目で止まるか。続きを読みたくなるか' },
+  { key: 'emotion', label: '感情の温度', desc: '本音・熱・悔しさ・可笑しさが出ているか。優等生的な平熱は低得点' },
+  { key: 'surprise', label: '意外性', desc: '通説と違う、知らなかった、と思わせるか。予定調和は低得点' },
+  { key: 'discussion', label: '議論喚起', desc: '返信・引用したくなるか。反論の余地や問いがあるか' },
+  { key: 'profile', label: 'プロフィール誘引', desc: '読んだ人が「この人は何者だ」とプロフィールを見に行きたくなるか' },
+];
+
+/** 既定の重み（合計1.0）。学習後は QUALITY_WEIGHTS に保存される */
+var DEFAULT_AXIS_WEIGHTS = {
+  voice: 0.15, concrete: 0.15, expertise: 0.15, hook: 0.10,
+  emotion: 0.05, surprise: 0.08, discussion: 0.07, profile: 0.25,
+};
+
+function axisWeights() {
+  var raw = getProp('QUALITY_WEIGHTS', '');
+  if (raw) {
+    try {
+      var w = JSON.parse(raw);
+      var sum = 0;
+      AXES.forEach(function (a) { sum += Number(w[a.key]) || 0; });
+      if (sum > 0) {
+        var norm = {};
+        AXES.forEach(function (a) { norm[a.key] = (Number(w[a.key]) || 0) / sum; });
+        return norm;
+      }
+    } catch (e) {
+      logEvent('weights_parse_error', String(e));
+    }
+  }
+  return DEFAULT_AXIS_WEIGHTS;
+}
+
 function nowJst() {
   return new Date();
 }

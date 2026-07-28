@@ -6,6 +6,34 @@
  * 閾値未満 → stock（捨てずに保持。後で書き直しの種になる）
  */
 
+/** LLMが返した軸スコアを検証して0-100に丸める。1つも取れなければnull */
+function compositeAxes(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  var out = {};
+  var found = 0;
+  AXES.forEach(function (a) {
+    var v = Number(raw[a.key]);
+    if (isFinite(v)) {
+      out[a.key] = Math.max(0, Math.min(100, Math.round(v)));
+      found++;
+    } else {
+      out[a.key] = 50; // 欠損は中央値で埋める
+    }
+  });
+  return found >= Math.ceil(AXES.length / 2) ? out : null;
+}
+
+/** Stockの axes 列をパースする。壊れていればnull */
+function parseAxes(v) {
+  if (!v) return null;
+  try {
+    var o = typeof v === 'string' ? JSON.parse(v) : v;
+    return o && typeof o === 'object' ? o : null;
+  } catch (e) {
+    return null;
+  }
+}
+
 function runQualityGate() {
   var drafts = readTable(SHEET.STOCK).filter(function (r) {
     return String(r.status) === STATUS.DRAFT;
@@ -15,25 +43,26 @@ function runQualityGate() {
     return { scored: 0, passed: 0 };
   }
 
+  ensureHeaders(SHEET.STOCK);
   var threshold = qualityThreshold();
   var samples = getVoiceSamples(10);
+  var weights = axisWeights();
   // 実測インプレッションから学習した追加基準（evaluateScoring()が更新する）
   var learnedRubric = getProp('QUALITY_RUBRIC_LEARNED', '');
   var system = [
     'あなたはXアカウント運用の編集長です。ポスト下書きを採点します。',
     'このアカウントの最終目的は「フォロワーを増やすこと」です。いいねが付くことではありません。',
     '',
-    '採点基準（計100点）:',
-    '1. 本人らしさ [20点]: 下の文体サンプルと同じ人が書いたように読めるか。AIっぽい定型・評論調は大減点',
-    '2. 具体性 [20点]: 固有のエピソード・数字・現場感があるか。一般論だけなら低得点',
-    '3. 引き [20点]: 続きを読みたくなるか、反応（リプ・いいね）したくなるか',
-    '4. 完成度 [15点]: 誤字・冗長さ・文字数・単体で意味が通るか',
-    '5. プロフィールを見たくなるか [25点・最重要]: 読んだ人が「この人は何者だ」「もっと読みたい」と',
-    '   思うか。プロフィールを見に行く動機になるのは、この人にしか書けない専門性・現場・独自の視点。',
-    '   逆に、誰が書いても成立する共感ネタや一般論は、いいねは付いてもフォローには繋がらないので低得点。',
-    '   「わかる」で終わるポストと「この人の話をもっと聞きたい」と思わせるポストを厳しく区別すること。',
+    '以下の各軸を、それぞれ独立に0〜100点で採点してください。',
+    '軸ごとの重み付けはこちらで行うので、あなたは各軸を純粋に評価することに集中してください。',
+    '中央値を50とし、平凡なら50前後、際立って良ければ80以上、明確に欠けていれば30以下を付けること。',
+    '全部の軸に似た点を付けるのは分析上まったく役に立ちません。軸ごとの差をはっきり付けてください。',
     '',
-    learnedRubric ? '実測インプレッションの分析から学習した追加基準（採点に反映すること）:\n' + learnedRubric + '\n' : '',
+    AXES.map(function (a, i) {
+      return (i + 1) + '. ' + a.key + '（' + a.label + '）: ' + a.desc;
+    }).join('\n'),
+    '',
+    learnedRubric ? '実測データの分析から学習した追加基準（採点に反映すること）:\n' + learnedRubric + '\n' : '',
     (function () { var m = buildMemoryPrompt(); return m ? m + '\n' : ''; })(),
     '文体サンプル:',
     samples.map(function (s, i) { return '--- ' + (i + 1) + ' ---\n' + s; }).join('\n'),
@@ -46,10 +75,12 @@ function runQualityGate() {
       return 'id: ' + d.id + '\ncategory: ' + d.category + '\n本文:\n' + d.text;
     }).join('\n\n====\n\n'),
     '',
-    'JSON配列で出力: [{"id": "...", "score": 0-100の整数, "reason": "採点理由を50字以内で。基準5（プロフィールを見たくなるか）の評価に必ず触れること"}]',
+    'JSON配列で出力: [{"id": "...", "axes": {' +
+      AXES.map(function (a) { return '"' + a.key + '": 0-100'; }).join(', ') +
+      '}, "reason": "最も高い軸と最も低い軸に触れて50字以内で"}]',
   ].join('\n');
 
-  var results = askClaudeJson(system, user, 3000);
+  var results = askClaudeJson(system, user, 4000);
   if (!Array.isArray(results)) throw new Error('採点結果の出力が不正です');
 
   var passed = 0;
@@ -58,13 +89,21 @@ function runQualityGate() {
 
   drafts.forEach(function (d) {
     var r = byId[String(d.id)];
-    if (!r || typeof r.score !== 'number') return;
-    var pass = r.score >= threshold;
+    if (!r) return;
+    var axes = compositeAxes(r.axes);
+    if (!axes) return;
+    // 合成スコアはコード側で計算する（重みを学習で変えられるようにするため）
+    var score = 0;
+    AXES.forEach(function (a) { score += axes[a.key] * (weights[a.key] || 0); });
+    score = Math.round(score);
+
+    var pass = score >= threshold;
     if (pass) passed++;
     var newStatus = pass ? (isAutoApprove() ? STATUS.APPROVED : STATUS.READY) : STATUS.STOCK;
     updateStockById(d.id, {
-      score: r.score,
+      score: score,
       score_reason: String(r.reason || ''),
+      axes: JSON.stringify(axes),
       status: newStatus,
     });
     try {
@@ -126,7 +165,17 @@ function refineFailedDrafts(force) {
     '',
     targets.map(function (d) {
       var qa = qaBySession[String(d.session_id)] || [];
-      return 'id: ' + d.id + '\n採点: ' + d.score + '点 / 指摘: ' + d.score_reason + '\n本文:\n' + d.text +
+      // 弱い軸を名指しして、そこを重点的に直させる
+      var ax = parseAxes(d.axes);
+      var weak = '';
+      if (ax) {
+        var sorted = AXES.filter(function (a) { return isFinite(Number(ax[a.key])); })
+          .sort(function (a, b) { return Number(ax[a.key]) - Number(ax[b.key]); });
+        weak = '\n弱い軸（ここを重点的に直す）: ' + sorted.slice(0, 3).map(function (a) {
+          return a.label + ' ' + ax[a.key] + '点';
+        }).join(' / ');
+      }
+      return 'id: ' + d.id + '\n採点: ' + d.score + '点 / 指摘: ' + d.score_reason + weak + '\n本文:\n' + d.text +
         (qa.length ? '\n一次情報（本人の回答）:\n' + qa.join('\n') : '\n一次情報: なし（本文にある事実だけで書き直すこと）');
     }).join('\n\n====\n\n'),
     '',
@@ -162,6 +211,7 @@ function refineFailedDrafts(force) {
       status: STATUS.DRAFT,
       score: '',
       score_reason: '',
+      axes: '',
       refines: count,
     });
     refined++;

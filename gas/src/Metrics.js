@@ -221,6 +221,114 @@ function importManualPosts() {
 }
 
 /**
+ * 軸別の相関分析と重み学習。
+ *
+ * 各採点軸(0-100)と成果指標の相関を取り、「どの軸が実際に効いているか」を
+ * 推定する。相関が強い軸ほど重みを上げ、次回以降の合成スコアに反映する。
+ *
+ * n が小さいうちは相関が不安定なので、以下のガードを入れている:
+ *  - 最低 MIN_AXIS_SAMPLES 件（既定15）を満たすまで重みは更新しない
+ *  - 学習値と現行値を混ぜる（急激に振れないようにする）
+ *  - 1軸あたり 3%〜35% にクランプしてから正規化する
+ * 軸同士は相関が高い（良い投稿は全軸で高い）ため重回帰は過学習する。
+ * この規模では単相関＋平滑化の方が素直で壊れにくい。
+ */
+function analyzeAxes() {
+  var rows = readTable(SHEET.STOCK).filter(function (r) {
+    if (String(r.status) !== STATUS.POSTED || !r.metrics_at) return false;
+    if (String(r.promoted) === 'yes' && r.paid_impressions === '') return false;
+    return parseAxes(r.axes) !== null;
+  });
+
+  // 成果指標: プロフィールクリック率が取れていればそれ、なければインプレッション
+  var withClicks = rows.filter(function (r) {
+    return r.profile_clicks !== '' && Number(r.impressions || 0) > 0;
+  });
+  var useClicks = withClicks.length >= 8;
+  var target = useClicks ? withClicks : rows;
+  var outcomeName = useClicks ? 'プロフィールクリック率' : 'インプレッション';
+  var outcome = useClicks
+    ? function (r) { return Number(r.profile_clicks) / Number(r.impressions) * 100; }
+    : function (r) { return Number(r.impressions || 0); };
+
+  var results = AXES.map(function (a) {
+    var xs = [], ys = [];
+    target.forEach(function (r) {
+      var ax = parseAxes(r.axes);
+      if (ax && isFinite(Number(ax[a.key]))) { xs.push(Number(ax[a.key])); ys.push(outcome(r)); }
+    });
+    return { key: a.key, label: a.label, n: xs.length, corr: xs.length >= 5 ? pearson(xs, ys) : null };
+  });
+
+  var minSamples = Number(getProp('MIN_AXIS_SAMPLES', '15'));
+  var usable = results.filter(function (x) { return x.corr !== null && x.n >= minSamples; });
+  var updated = false;
+  var current = axisWeights();
+  var next = current;
+
+  if (usable.length >= Math.ceil(AXES.length / 2)) {
+    // 正の相関だけを重みの根拠にする（負・ゼロ相関の軸は下限へ寄る）
+    var raw = {}, sum = 0;
+    results.forEach(function (x) {
+      var v = x.corr === null ? 0 : Math.max(0, x.corr);
+      raw[x.key] = v;
+      sum += v;
+    });
+    if (sum > 0) {
+      var blend = 0.6; // 現行:学習 = 6:4 で混ぜる
+      var mixed = {}, mixSum = 0;
+      AXES.forEach(function (a) {
+        var learned = raw[a.key] / sum;
+        var v = blend * (current[a.key] || 0) + (1 - blend) * learned;
+        v = Math.max(0.03, Math.min(0.35, v)); // 極端な偏りを防ぐ
+        mixed[a.key] = v;
+        mixSum += v;
+      });
+      next = {};
+      AXES.forEach(function (a) { next[a.key] = Math.round(mixed[a.key] / mixSum * 1000) / 1000; });
+      PropertiesService.getScriptProperties().setProperty('QUALITY_WEIGHTS', JSON.stringify(next));
+      updated = true;
+      logEvent('axis_weights', JSON.stringify(next));
+    }
+  }
+
+  var ranked = results.slice().sort(function (a, b) {
+    return (b.corr === null ? -2 : b.corr) - (a.corr === null ? -2 : a.corr);
+  });
+  return {
+    outcomeName: outcomeName, sampleSize: target.length, minSamples: minSamples,
+    ranked: ranked, weights: next, updated: updated,
+  };
+}
+
+/** 軸別分析をSlackに投げる（週次から呼ばれる。手動実行も可） */
+function reportAxisAnalysis() {
+  var a = analyzeAxes();
+  if (!a.ranked.some(function (x) { return x.corr !== null; })) {
+    var msg = ':microscope: 軸別分析: データ不足（軸スコア付きの計測済み投稿が' + a.sampleSize + '件）。' +
+      '新しい採点方式で投稿されたものが増えると出せるようになります。';
+    notifySlack(msg);
+    return msg;
+  }
+  var lines = [
+    ':microscope: *軸別の効き方分析*（成果指標: ' + a.outcomeName + ' / n=' + a.sampleSize + '）',
+    '',
+    '相関の強い順:',
+  ];
+  a.ranked.forEach(function (x) {
+    var bar = x.corr === null ? '(データ不足)' :
+      (x.corr >= 0 ? '+' : '') + x.corr.toFixed(2) + ' ' + '█'.repeat(Math.max(0, Math.round(Math.abs(x.corr) * 10)));
+    lines.push('・' + x.label + ': ' + bar + '  (n=' + x.n + ' / 重み ' + Math.round((a.weights[x.key] || 0) * 100) + '%)');
+  });
+  lines.push('');
+  lines.push(a.updated
+    ? ':white_check_mark: 重みを更新しました。次回の採点から反映されます。'
+    : ':hourglass: 重みは未更新（各軸' + a.minSamples + '件以上たまると自動更新します）。');
+  notifySlack(lines.join('\n'));
+  return lines.join('\n');
+}
+
+/**
  * 自己採点の妥当性検証と、実測ベースの採点基準の学習。
  * - 採点スコアと実測インプレッションの相関を計算して報告
  * - インプレッション上位/下位の共通点から「追加採点基準」を生成し、
@@ -390,5 +498,11 @@ function weeklyMetricsReport() {
     if (rows.length >= 8) evaluateScoring();
   } catch (e) {
     logEvent('scoring_eval_error', String(e));
+  }
+  // 軸別の効き方分析と重み更新
+  try {
+    reportAxisAnalysis();
+  } catch (e) {
+    logEvent('axis_analysis_error', String(e));
   }
 }
