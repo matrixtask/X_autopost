@@ -128,6 +128,10 @@ GASエディタで次の順に実行します（どちらも時間がかかる�
 2. `backfillAxisScores` — 軸スコアが無い投稿済みポストをまとめて採点する。6分の実行上限に当たる前に自分で続きのトリガーを仕込むので、完了通知がSlackに来るまで待つだけ
 3. `reportAxisAnalysis` — 相関分析をSlackに投げる（Webアプリの「分析」タブにも出ます）
 
+遡及採点が `backfill_error` で止まったときは **`debugBackfillSample`** を実行してください。
+未採点の先頭3件だけを採点してClaudeの生の応答をログに出します（シートは書き換えません）。
+空応答なのか・形式違いなのか・途中で切れたのかがそこで分かります。
+
 学習は2本立てです。フォロワー増 = インプレッション × プロフィールクリック率 × フォロー率 なので、両方を足して重みにしています。
 
 | モデル | 成果指標 | 標本 | 役割 |
@@ -147,7 +151,7 @@ GASエディタで次の順に実行します（どちらも時間がかかる�
 | `INTERVIEW_QUESTIONS` | `4` | 毎朝の質問数 |
 | `CLAUDE_MODEL` | `claude-sonnet-5` | 生成・採点に使うモデル |
 | `BACKFILL_MAX_POSTS` | `1000` | `backfillManualPosts` が遡る件数 |
-| `BACKFILL_BATCH` | `25` | `backfillAxisScores` が1回のAPI呼び出しで採点する件数 |
+| `BACKFILL_BATCH` | `15` | `backfillAxisScores` が1回のAPI呼び出しで採点する件数（失敗すると自動で半減する） |
 | `SHRINKAGE_K` | `10` | 相関を標本数で縮小する強さ（大きいほど慎重） |
 | `MIN_AXIS_SAMPLES` | `10` | 相関を採用する最低標本数 |
 | `REACH_MODEL_WEIGHT` | `0.5` | リーチモデルの相関を重みに足すときの割引率 |
