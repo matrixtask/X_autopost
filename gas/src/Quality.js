@@ -45,27 +45,7 @@ function runQualityGate() {
 
   ensureHeaders(SHEET.STOCK);
   var threshold = qualityThreshold();
-  var samples = getVoiceSamples(10);
-  // 実測インプレッションから学習した追加基準（evaluateScoring()が更新する）
-  var learnedRubric = getProp('QUALITY_RUBRIC_LEARNED', '');
-  var system = [
-    'あなたはXアカウント運用の編集長です。ポスト下書きを採点します。',
-    'このアカウントの最終目的は「フォロワーを増やすこと」です。いいねが付くことではありません。',
-    '',
-    '以下の各軸を、それぞれ独立に0〜100点で採点してください。',
-    '軸ごとの重み付けはこちらで行うので、あなたは各軸を純粋に評価することに集中してください。',
-    '中央値を50とし、平凡なら50前後、際立って良ければ80以上、明確に欠けていれば30以下を付けること。',
-    '全部の軸に似た点を付けるのは分析上まったく役に立ちません。軸ごとの差をはっきり付けてください。',
-    '',
-    AXES.map(function (a, i) {
-      return (i + 1) + '. ' + a.key + '（' + a.label + '）: ' + a.desc;
-    }).join('\n'),
-    '',
-    learnedRubric ? '実測データの分析から学習した追加基準（採点に反映すること）:\n' + learnedRubric + '\n' : '',
-    (function () { var m = buildMemoryPrompt(); return m ? m + '\n' : ''; })(),
-    '文体サンプル:',
-    samples.map(function (s, i) { return '--- ' + (i + 1) + ' ---\n' + s; }).join('\n'),
-  ].join('\n');
+  var system = axisScoringSystemPrompt(getVoiceSamples(10), false);
 
   var user = [
     '以下の下書きを採点してください。',
@@ -112,6 +92,118 @@ function runQualityGate() {
 
   logEvent('quality_gate', '採点' + drafts.length + '件 / 合格' + passed + '件（閾値' + threshold + '）');
   return { scored: drafts.length, passed: passed };
+}
+
+/**
+ * 投稿済みポストへの遡及採点。
+ *
+ * 相関分析の標本を増やすため、軸スコアが無い投稿済みポストを後から採点する。
+ * 合否やステータスは一切変えず、axes列だけを埋める（過去の投稿を今の基準で
+ * 落とすのは無意味なため）。
+ *
+ * GASの実行時間上限（6分）があるので、4分で打ち切って残件があれば
+ * 1分後に自分を再実行するワンショットトリガーを仕込む。放置で完走する。
+ */
+function backfillAxisScores() {
+  ensureHeaders(SHEET.STOCK);
+  var started = new Date().getTime();
+  var budgetMs = 4 * 60 * 1000;
+  var batchSize = Number(getProp('BACKFILL_BATCH', '25'));
+
+  var pendingAll = readTable(SHEET.STOCK).filter(function (r) {
+    return String(r.status) === STATUS.POSTED && String(r.text).trim() && !parseAxes(r.axes);
+  });
+  if (!pendingAll.length) {
+    clearBackfillTrigger();
+    var done = '遡及採点は完了しています（未採点の投稿済みポストなし）';
+    logEvent('backfill_axes', done);
+    return done;
+  }
+
+  var scored = 0;
+  var samples = getVoiceSamples(8);
+  var system = axisScoringSystemPrompt(samples, true);
+
+  while (new Date().getTime() - started < budgetMs) {
+    var batch = pendingAll.slice(scored, scored + batchSize);
+    if (!batch.length) break;
+    var user = [
+      '以下は過去に投稿されたポストです。各軸を採点してください。',
+      '',
+      batch.map(function (d) {
+        return 'id: ' + d.id + '\n本文:\n' + String(d.text).slice(0, 400);
+      }).join('\n\n====\n\n'),
+      '',
+      'JSON配列で出力: [{"id": "...", "axes": {' +
+        AXES.map(function (a) { return '"' + a.key + '": 0-100'; }).join(', ') + '}}]',
+    ].join('\n');
+
+    var results;
+    try {
+      results = askClaudeJson(system, user, 4000);
+    } catch (e) {
+      logEvent('backfill_error', String(e).slice(0, 200));
+      break;
+    }
+    if (!Array.isArray(results)) break;
+    var byId = {};
+    results.forEach(function (r) { byId[String(r.id)] = r; });
+    var writes = [];
+    batch.forEach(function (d) {
+      var r = byId[String(d.id)];
+      var axes = r ? compositeAxes(r.axes) : null;
+      if (axes) writes.push({ row: d._row, value: JSON.stringify(axes) });
+    });
+    // updateStockById は1件ごとに全行を読み直すので、ここでは行番号直指定で書く
+    setColumnByRows(SHEET.STOCK, 'axes', writes);
+    scored += batch.length;
+  }
+
+  var remaining = pendingAll.length - scored;
+  logEvent('backfill_axes', scored + '件を採点 / 残り' + remaining + '件');
+  if (remaining > 0) {
+    scheduleBackfillContinue();
+    return scored + '件を採点しました。残り' + remaining + '件は1分後に自動で続行します。';
+  }
+  clearBackfillTrigger();
+  notifySlack(':white_check_mark: 遡及採点が完了しました。軸スコア付きの投稿が増えたので、' +
+    'reportAxisAnalysis を実行すると相関が出ます。');
+  return scored + '件を採点しました。完了です。';
+}
+
+/** 遡及採点の続きを1分後に実行するワンショットトリガーを仕込む */
+function scheduleBackfillContinue() {
+  clearBackfillTrigger();
+  ScriptApp.newTrigger('backfillAxisScores').timeBased().after(60 * 1000).create();
+}
+
+function clearBackfillTrigger() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'backfillAxisScores') ScriptApp.deleteTrigger(t);
+  });
+}
+
+/** 軸採点の共通systemプロンプト。@param {boolean} terse 遡及採点用に短縮するか */
+function axisScoringSystemPrompt(samples, terse) {
+  var learnedRubric = getProp('QUALITY_RUBRIC_LEARNED', '');
+  return [
+    'あなたはXアカウント運用の編集長です。ポストを採点します。',
+    'このアカウントの最終目的は「フォロワーを増やすこと」です。いいねが付くことではありません。',
+    '',
+    '以下の各軸を、それぞれ独立に0〜100点で採点してください。',
+    '軸ごとの重み付けはこちらで行うので、あなたは各軸を純粋に評価することに集中してください。',
+    '中央値を50とし、平凡なら50前後、際立って良ければ80以上、明確に欠けていれば30以下を付けること。',
+    '全部の軸に似た点を付けるのは分析上まったく役に立ちません。軸ごとの差をはっきり付けてください。',
+    '',
+    AXES.map(function (a, i) {
+      return (i + 1) + '. ' + a.key + '（' + a.label + '）: ' + a.desc;
+    }).join('\n'),
+    '',
+    terse ? '' : (learnedRubric ? '実測データの分析から学習した追加基準（採点に反映すること）:\n' + learnedRubric + '\n' : ''),
+    terse ? '' : (function () { var m = buildMemoryPrompt(); return m ? m + '\n' : ''; })(),
+    '文体サンプル:',
+    samples.map(function (s, i) { return '--- ' + (i + 1) + ' ---\n' + s; }).join('\n'),
+  ].join('\n');
 }
 
 /**

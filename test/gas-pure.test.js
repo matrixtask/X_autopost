@@ -11,6 +11,25 @@ vm.createContext(context);
 vm.runInContext(code, context);
 const { weightedTweetLength, fitsInTweet, parseJsonLoose, pickWeighted, computeNextSlots, normalizeSlackTs, slackTsEqual, pearson, dateKey } = context.module.exports;
 
+test('percentileWithinWindow: 窓内での相対順位に変換する', () => {
+  const { percentileWithinWindow } = context.module.exports;
+  const day = 86400000;
+  // 同じ窓内の4件: 値 10/20/30/40 → 12.5/37.5/62.5/87.5
+  const same = percentileWithinWindow(
+    [{ t: 0, v: 10 }, { t: day, v: 20 }, { t: 2 * day, v: 30 }, { t: 3 * day, v: 40 }], 30);
+  assert.deepEqual(same, [12.5, 37.5, 62.5, 87.5]);
+
+  // 窓が離れていれば別グループとして評価される（フォロワー数が違う時期を混ぜない）
+  const eras = percentileWithinWindow([
+    { t: 0, v: 100 }, { t: day, v: 200 },                 // 昔: 100は下位
+    { t: 400 * day, v: 1000 }, { t: 401 * day, v: 2000 }, // 今: 1000は下位
+  ], 30);
+  assert.equal(eras[0], eras[2]); // 生の値は10倍違うが、窓内順位は同じ
+  assert.equal(eras[1], eras[3]);
+
+  assert.deepEqual(percentileWithinWindow([{ t: 0, v: 5 }], 30), [50]); // 単独は50
+});
+
 test('dateKey: 日時に変換された日付でも同じ日として扱える', () => {
   assert.equal(dateKey('2026-07-27'), '2026-07-27');
   assert.equal(dateKey('2026-07-27 00:00'), '2026-07-27'); // シートが日時化したケース

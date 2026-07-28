@@ -160,15 +160,20 @@ function followerSummary(days) {
 }
 
 /**
- * 手動投稿の取り込み。
- * Xの自分のタイムラインから直近ポスト（最大100件、RT・リプライ除く）を取得し、
- * システム経由でない投稿を「手動投稿」としてStockに登録、メトリクスも記録する。
- * 以後は週次計測・時間帯分析の対象に含まれる。
- * 週次のメトリクス収集時に自動実行される（手動実行も可）。
- * 注意: X APIのFreeプランの読み取り枠を消費するため実行は週1目安。
+ * 手動投稿の取り込み（ページネーション対応）。
+ *
+ * Xのタイムラインは1リクエスト100件が上限だが、pagination_tokenで辿れば
+ * 直近3,200件程度まで遡れる。週次の自動実行では直近100件だけを見て、
+ * 過去分をまとめて取り込みたいときは backfillManualPosts() を使う。
+ *
+ * 注意: 遡って取れるのは本文と公開メトリクスまで。オーガニックインプと
+ * プロフィールクリックはX側の仕様で直近30日分しか存在しない。
+ *
+ * @param {number} maxPosts 取得上限（既定100 = 1ページ）
  */
-function importManualPosts() {
+function importManualPosts(maxPosts) {
   ensureHeaders(SHEET.STOCK);
+  var limit = Number(maxPosts || 100);
   // /users/me も読み取り枠を消費するため、ユーザーIDは初回取得後にキャッシュする
   var userId = getProp('X_USER_ID');
   if (!userId) {
@@ -176,11 +181,6 @@ function importManualPosts() {
     userId = String(me.data.id);
     PropertiesService.getScriptProperties().setProperty('X_USER_ID', userId);
   }
-  var res = xApiGet('/users/' + userId + '/tweets', {
-    max_results: '100',
-    exclude: 'retweets,replies',
-    'tweet.fields': 'created_at,public_metrics',
-  });
 
   var known = {};
   readTable(SHEET.STOCK).forEach(function (r) {
@@ -188,36 +188,75 @@ function importManualPosts() {
   });
 
   var now = fmtDateTime(nowJst());
-  var added = 0;
-  (res.data || []).forEach(function (t) {
-    if (known[String(t.id)]) return;
-    var m = t.public_metrics || {};
-    var postedAt = t.created_at ? fmtDateTime(new Date(t.created_at)) : '';
-    appendRowObj(SHEET.STOCK, {
-      id: newId('m'),
-      created_at: postedAt,
-      theme: '手動投稿',
-      category: 'manual',
-      session_id: '',
-      text: String(t.text || ''),
-      score: '',
-      score_reason: '',
-      status: STATUS.POSTED,
-      scheduled_at: '',
-      posted_at: postedAt,
-      tweet_id: String(t.id),
-      notion_page_id: '',
-      impressions: m.impression_count || 0,
-      likes: m.like_count || 0,
-      retweets: m.retweet_count || 0,
-      replies: m.reply_count || 0,
-      metrics_at: now,
-      refines: '',
+  var pending = [];
+  var fetched = 0;
+  var pages = 0;
+  var token = null;
+  do {
+    var params = {
+      max_results: '100',
+      exclude: 'retweets,replies',
+      'tweet.fields': 'created_at,public_metrics',
+    };
+    if (token) params.pagination_token = token;
+    var res;
+    try {
+      res = xApiGet('/users/' + userId + '/tweets', params);
+    } catch (e) {
+      // レート制限などで途中で落ちても、ここまでの分は保存して次回に続きから取る
+      logEvent('manual_import_error', 'page ' + (pages + 1) + ': ' + String(e).slice(0, 200));
+      break;
+    }
+    var batch = res.data || [];
+    fetched += batch.length;
+    pages++;
+
+    batch.forEach(function (t) {
+      if (known[String(t.id)]) return;
+      known[String(t.id)] = true;
+      var m = t.public_metrics || {};
+      var postedAt = t.created_at ? fmtDateTime(new Date(t.created_at)) : '';
+      pending.push({
+        id: newId('m') + '_' + pending.length,
+        created_at: postedAt,
+        theme: '手動投稿',
+        category: 'manual',
+        session_id: '',
+        text: String(t.text || ''),
+        score: '', score_reason: '',
+        status: STATUS.POSTED,
+        scheduled_at: '',
+        posted_at: postedAt,
+        tweet_id: String(t.id),
+        notion_page_id: '',
+        impressions: m.impression_count || 0,
+        likes: m.like_count || 0,
+        retweets: m.retweet_count || 0,
+        replies: m.reply_count || 0,
+        metrics_at: now,
+        refines: '', promoted: '', paid_impressions: '',
+        profile_clicks: '', link_clicks: '', axes: '',
+      });
     });
-    added++;
-  });
-  logEvent('manual_import', added + '件の手動投稿を取り込み（取得' + ((res.data || []).length) + '件）');
-  return added + '件の手動投稿を取り込みました';
+    token = (res.meta && res.meta.next_token) || null;
+  } while (token && fetched < limit);
+
+  // 1行ずつappendすると数百行で実行時間上限に当たるため一括で書き込む
+  appendRowsObj(SHEET.STOCK, pending);
+  logEvent('manual_import', pending.length + '件を取り込み（取得' + fetched + '件 / ' + pages + 'ページ）');
+  return pending.length + '件の手動投稿を取り込みました（' + fetched + '件走査 / ' + pages + 'ページ）';
+}
+
+/**
+ * 過去投稿の大量遡及取り込み。相関分析の標本を一気に増やすために使う。
+ * 既定1000件。X APIの読み取り枠を消費するので、様子を見ながら増やすこと。
+ */
+function backfillManualPosts(maxPosts) {
+  var n = Number(maxPosts || getProp('BACKFILL_MAX_POSTS', '1000'));
+  var result = importManualPosts(n);
+  notifySlack(':inbox_tray: 過去投稿の遡及取り込み: ' + result +
+    '\n次は backfillAxisScores を実行すると、これらに軸スコアが付いて相関分析の標本になります。');
+  return result;
 }
 
 /**
@@ -233,29 +272,41 @@ function importManualPosts() {
  * 軸同士は相関が高い（良い投稿は全軸で高い）ため重回帰は過学習する。
  * この規模では単相関＋平滑化の方が素直で壊れにくい。
  */
-function analyzeAxes() {
+function analyzeAxes(mode) {
   var rows = readTable(SHEET.STOCK).filter(function (r) {
     if (String(r.status) !== STATUS.POSTED || !r.metrics_at) return false;
     if (String(r.promoted) === 'yes' && r.paid_impressions === '') return false;
     return parseAxes(r.axes) !== null;
   });
 
-  // 成果指標: プロフィールクリック率が取れていればそれ、なければインプレッション
+  // 2つのモデルを使い分ける:
+  //  follow: プロフィールクリック率。KGI(フォロワー増)に近いが直近30日分しか無い
+  //  reach : 窓内インプ・パーセンタイル。標本は多いがフォローとは別物
   var withClicks = rows.filter(function (r) {
     return r.profile_clicks !== '' && Number(r.impressions || 0) > 0;
   });
-  var useClicks = withClicks.length >= 8;
-  var target = useClicks ? withClicks : rows;
-  var outcomeName = useClicks ? 'プロフィールクリック率' : 'インプレッション';
-  var outcome = useClicks
-    ? function (r) { return Number(r.profile_clicks) / Number(r.impressions) * 100; }
-    : function (r) { return Number(r.impressions || 0); };
+  var wantFollow = mode !== 'reach' && withClicks.length >= 10;
+  var target, outcomeName, outcomes;
+
+  if (wantFollow) {
+    target = withClicks;
+    outcomeName = 'プロフィールクリック率';
+    outcomes = target.map(function (r) { return Number(r.profile_clicks) / Number(r.impressions) * 100; });
+  } else {
+    // フォロワー数もアルゴリズムも時期で変わるため、生インプではなく
+    // 前後30日の投稿内での相対順位に変換して比較可能にする
+    target = rows.filter(function (r) { return Number(r.impressions || 0) > 0 && r.posted_at; });
+    outcomeName = 'インプレッション窓内順位';
+    outcomes = percentileWithinWindow(target.map(function (r) {
+      return { t: new Date(String(r.posted_at).replace(' ', 'T') + ':00+09:00').getTime(), v: Number(r.impressions) };
+    }), 30);
+  }
 
   var results = AXES.map(function (a) {
     var xs = [], ys = [];
-    target.forEach(function (r) {
+    target.forEach(function (r, i) {
       var ax = parseAxes(r.axes);
-      if (ax && isFinite(Number(ax[a.key]))) { xs.push(Number(ax[a.key])); ys.push(outcome(r)); }
+      if (ax && isFinite(Number(ax[a.key]))) { xs.push(Number(ax[a.key])); ys.push(outcomes[i]); }
     });
     return { key: a.key, label: a.label, n: xs.length, corr: xs.length >= 5 ? pearson(xs, ys) : null };
   });
@@ -265,6 +316,7 @@ function analyzeAxes() {
   var minSamples = Number(getProp('MIN_AXIS_SAMPLES', '10'));
   var usable = results.filter(function (x) { return x.corr !== null && x.n >= minSamples; });
   var updated = false;
+  var storeKey = wantFollow ? 'AXIS_CORRELATIONS' : 'AXIS_CORRELATIONS_REACH';
 
   if (usable.length >= 3) {
     var store = {};
@@ -273,9 +325,9 @@ function analyzeAxes() {
         store[x.key] = { c: Math.round(x.corr * 1000) / 1000, n: x.n };
       }
     });
-    PropertiesService.getScriptProperties().setProperty('AXIS_CORRELATIONS', JSON.stringify(store));
+    PropertiesService.getScriptProperties().setProperty(storeKey, JSON.stringify(store));
     updated = true;
-    logEvent('axis_correlations', JSON.stringify(store));
+    logEvent('axis_correlations', storeKey + ' ' + JSON.stringify(store));
   }
 
   // 実際にスコア計算で使われている係数（縮小後）と、その寄与率
@@ -299,39 +351,58 @@ function analyzeAxes() {
   };
 }
 
-/** 軸別分析をSlackに投げる（週次から呼ばれる。手動実行も可） */
+/**
+ * 軸別分析をSlackに投げる（週次から呼ばれる。手動実行も可）。
+ * リーチモデルとフォローモデルの両方を回して、それぞれの効き方を並べて出す。
+ */
 function reportAxisAnalysis() {
-  var a = analyzeAxes();
-  if (!a.ranked.some(function (x) { return x.corr !== null; })) {
-    var msg = ':microscope: 軸別分析: データ不足（軸スコア付きの計測済み投稿が' + a.sampleSize + '件）。' +
-      '新しい採点方式で投稿されたものが増えると出せるようになります。';
+  var models = [analyzeAxes('reach')];
+  var follow = analyzeAxes(); // 30日以内のクリック実測が10件以上あればフォローモデルになる
+  if (follow.outcomeName !== models[0].outcomeName) models.push(follow);
+
+  var hasAny = models.some(function (m) {
+    return m.ranked.some(function (x) { return x.corr !== null; });
+  });
+  if (!hasAny) {
+    var msg = ':microscope: 軸別分析: データ不足（軸スコア付きの計測済み投稿が' + models[0].sampleSize + '件）。' +
+      'backfillManualPosts → backfillAxisScores を実行すると過去投稿が一気に標本になります。';
     notifySlack(msg);
     return msg;
   }
+
   var lines = [
-    ':microscope: *軸別の効き方分析*（成果指標: ' + a.outcomeName + ' / n=' + a.sampleSize + '）',
+    ':microscope: *軸別の効き方分析*',
     '全体スコアは「軸スコア × 下の相関」の内積で算出されます。',
-    '',
   ];
-  a.ranked.forEach(function (x) {
-    if (x.corr === null) return;
-    var bar = '█'.repeat(Math.max(1, Math.round(Math.abs(x.corr) * 12)));
-    lines.push((x.corr >= 0 ? '+' : '−') + Math.abs(x.corr).toFixed(2) + ' ' + bar +
-      ' ' + x.label + '（寄与' + x.share + '% / n=' + x.n + '）');
-  });
-  var lacking = a.ranked.filter(function (x) { return x.corr === null; });
-  if (lacking.length) {
+  models.forEach(function (a) {
     lines.push('');
-    lines.push('データ不足の軸: ' + lacking.map(function (x) { return x.label; }).join('、'));
-  }
-  lines.push('');
-  lines.push(a.updated
-    ? ':white_check_mark: 相関を更新しました。次回の採点から全体スコアに反映されます。'
-    : ':hourglass: 相関は未更新（各軸' + a.minSamples + '件以上たまると自動更新します）。');
-  var negatives = a.ranked.filter(function (x) { return x.corr !== null && x.corr < -0.1; });
-  if (negatives.length) {
-    lines.push('※ ' + negatives.map(function (x) { return x.label; }).join('、') +
-      ' は負の相関です。この軸が高いポストほど成果が下がっているため、スコアでは減点として働きます。');
+    lines.push('*' + a.outcomeName + '*（n=' + a.sampleSize + '）');
+    var shown = 0;
+    a.ranked.forEach(function (x) {
+      if (x.corr === null) return;
+      shown++;
+      var bar = '█'.repeat(Math.max(1, Math.round(Math.abs(x.corr) * 12)));
+      lines.push((x.corr >= 0 ? '+' : '−') + Math.abs(x.corr).toFixed(2) + ' ' + bar +
+        ' ' + x.label + '（寄与' + x.share + '% / n=' + x.n + '）');
+    });
+    if (!shown) lines.push('（このモデルはまだデータ不足）');
+    var lacking = a.ranked.filter(function (x) { return x.corr === null; });
+    if (lacking.length && shown) {
+      lines.push('データ不足の軸: ' + lacking.map(function (x) { return x.label; }).join('、'));
+    }
+    lines.push(a.updated
+      ? ':white_check_mark: 相関を更新しました。次回の採点から反映されます。'
+      : ':hourglass: 相関は未更新（各軸' + a.minSamples + '件以上たまると自動更新します）。');
+    var negatives = a.ranked.filter(function (x) { return x.corr !== null && x.corr < -0.1; });
+    if (negatives.length) {
+      lines.push('※ ' + negatives.map(function (x) { return x.label; }).join('、') +
+        ' は負の相関。高いポストほど成果が下がっているため、スコアでは減点として働きます。');
+    }
+  });
+  if (models.length < 2) {
+    lines.push('');
+    lines.push('フォローモデル（プロフィールクリック率）はまだ標本不足です。' +
+      'クリック数はXの仕様で直近30日分しか取れないため、投稿を重ねながらたまるのを待ちます。');
   }
   notifySlack(lines.join('\n'));
   return lines.join('\n');

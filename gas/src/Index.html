@@ -205,11 +205,12 @@
       }).join('') + '</tbody></table></div></details></div>';
 
     // 軸別の効き方（どの採点軸が成果と相関しているか）
-    var axesHtml = '';
-    if (d.axes && d.axes.ranked && d.axes.ranked.some(function (x) { return x.corr !== null; })) {
-      var maxAbs = Math.max.apply(null, d.axes.ranked.map(function (x) { return x.corr === null ? 0 : Math.abs(x.corr); }).concat([0.3]));
-      axesHtml = '<div class="card"><h3 class="sec">軸別の効き方（成果指標: ' + esc(d.axes.outcomeName) + ' / n=' + d.axes.sampleSize + '）</h3>' +
-        d.axes.ranked.filter(function (x) { return x.corr !== null; }).map(function (x) {
+    var axesHtml = (d.axes || []).filter(function (m) {
+      return m.ranked && m.ranked.some(function (x) { return x.corr !== null; });
+    }).map(function (m) {
+      var maxAbs = Math.max.apply(null, m.ranked.map(function (x) { return x.corr === null ? 0 : Math.abs(x.corr); }).concat([0.3]));
+      return '<div class="card"><h3 class="sec">軸別の効き方（成果指標: ' + esc(m.outcomeName) + ' / n=' + m.sampleSize + '）</h3>' +
+        m.ranked.filter(function (x) { return x.corr !== null; }).map(function (x) {
           var w = Math.round(Math.abs(x.corr) / maxAbs * 48);
           var neg = x.corr < 0;
           return '<div class="bar-row"><span class="bar-lbl">' + esc(x.label) + '</span>' +
@@ -222,9 +223,9 @@
         '<div class="reason">全体スコア = 各軸のスコア × ここに出ている相関、の内積を0〜100に正規化したものです。' +
         '中央の線が相関0で、右に伸びるほど「その軸が高いポストほど成果が出ている」。' +
         '<b>左に伸びた軸は減点として働きます</b>（高いほど成果が下がっている軸）。' +
-        (d.axes.updated ? '相関は実測から自動更新済みです。' : '各軸' + d.axes.minSamples + '件たまると自動更新します。') +
+        (m.updated ? '相関は実測から自動更新済みです。' : '各軸' + m.minSamples + '件たまると自動更新します。') +
         '</div></div>';
-    }
+    }).join('');
 
     el.innerHTML =
       tiles + followChart + axesHtml +

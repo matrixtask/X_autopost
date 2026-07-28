@@ -121,34 +121,58 @@ var DEFAULT_AXIS_WEIGHTS = {
   profile: 0.12,
 };
 
+/** スクリプトプロパティに入った {key: {c, n}} を読む。壊れていたら null */
+function parseCorrStore(key) {
+  var raw = getProp(key, '');
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    logEvent('correlations_parse_error', key + ': ' + String(e));
+    return null;
+  }
+}
+
 /**
  * 各軸の「成果指標との相関係数」ベクトル。全体スコアはこれとの内積で決まる。
- * AXIS_CORRELATIONS には {key: {c: 相関係数, n: 標本数}} が入る。
- * 標本が少ない相関は信用できないので n/(n+K) で0へ縮小する（K=SHRINKAGE_K、既定10）。
- * データが無い軸は既定重みで代替する。
+ *
+ * 2つのモデルを足し合わせる:
+ *   AXIS_CORRELATIONS       フォローモデル。プロフィールクリック率との相関。
+ *                           KGI(フォロワー増)に近いが、X APIの制約で直近30日分しか取れない
+ *   AXIS_CORRELATIONS_REACH リーチモデル。窓内インプレッション順位との相関。
+ *                           過去3,200件まで遡れるので標本が桁違いに多い
+ *
+ * フォロワー増 = インプレッション × プロフィールクリック率 × フォロー率 なので、
+ * リーチもフォローも両方がKGIの構成要素。よって片方への切り替えではなく加算する。
+ * ただしリーチはKGIの代理指標にすぎないので REACH_MODEL_WEIGHT（既定0.5）で割り引く。
+ *
+ * どちらも {key: {c: 相関係数, n: 標本数}} 形式。標本が少ない相関は信用できないので
+ * n/(n+K) で0へ縮小する（K=SHRINKAGE_K、既定10）。データが無い軸は既定重みで代替する。
  */
 function axisCorrelations() {
-  var raw = getProp('AXIS_CORRELATIONS', '');
   var K = Number(getProp('SHRINKAGE_K', '10'));
+  var reachW = Number(getProp('REACH_MODEL_WEIGHT', '0.5'));
+  var follow = parseCorrStore('AXIS_CORRELATIONS');
+  var reach = parseCorrStore('AXIS_CORRELATIONS_REACH');
   var out = {};
-  var parsed = null;
-  if (raw) {
-    try {
-      parsed = JSON.parse(raw);
-    } catch (e) {
-      logEvent('correlations_parse_error', String(e));
-    }
+
+  function shrunk(store, key) {
+    var rec = store ? store[key] : null;
+    if (!rec || !isFinite(Number(rec.c))) return null;
+    var n = Number(rec.n) || 0;
+    return Number(rec.c) * (n / (n + K)); // 標本数による縮小
   }
+
   var any = false;
   AXES.forEach(function (a) {
-    var rec = parsed ? parsed[a.key] : null;
-    if (rec && isFinite(Number(rec.c))) {
-      var n = Number(rec.n) || 0;
-      out[a.key] = Number(rec.c) * (n / (n + K)); // 標本数による縮小
-      any = true;
-    } else {
+    var f = shrunk(follow, a.key);
+    var r = shrunk(reach, a.key);
+    if (f === null && r === null) {
       out[a.key] = null; // 未学習
+      return;
     }
+    out[a.key] = (f || 0) + (r || 0) * reachW;
+    any = true;
   });
   if (!any) return DEFAULT_AXIS_WEIGHTS;
   // 未学習の軸は既定重みで埋める（学習済みの軸と桁を合わせるため縮尺を合わせる）
