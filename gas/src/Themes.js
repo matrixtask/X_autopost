@@ -99,6 +99,7 @@ function inferManualPostSources() {
 
 function inferManualPostSourcesLocked() {
   ensureHeaders(SHEET.STOCK);
+  ensureHeaders(SHEET.THEMES); // 新テーマの追加で base_weight を書くため
   clearInferTrigger();
   var started = new Date().getTime();
   var budgetMs = 4 * 60 * 1000;
