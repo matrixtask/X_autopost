@@ -31,33 +31,53 @@ function getSheet(name) {
  */
 function setupSpreadsheet() {
   var spreadsheet = ss();
+  var added = [];
   Object.keys(SHEET_HEADERS).forEach(function (name) {
     var sheet = spreadsheet.getSheetByName(name);
-    if (!sheet) sheet = spreadsheet.insertSheet(name);
-    var headers = SHEET_HEADERS[name];
-    var current = sheet.getRange(1, 1, 1, headers.length).getValues()[0];
-    if (String(current[0]) !== headers[0]) {
-      sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    if (!sheet) {
+      sheet = spreadsheet.insertSheet(name);
+      sheet.getRange(1, 1, 1, SHEET_HEADERS[name].length).setValues([SHEET_HEADERS[name]]);
       sheet.setFrozenRows(1);
+      sheet.getRange(1, 1, sheet.getMaxRows(), SHEET_HEADERS[name].length).setNumberFormat('@');
+      return;
     }
-    // 日時やSlackのts（例: 1752624000.123456）が勝手にDate/数値へ変換されないよう全列テキスト書式にする
-    sheet.getRange(1, 1, sheet.getMaxRows(), headers.length).setNumberFormat('@');
+    var cols = ensureHeaders(name);
+    if (cols.length) added.push(name + ': ' + cols.join(', '));
   });
   seedThemesIfEmpty();
-  logEvent('setup', 'シートを初期化しました');
-  return 'OK: ' + spreadsheet.getUrl();
+  var detail = added.length ? '列を追加しました → ' + added.join(' / ') : '列の追加はありません（すべて最新）';
+  logEvent('setup', detail);
+  return 'OK: ' + detail + '\n' + spreadsheet.getUrl();
 }
 
-/** 既存シートに後から増えた列（メトリクス等）のヘッダーを追記する */
+/**
+ * 後から増えた列のヘッダーを追記する。
+ *
+ * 既存の並びは触らず、足りない列だけを末尾に足す。ヘッダー行をまるごと
+ * 書き換えると、列を手で並べ替えていた場合に既存データと対応がずれる。
+ * @returns {string[]} 追加した列名
+ */
 function ensureHeaders(sheetName) {
   var sheet = getSheet(sheetName);
   var headers = SHEET_HEADERS[sheetName];
   var width = sheet.getLastColumn();
   var current = width > 0 ? sheet.getRange(1, 1, 1, width).getValues()[0].map(String) : [];
-  if (current.length < headers.length) {
-    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
-    sheet.getRange(1, 1, sheet.getMaxRows(), headers.length).setNumberFormat('@');
+  // 末尾の空セルは列として数えない
+  while (current.length && !current[current.length - 1].trim()) current.pop();
+
+  var missing = headers.filter(function (h) { return current.indexOf(h) < 0; });
+  if (!missing.length) return [];
+
+  var start = current.length + 1;
+  if (start + missing.length - 1 > sheet.getMaxColumns()) {
+    sheet.insertColumnsAfter(sheet.getMaxColumns(), start + missing.length - 1 - sheet.getMaxColumns());
   }
+  sheet.getRange(1, start, 1, missing.length).setValues([missing]);
+  sheet.setFrozenRows(1);
+  // 日時やSlackのts（例: 1752624000.123456）が勝手にDate/数値へ変換されないよう全列テキスト書式にする
+  sheet.getRange(1, 1, sheet.getMaxRows(), current.length + missing.length).setNumberFormat('@');
+  logEvent('headers_added', sheetName + ': ' + missing.join(', '));
+  return missing;
 }
 
 /** シート全体をオブジェクト配列で読む。_row に行番号（1始まり）を持たせる */
