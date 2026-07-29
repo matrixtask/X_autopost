@@ -72,6 +72,181 @@ function pickThemesForToday() {
 }
 
 /**
+ * 手動投稿から、テーマと「この投稿を引き出せたであろう質問」を逆算する。
+ *
+ * 取り込んだ過去の投稿は theme が「手動投稿」で一括りなので、そのままでは
+ * テーマ重みの学習に一切使えない（実測の大半がここに死蔵されている）。
+ * 既存のテーマ一覧に当てはめ直すことで、404件ぶんの実測がテーマ別に効く
+ * ようになる。あわせて質問も推定し、実際に伸びた投稿を生んだ聞き方を
+ * 翌朝の質問生成の手本にする。
+ *
+ * GASの実行時間上限があるので4分で打ち切り、残件があれば1分後に自分を
+ * 再実行する。二重実行はロックで弾く。
+ */
+function inferManualPostSources() {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(100)) {
+    var busy = 'テーマ逆算は既に実行中です';
+    logEvent('infer_themes', busy);
+    return busy;
+  }
+  try {
+    return inferManualPostSourcesLocked();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function inferManualPostSourcesLocked() {
+  ensureHeaders(SHEET.STOCK);
+  clearInferTrigger();
+  var started = new Date().getTime();
+  var budgetMs = 4 * 60 * 1000;
+  var batchSize = Number(getProp('INFER_BATCH', '20'));
+
+  var themes = readTable(SHEET.THEMES).filter(function (t) { return String(t.theme).trim(); });
+  if (!themes.length) throw new Error('Themesシートが空です');
+
+  var pendingAll = readTable(SHEET.STOCK).filter(function (r) {
+    return String(r.category) === 'manual' && String(r.text).trim() && !String(r.inferred_question || '').trim();
+  });
+  if (!pendingAll.length) {
+    var done = 'テーマ逆算は完了しています（未処理の手動投稿なし）';
+    logEvent('infer_themes', done);
+    return done;
+  }
+
+  var system = [
+    'あなたはXアカウントの運用担当です。過去に投稿されたポストを見て、',
+    '「このポストは、どのテーマについて、どんな質問をされたら出てきた話か」を推定します。',
+    '',
+    'テーマ一覧（この番号から選ぶ）:',
+    themes.map(function (t, i) { return i + ': ' + t.theme + '（' + t.category + '）'; }).join('\n'),
+    '',
+    '判断のルール:',
+    '- どのテーマにも当てはまらない場合だけ t を -1 にして、new に新しいテーマ名を書く',
+    '- 無理に既存テーマへ押し込まない。逆に、少し違う程度なら既存を選ぶ',
+    '- q は「毎朝ゆるく聞く質問」の形にする。40字以内、話し言葉、その場で思い出せることを聞く形',
+    '- q はそのポストの内容を言い当てるのではなく、その話を引き出せる聞き方にする',
+  ].join('\n');
+
+  var processed = 0, cursor = 0;
+  var proposals = {};
+
+  while (new Date().getTime() - started < budgetMs) {
+    var batch = pendingAll.slice(cursor, cursor + batchSize);
+    if (!batch.length) break;
+    var user = [
+      '以下のポストを判定してください。',
+      '',
+      batch.map(function (d) { return 'id: ' + d.id + '\n' + String(d.text).slice(0, 300); }).join('\n\n====\n\n'),
+      '',
+      'JSON配列で出力: [{"id":"...","t":テーマ番号,"c":"evergreen|news|neta","q":"推定質問","new":"新テーマ名(tが-1のときだけ)"}]',
+    ].join('\n');
+
+    var results = null;
+    try {
+      results = askClaudeJsonSalvageable(system, user, 8000);
+    } catch (e) {
+      logEvent('infer_error', String(e).slice(0, 300));
+    }
+    if (!Array.isArray(results)) {
+      if (batchSize > 5) { batchSize = Math.floor(batchSize / 2); continue; }
+      break;
+    }
+
+    var byId = {};
+    results.forEach(function (r) { if (r && r.id !== undefined) byId[String(r.id)] = r; });
+
+    // updateStockById は1件ごとに全行を読み直すため、数百件では実行時間が
+    // 持たない。readTable が持っている行番号を使って直接書く
+    var themeWrites = [], questionWrites = [];
+    batch.forEach(function (d) {
+      var r = byId[String(d.id)];
+      if (!r) return;
+      var idx = Number(r.t);
+      var theme;
+      if (isFinite(idx) && idx >= 0 && idx < themes.length) {
+        theme = String(themes[idx].theme);
+      } else if (String(r['new'] || '').trim()) {
+        theme = String(r['new']).trim();
+        proposals[theme] = (proposals[theme] || 0) + 1;
+      } else {
+        return;
+      }
+      // category は manual のまま残す（生成投稿と区別できなくなるため）
+      themeWrites.push({ row: d._row, value: theme });
+      questionWrites.push({ row: d._row, value: String(r.q || '').slice(0, 200) });
+    });
+    setColumnByRows(SHEET.STOCK, 'theme', themeWrites);
+    setColumnByRows(SHEET.STOCK, 'inferred_question', questionWrites);
+    var writes = themeWrites.length;
+
+    if (!writes) {
+      if (batchSize > 5) { batchSize = Math.floor(batchSize / 2); continue; }
+      logEvent('infer_error', '最小バッチでも判定できませんでした（cursor=' + cursor + '）');
+      break;
+    }
+    processed += writes;
+    cursor += batch.length;
+    logEvent('infer_themes', '進捗 ' + processed + '/' + pendingAll.length + '件（経過' +
+      Math.round((new Date().getTime() - started) / 1000) + '秒）');
+  }
+
+  addProposedThemes(proposals);
+  var remaining = pendingAll.length - processed;
+  if (remaining > 0 && processed > 0) {
+    scheduleInferContinue();
+    return processed + '件を判定しました。残り' + remaining + '件は1分後に自動で続行します。';
+  }
+  if (remaining > 0) {
+    var stuck = 'テーマ逆算が進みませんでした（残り' + remaining + '件）。Logの infer_error を確認してください。';
+    notifySlack(':warning: ' + stuck);
+    return stuck;
+  }
+  notifySlack(':white_check_mark: 手動投稿のテーマ逆算が完了しました（' + processed + '件）。\n' +
+    'reportThemeWeights を実行すると、これらの実測がテーマ重みに反映されます。');
+  return processed + '件を判定しました。完了です。';
+}
+
+/**
+ * 逆算中に提案された新テーマを Themes に追加する。
+ * 1〜2件しか当てはまらない思いつきを増やしても選定が薄まるだけなので、
+ * 一定数以上まとまったものだけを採用する。
+ */
+function addProposedThemes(proposals) {
+  var min = Number(getProp('NEW_THEME_MIN_POSTS', '3'));
+  var existing = {};
+  readTable(SHEET.THEMES).forEach(function (t) { existing[String(t.theme)] = true; });
+  var added = [];
+  Object.keys(proposals).forEach(function (name) {
+    if (existing[name] || proposals[name] < min) return;
+    appendRowObj(SHEET.THEMES, {
+      theme: name, category: 'evergreen', weight: 2, last_used: '',
+      notes: '手動投稿から逆算して追加（' + proposals[name] + '件）',
+      base_weight: 2, perf: '', perf_n: '',
+    });
+    added.push(name + '(' + proposals[name] + '件)');
+  });
+  if (added.length) {
+    logEvent('theme_added', added.join(', '));
+    notifySlack(':new: 過去の投稿から新しいテーマを見つけました: ' + added.join('、'));
+  }
+  return added;
+}
+
+function scheduleInferContinue() {
+  clearInferTrigger();
+  ScriptApp.newTrigger('inferManualPostSources').timeBased().after(60 * 1000).create();
+}
+
+function clearInferTrigger() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'inferManualPostSources') ScriptApp.deleteTrigger(t);
+  });
+}
+
+/**
  * テーマごとの実績を集計する。
  *
  * 成果の見方は手に入る順に落としていく:

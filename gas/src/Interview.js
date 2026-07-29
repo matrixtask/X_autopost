@@ -134,6 +134,30 @@ function wellAnsweredQuestions(limit) {
   return rows.slice(-(limit || 6)).map(function (r) { return '- ' + r.question; });
 }
 
+/**
+ * 実際に伸びた投稿を生んだ質問。
+ *
+ * 過去の手動投稿から逆算した「この投稿を引き出せたであろう質問」のうち、
+ * インプレッションが窓内で上位だったものを手本として渡す。
+ * インタビュー経由でない投稿の実績も、聞き方の学習に使えるようにする。
+ */
+function highPerformingQuestions(limit) {
+  var rows = readTable(SHEET.STOCK).filter(function (r) {
+    return String(r.inferred_question || '').trim() && r.posted_at &&
+      Number(r.impressions || 0) > 0 &&
+      !(String(r.promoted) === 'yes' && r.paid_impressions === '');
+  });
+  if (rows.length < 10) return [];
+  var pct = percentileWithinWindow(rows.map(function (r) {
+    return { t: new Date(String(r.posted_at).replace(' ', 'T') + ':00+09:00').getTime(), v: Number(r.impressions) };
+  }), 30);
+  return rows.map(function (r, i) { return { q: String(r.inferred_question), p: pct[i] }; })
+    .filter(function (x) { return x.p >= 75; })
+    .sort(function (a, b) { return b.p - a.p; })
+    .slice(0, limit || 8)
+    .map(function (x) { return '- ' + x.q + '（窓内順位' + Math.round(x.p) + '点）'; });
+}
+
 function generateInterviewQuestions(themes, headlines, count) {
   var system = [
     'あなたは経営者に毎朝ゆるく話を聞くインタビュアーです。',
@@ -169,6 +193,13 @@ function generateInterviewQuestions(themes, headlines, count) {
     (function () {
       var good = wellAnsweredQuestions(6);
       return good.length ? 'しっかり答えてもらえた質問（この型に寄せる）:\n' + good.join('\n') : '';
+    })(),
+    '',
+    (function () {
+      var top = highPerformingQuestions(8);
+      return top.length
+        ? '過去に実際に伸びた投稿を引き出せたであろう質問（実測ベース。この方向を狙う）:\n' + top.join('\n')
+        : '';
     })(),
     '',
     '合計' + count + '問。各テーマから最低1問。',
