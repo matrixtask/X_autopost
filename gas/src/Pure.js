@@ -217,6 +217,21 @@ function percentileWithinWindow(items, windowDays) {
 }
 
 /**
+ * テーマ名の同一判定キー。
+ *
+ * 逆算やNotion同期でテーマが増えると、鉤括弧の有無や空白だけが違う
+ * 「ほぼ同じテーマ」が並ぶ。別テーマとして扱うと実測がそこで分断され、
+ * どちらも標本不足のまま埋もれる。表記ゆれを潰して同一視する。
+ */
+function normalizeThemeKey(s) {
+  return String(s === null || s === undefined ? '' : s)
+    .normalize('NFKC')            // 全角英数・記号を半角へ
+    .toLowerCase()
+    .replace(/[「」『』（）()"'’”\s]/g, '')
+    .replace(/[、。,.\-–—_/・:：;；!！?？]/g, '');
+}
+
+/**
  * 日付キーの正規化。シートが日付を日時として返す場合があるため
  * （"2026-07-27" が "2026-07-27 00:00" になる）、先頭のyyyy-MM-dd部分だけを取る。
  */
@@ -250,5 +265,5 @@ function pearson(xs, ys) {
 
 // Nodeテスト用（GASでは module は未定義なので無視される）
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { weightedTweetLength: weightedTweetLength, fitsInTweet: fitsInTweet, parseJsonLoose: parseJsonLoose, salvageJson: salvageJson, pickWeighted: pickWeighted, computeNextSlots: computeNextSlots, normalizeSlackTs: normalizeSlackTs, slackTsEqual: slackTsEqual, rawSlackTs: rawSlackTs, pearson: pearson, dateKey: dateKey, percentileWithinWindow: percentileWithinWindow };
+  module.exports = { weightedTweetLength: weightedTweetLength, fitsInTweet: fitsInTweet, parseJsonLoose: parseJsonLoose, salvageJson: salvageJson, pickWeighted: pickWeighted, computeNextSlots: computeNextSlots, normalizeSlackTs: normalizeSlackTs, slackTsEqual: slackTsEqual, rawSlackTs: rawSlackTs, pearson: pearson, dateKey: dateKey, percentileWithinWindow: percentileWithinWindow, normalizeThemeKey: normalizeThemeKey };
 }

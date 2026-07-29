@@ -11,6 +11,23 @@ vm.createContext(context);
 vm.runInContext(code, context);
 const { weightedTweetLength, fitsInTweet, parseJsonLoose, pickWeighted, computeNextSlots, normalizeSlackTs, slackTsEqual, pearson, dateKey } = context.module.exports;
 
+test('normalizeThemeKey: 表記ゆれのテーマを同一視する', () => {
+  const { normalizeThemeKey } = context.module.exports;
+  const a = '空飛ぶクルマの本命は「医療・緊急」だと思う理由';
+  const b = '空飛ぶクルマの本命は医療・緊急だと思う理由';
+  assert.equal(normalizeThemeKey(a), normalizeThemeKey(b)); // 実際に重複していた組
+
+  assert.equal(normalizeThemeKey('移動あるある '), normalizeThemeKey('移動あるある'));
+  assert.equal(normalizeThemeKey('ＡＩと移動'), normalizeThemeKey('AIと移動')); // 全角英字
+  assert.equal(normalizeThemeKey('起業家あるある！'), normalizeThemeKey('起業家あるある'));
+
+  // 中身が違うものまで同一視しない
+  assert.notEqual(normalizeThemeKey('テック・AI関連の時事'),
+    normalizeThemeKey('テック・AIの時事を自分の事業との接点で語る'));
+  assert.equal(normalizeThemeKey(''), '');
+  assert.equal(normalizeThemeKey(null), '');
+});
+
 test('salvageJson: max_tokensで切れた応答から完成分だけ救出する', () => {
   const { salvageJson } = context.module.exports;
 

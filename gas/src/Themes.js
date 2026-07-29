@@ -218,11 +218,14 @@ function inferManualPostSourcesLocked() {
  */
 function addProposedThemes(proposals) {
   var min = Number(getProp('NEW_THEME_MIN_POSTS', '3'));
+  // 表記ゆれ違いの既存テーマを増やさないよう、正規化して突き合わせる
   var existing = {};
-  readTable(SHEET.THEMES).forEach(function (t) { existing[String(t.theme)] = true; });
+  readTable(SHEET.THEMES).forEach(function (t) { existing[normalizeThemeKey(t.theme)] = true; });
   var added = [];
   Object.keys(proposals).forEach(function (name) {
-    if (existing[name] || proposals[name] < min) return;
+    var key = normalizeThemeKey(name);
+    if (existing[key] || proposals[name] < min) return;
+    existing[key] = true; // 同じ実行内での重複も防ぐ
     appendRowObj(SHEET.THEMES, {
       theme: name, category: 'evergreen', weight: 2, last_used: '',
       notes: '手動投稿から逆算して追加（' + proposals[name] + '件）',
@@ -271,9 +274,11 @@ function themePerformance() {
     return { t: new Date(String(r.posted_at).replace(' ', 'T') + ':00+09:00').getTime(), v: Number(r.impressions) };
   }), 30);
 
+  // 表記ゆれで実測が分断されないよう、正規化したキーで集計する
   var byTheme = {};
   measured.forEach(function (r, i) {
-    var key = String(r.theme);
+    var key = normalizeThemeKey(r.theme);
+    if (!key) return;
     if (!byTheme[key]) byTheme[key] = { sum: 0, n: 0 };
     byTheme[key].sum += pct[i];
     byTheme[key].n++;
@@ -293,32 +298,42 @@ function themePerformance() {
 /**
  * 実績からテーマの重みを更新する（週次から呼ばれる。手動実行も可）。
  *
- * base_weight を起点に、実績が平均(50)からどれだけ離れているかで増減する。
+ * base_weight（手で決めた初期値）を起点にするが、**標本が増えるほど
+ * base_weight から離れて中立値へ寄せる**。手の勘をいつまでも起点に
+ * 残すと、証拠が47件あるテーマが証拠2件のテーマより軽い、という
+ * 逆転が起きる（実際に起きた）。
+ *
+ *   s      = n / (n + K)                      証拠の強さ 0〜1
+ *   anchor = base * (1 - s) + 中立値 * s       証拠が増えたら手の勘を捨てる
+ *   w      = anchor * (1 + s * (perf - 50) / span)
+ *
  * 前回の重みに掛け続けると発散するので、必ず base_weight から計算し直す。
- * 標本が少ないテーマは n/(n+K) で効果を薄める。
  */
 function updateThemeWeights() {
   ensureHeaders(SHEET.THEMES);
   var perf = themePerformance();
-  var K = Number(getProp('THEME_SHRINKAGE_K', '5'));
+  var K = Number(getProp('THEME_SHRINKAGE_K', '10'));
   var span = Number(getProp('THEME_WEIGHT_SPAN', '20')); // 平均から何点ずれたら重み2倍か
+  var neutral = Number(getProp('THEME_NEUTRAL_WEIGHT', '2'));
   var rows = readTable(SHEET.THEMES);
   var changes = [];
 
   rows.forEach(function (t) {
     var name = String(t.theme);
+    if (Number(t.weight) === 0) return; // 統合済み・停止テーマは触らない
     // 初回は現在の重みを base_weight として固定する
     var base = Number(t.base_weight);
     if (!isFinite(base) || base <= 0) {
       base = Number(t.weight) || 1;
       updateRowsWhere(SHEET.THEMES, 'theme', name, { base_weight: base });
     }
-    var p = perf.byTheme[name];
+    var p = perf.byTheme[normalizeThemeKey(name)];
     if (!p) return; // 実測が無いテーマは据え置く
 
     var shrink = p.n / (p.n + K);
-    var w = base * (1 + shrink * (p.perf - perf.mean) / span);
-    w = Math.max(0.3, Math.min(base * 3, Math.round(w * 10) / 10));
+    var anchor = base * (1 - shrink) + neutral * shrink;
+    var w = anchor * (1 + shrink * (p.perf - perf.mean) / span);
+    w = Math.max(0.3, Math.min(neutral * 3, Math.round(w * 10) / 10));
     var before = Number(t.weight) || 0;
     updateRowsWhere(SHEET.THEMES, 'theme', name, {
       weight: w,
@@ -332,6 +347,83 @@ function updateThemeWeights() {
 
   logEvent('theme_weights', changes.length + '件を更新');
   return { changes: changes, measured: perf.themeCount };
+}
+
+/**
+ * 表記ゆれで重複したテーマを統合する。
+ *
+ * 「空飛ぶクルマの本命は『医療・緊急』だと思う理由」と
+ * 「空飛ぶクルマの本命は医療・緊急だと思う理由」のように、鉤括弧の
+ * 有無だけが違うテーマが並ぶと、実測がそこで分断される。
+ *
+ * 行は消さない（手で書いたnotesが失われるため）。Stockのtheme列を
+ * 代表名に寄せたうえで、重複側は weight=0 の停止テーマにする。
+ * pickThemesForToday は weight<=0 を選ばないので、これで実質統合される。
+ */
+function mergeDuplicateThemes() {
+  ensureHeaders(SHEET.THEMES);
+  var rows = readTable(SHEET.THEMES);
+  var groups = {};
+  rows.forEach(function (t) {
+    var key = normalizeThemeKey(t.theme);
+    if (!key) return;
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(t);
+  });
+
+  // Stock側の件数を数えて、実測が多い方を代表にする
+  var stock = readTable(SHEET.STOCK);
+  var counts = {};
+  stock.forEach(function (r) {
+    var k = String(r.theme);
+    if (k) counts[k] = (counts[k] || 0) + 1;
+  });
+
+  var merged = [];
+  Object.keys(groups).forEach(function (key) {
+    var g = groups[key];
+    if (g.length < 2) return;
+    g.sort(function (a, b) { return (counts[String(b.theme)] || 0) - (counts[String(a.theme)] || 0); });
+    var keep = String(g[0].theme);
+    var drop = g.slice(1).map(function (t) { return String(t.theme); });
+
+    // Stockのtheme列を代表名に寄せる
+    var writes = [];
+    stock.forEach(function (r) {
+      if (drop.indexOf(String(r.theme)) >= 0) writes.push({ row: r._row, value: keep });
+    });
+    setColumnByRows(SHEET.STOCK, 'theme', writes);
+
+    drop.forEach(function (name) {
+      updateRowsWhere(SHEET.THEMES, 'theme', name, {
+        weight: 0,
+        notes: '「' + keep + '」に統合（表記ゆれ）',
+      });
+    });
+    merged.push({ keep: keep, drop: drop, moved: writes.length });
+  });
+
+  logEvent('theme_merge', merged.length + '組を統合');
+  return merged;
+}
+
+/** 重複テーマの統合結果をSlackに投げる */
+function reportDuplicateThemes() {
+  var merged = mergeDuplicateThemes();
+  if (!merged.length) {
+    var msg = ':broom: 表記ゆれで重複したテーマはありませんでした';
+    notifySlack(msg);
+    return msg;
+  }
+  var lines = [':broom: *重複テーマを統合しました*', ''];
+  merged.forEach(function (m) {
+    lines.push('「' + m.keep + '」← ' + m.drop.map(function (d) { return '「' + d + '」'; }).join('、') +
+      '（ポスト' + m.moved + '件を付け替え）');
+  });
+  lines.push('');
+  lines.push('統合された側は重み0の停止テーマにしてあります。行は残っているので、間違っていれば手で戻せます。');
+  notifySlack(lines.join('\n'));
+  return lines.join('\n');
 }
 
 /** テーマ重みの更新結果をSlackに投げる */
