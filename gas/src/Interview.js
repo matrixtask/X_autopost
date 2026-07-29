@@ -84,6 +84,56 @@ function labelForCategory(cat) {
   return { evergreen: '定番', news: '時事', neta: 'ネタ' }[cat] || cat;
 }
 
+/**
+ * 実測で効いている軸を、質問生成の指示に変換する。
+ *
+ * 採点だけを学習しても、そもそも効かない軸しか引き出せない質問を
+ * していたら点は伸びない。何を聞くかの段階で相関を効かせる。
+ */
+function axisGuidanceForQuestions() {
+  var c = axisCorrelations();
+  var ranked = AXES.map(function (a) {
+    return { label: a.label, desc: a.desc, w: Number(c[a.key]) || 0 };
+  }).sort(function (x, y) { return y.w - x.w; });
+
+  var top = ranked.slice(0, 4).filter(function (x) { return x.w > 0; });
+  var bottom = ranked.slice(-3).filter(function (x) { return x.w < 0; });
+  if (!top.length) return '';
+
+  var lines = ['実測データから、この軸が高いポストほどフォロワー獲得に繋がっています。',
+    'この軸が引き出せる質問を優先してください:'];
+  top.forEach(function (x) { lines.push('- ' + x.label + ': ' + x.desc); });
+  if (bottom.length) {
+    lines.push('');
+    lines.push('逆に、この軸が高いポストは成果が下がっています。' +
+      'これらばかりを引き出す質問（当たり障りのない共感狙い等）に寄せないこと:');
+    bottom.forEach(function (x) { lines.push('- ' + x.label); });
+  }
+  return lines.join('\n');
+}
+
+/**
+ * 答えにくかった質問を集める。スキップされたもの、および回答が極端に短い
+ * もの（＝聞かれても書くことが無かった質問）を、避けるべき型として渡す。
+ */
+function hardToAnswerQuestions(limit) {
+  var rows = readTable(SHEET.INTERVIEWS).filter(function (r) {
+    if (!String(r.question).trim()) return false;
+    if (String(r.answered_at) === 'skipped') return true;
+    var a = String(r.answer || '').trim();
+    return a.length > 0 && a.length < 15;
+  });
+  return rows.slice(-(limit || 10)).map(function (r) { return '- ' + r.question; });
+}
+
+/** よく答えられた質問（長く具体的に答えたもの）を、良い型として渡す */
+function wellAnsweredQuestions(limit) {
+  var rows = readTable(SHEET.INTERVIEWS).filter(function (r) {
+    return String(r.answered_at) !== 'skipped' && String(r.answer || '').trim().length >= 60;
+  });
+  return rows.slice(-(limit || 6)).map(function (r) { return '- ' + r.question; });
+}
+
 function generateInterviewQuestions(themes, headlines, count) {
   var system = [
     'あなたは経営者に毎朝ゆるく話を聞くインタビュアーです。',
@@ -92,8 +142,11 @@ function generateInterviewQuestions(themes, headlines, count) {
     '- 1問1トピック、話し言葉で短く（40字以内目安）',
     '- 「はい/いいえ」で終わらない、具体的なエピソードや本音が出る聞き方',
     '- 固有名詞・数字・「今日/最近あったこと」が答えに出てくる聞き方を最優先。抽象的な回想・ビジョン語りを誘う質問（「当時の自分に何て言う？」等）は避ける',
+    '- 【最重要】相手がその場で思い出せることだけを聞く。調べないと答えられない質問、考え込まないと答えが出ない質問は、答えてもらえないので価値がゼロ',
     '- 時事テーマにはニュース見出しを1つ選んで絡める。大企業の既出ニュースの繰り返しより、国際ニュースや小さなスタートアップの「まだ知られていない話」を優先する',
     '- ネタテーマはゆるく、笑える話や人間味が出る話を引き出す',
+    '',
+    axisGuidanceForQuestions(),
   ].join('\n');
   // 直近に聞いた時事質問を出し、同じ話題の連発（例: トヨタ3連発）を防ぐ
   var recentNewsQs = readTable(SHEET.INTERVIEWS)
@@ -107,6 +160,16 @@ function generateInterviewQuestions(themes, headlines, count) {
     headlines.length ? '今日のニュース見出し（英語見出しは日本語で聞いてよい）:\n' + headlines.map(function (h) { return '- ' + h; }).join('\n') : '',
     '',
     recentNewsQs.length ? '最近すでに聞いた時事質問（同じ話題・同じ企業の質問は禁止）:\n' + recentNewsQs.join('\n') : '',
+    '',
+    (function () {
+      var hard = hardToAnswerQuestions(10);
+      return hard.length ? '実際にスキップされた・ほとんど答えてもらえなかった質問（この型は避ける）:\n' + hard.join('\n') : '';
+    })(),
+    '',
+    (function () {
+      var good = wellAnsweredQuestions(6);
+      return good.length ? 'しっかり答えてもらえた質問（この型に寄せる）:\n' + good.join('\n') : '';
+    })(),
     '',
     '合計' + count + '問。各テーマから最低1問。',
     'JSON配列で出力: [{"theme": "...", "category": "evergreen|news|neta", "question": "..."}]',
