@@ -150,6 +150,7 @@ function inferManualPostSourcesLocked() {
       results = askClaudeJsonSalvageable(system, user, 8000);
     } catch (e) {
       logEvent('infer_error', String(e).slice(0, 300));
+      if (isFatalError(e)) break; // 残高切れ等。バッチを縮めても直らない
     }
     if (!Array.isArray(results)) {
       if (batchSize > 5) { batchSize = Math.floor(batchSize / 2); continue; }
