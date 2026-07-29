@@ -673,4 +673,11 @@ function weeklyMetricsReport() {
   } catch (e) {
     logEvent('axis_analysis_error', String(e));
   }
+  // テーマの重みも実績で更新する（採点だけ学習しても、聞くテーマが
+  // 変わらなければ同じような下書きしか出てこないため）
+  try {
+    reportThemeWeights();
+  } catch (e) {
+    logEvent('theme_weight_error', String(e));
+  }
 }

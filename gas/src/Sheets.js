@@ -5,7 +5,9 @@
 var SHEET_HEADERS = {
   Stock: ['id', 'created_at', 'theme', 'category', 'session_id', 'text', 'score', 'score_reason', 'status', 'scheduled_at', 'posted_at', 'tweet_id', 'notion_page_id', 'impressions', 'likes', 'retweets', 'replies', 'metrics_at', 'refines', 'promoted', 'paid_impressions', 'profile_clicks', 'link_clicks', 'axes'],
   Interviews: ['session_id', 'thread_ts', 'idx', 'theme', 'category', 'question', 'answer', 'answered_at', 'status'],
-  Themes: ['theme', 'category', 'weight', 'last_used', 'notes'],
+  // weight は実績から自動更新される。base_weight は手で決めた初期値で、
+  // 学習はここを起点に増減させる（前回の結果に掛け続けて発散しないようにするため）
+  Themes: ['theme', 'category', 'weight', 'last_used', 'notes', 'base_weight', 'perf', 'perf_n'],
   Voice: ['text', 'note'],
   Log: ['timestamp', 'event', 'detail'],
   Memory: ['created_at', 'note', 'source', 'status'],
