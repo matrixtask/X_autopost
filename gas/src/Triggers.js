@@ -6,9 +6,10 @@
  *   毎晩 21時台  nightlyGateAndSchedule … 採点 → 予約 → Slack通知
  *   毎時        postTick             … 予約時刻を過ぎたものを投稿
  *   毎週月 9時台 weeklyDigest         … ストック残量と先週の実績を通知
+ *   毎週月 10時台 weeklyThemeMaintenance … メモの書き直しとスタメン入れ替え
  */
 
-var TRIGGER_FUNCS = ['startDailyInterview', 'nightlyGateAndSchedule', 'postTick', 'weeklyDigest', 'weeklyMetricsReport', 'dailyFollowerSnapshot'];
+var TRIGGER_FUNCS = ['startDailyInterview', 'nightlyGateAndSchedule', 'postTick', 'weeklyDigest', 'weeklyMetricsReport', 'dailyFollowerSnapshot', 'weeklyThemeMaintenance'];
 
 function installTriggers() {
   deleteManagedTriggers();
@@ -18,6 +19,8 @@ function installTriggers() {
   ScriptApp.newTrigger('weeklyDigest').timeBased().onWeekDay(ScriptApp.WeekDay.MONDAY).atHour(9).create();
   ScriptApp.newTrigger('weeklyMetricsReport').timeBased().onWeekDay(ScriptApp.WeekDay.MONDAY).atHour(8).create();
   ScriptApp.newTrigger('dailyFollowerSnapshot').timeBased().atHour(23).everyDays(1).create();
+  // メトリクス更新(8時台)のあとに回す。実測が反映された状態で順位を確定させたいため
+  ScriptApp.newTrigger('weeklyThemeMaintenance').timeBased().onWeekDay(ScriptApp.WeekDay.MONDAY).atHour(10).create();
   logEvent('triggers', 'トリガーを登録しました');
   return 'OK';
 }
