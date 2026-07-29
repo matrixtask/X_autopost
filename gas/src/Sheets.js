@@ -8,7 +8,9 @@ var SHEET_HEADERS = {
   Interviews: ['session_id', 'thread_ts', 'idx', 'theme', 'category', 'question', 'answer', 'answered_at', 'status'],
   // weight は実績から自動更新される。base_weight は手で決めた初期値で、
   // 学習はここを起点に増減させる（前回の結果に掛け続けて発散しないようにするため）
-  Themes: ['theme', 'category', 'weight', 'last_used', 'notes', 'base_weight', 'perf', 'perf_n'],
+  // roster: スタメン100件の枠。core（実績上位）/ adjacent（上位の隣接）/
+  //         random（無作為）/ trend（時事）。空欄はベンチ（選定対象外）
+  Themes: ['theme', 'category', 'weight', 'last_used', 'notes', 'base_weight', 'perf', 'perf_n', 'roster', 'drafted_at'],
   Voice: ['text', 'note'],
   Log: ['timestamp', 'event', 'detail'],
   Memory: ['created_at', 'note', 'source', 'status'],

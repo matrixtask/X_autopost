@@ -680,4 +680,6 @@ function weeklyMetricsReport() {
   } catch (e) {
     logEvent('theme_weight_error', String(e));
   }
+  // メモの書き直しとスタメン入れ替えは weeklyThemeMaintenance が別枠でやる。
+  // どちらもLLMを何度も呼ぶので、ここに足すと6分の実行上限に当たる
 }
