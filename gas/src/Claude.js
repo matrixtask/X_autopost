@@ -2,6 +2,30 @@
  * Claude.js — Claude API クライアント
  */
 
+/**
+ * リトライしても直らないエラーの目印。
+ * 残高切れやAPIキー不正で、2回投げ直したりバッチを半分にして粘ったりしても
+ * 全部無駄になる。この文字列を含むエラーは即座に諦める。
+ */
+var CLAUDE_FATAL = 'Claude API 停止中';
+
+function isFatalClaudeError(body) {
+  var s = String(body || '');
+  return /credit balance|billing|authentication_error|invalid x-api-key|permission_error/i.test(s);
+}
+
+function extractClaudeMessage(body) {
+  try {
+    var j = JSON.parse(body);
+    if (j && j.error && j.error.message) return String(j.error.message);
+  } catch (e) { /* JSONでなければそのまま返す */ }
+  return String(body || '').slice(0, 200);
+}
+
+function isFatalError(e) {
+  return String(e && e.message ? e.message : e).indexOf(CLAUDE_FATAL) >= 0;
+}
+
 function askClaude(systemPrompt, userPrompt, maxTokens) {
   var apiKey = requireProp('ANTHROPIC_API_KEY');
   var model = getProp('CLAUDE_MODEL', 'claude-sonnet-5');
@@ -24,6 +48,11 @@ function askClaude(systemPrompt, userPrompt, maxTokens) {
   var body = res.getContentText();
   if (code >= 300) {
     logEvent('claude_error', code + ': ' + body.slice(0, 500));
+    // 残高切れ・APIキー不正はリトライしても直らない。呼び出し側が
+    // すぐ諦められるよう、目印を付けて区別できるようにする
+    if (isFatalClaudeError(body)) {
+      throw new Error(CLAUDE_FATAL + ': ' + extractClaudeMessage(body));
+    }
     throw new Error('Claude API error ' + code + ': ' + body.slice(0, 200));
   }
   var json = JSON.parse(body);
@@ -73,7 +102,8 @@ function askClaudeJsonSalvageable(systemPrompt, userPrompt, maxTokens) {
     try {
       text = askClaude(systemPrompt, userPrompt + '\n\n出力はJSONのみ。前置きや説明は書かない。', maxTokens);
     } catch (e) {
-      lastErr = e; // 空応答・APIエラー。もう一度だけ投げ直す
+      if (isFatalError(e)) throw e; // 残高切れ等は投げ直しても無駄
+      lastErr = e; // 空応答・一時的なAPIエラー。もう一度だけ投げ直す
       continue;
     }
     var partial = salvageJson(text); // 切れていなければ全部返る

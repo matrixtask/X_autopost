@@ -82,6 +82,7 @@ function runQualityGate() {
     } catch (e) {
       // 一部が採点できなくても、採点できた分は反映して先へ進む
       logEvent('quality_gate_error', String(e).slice(0, 300));
+      if (isFatalError(e)) throw e; // 残高切れ等は残りを投げても無駄
       continue;
     }
     if (!Array.isArray(results)) continue;
@@ -191,11 +192,14 @@ function backfillAxisScoresLocked() {
     ].join('\n');
 
     var results = null;
+    var fatal = false;
     try {
       results = askClaudeJsonSalvageable(system, user, 8000);
     } catch (e) {
       logEvent('backfill_error', 'batch=' + batchSize + ' ' + String(e).slice(0, 300));
+      fatal = isFatalError(e);
     }
+    if (fatal) break; // 残高切れ等。バッチを縮めても直らない
 
     // 指示に反して [{"id": ..., "axes": ...}] 形式で返ってきた場合も拾う
     if (Array.isArray(results)) {
