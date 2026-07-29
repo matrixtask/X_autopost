@@ -217,6 +217,74 @@ function percentileWithinWindow(items, windowDays) {
 }
 
 /**
+ * 見出しから「Googleニュースが付ける ' - 媒体名' の接尾辞」を外す。
+ */
+function stripHeadlineSource(title) {
+  var s = String(title === null || title === undefined ? '' : title).trim();
+  var m = s.match(/^(.*)\s[-–—]\s[^-–—]{2,40}$/);
+  return m ? m[1].trim() : s;
+}
+
+/**
+ * 見出しを話題ごとにまとめる。
+ *
+ * 同じ出来事が複数の媒体で報じられているほど、話題として大きい＝
+ * 読まれやすい、という前提で「何媒体が扱っているか」を人気の代理指標にする。
+ * 実際のインプレッションはRSSからは分からないので、これが得られる最善の近似。
+ *
+ * 見出しは媒体ごとに言い回しが違うため、完全一致ではなく語の重なり
+ * （Jaccard係数）でまとめる。
+ *
+ * @param {Array} items [{title, ...}]
+ * @param {number} threshold 同一話題とみなす重なり（既定0.45）
+ * @returns {Array} [{...先頭の要素, dup: 何件まとまったか, variants: [見出し...]}]
+ */
+function clusterHeadlines(items, threshold) {
+  var th = threshold === undefined ? 0.45 : threshold;
+  function tokens(t) {
+    var s = stripHeadlineSource(t).toLowerCase()
+      .replace(/[「」『』（）()【】\[\]"'’”,.、。:：;；!！?？|/\\-]/g, ' ');
+    // 英語は単語、日本語は2文字の連なり（bi-gram）で見る
+    var out = {};
+    s.split(/\s+/).filter(Boolean).forEach(function (w) {
+      if (/^[a-z0-9]+$/.test(w)) { if (w.length > 2) out[w] = true; return; }
+      for (var i = 0; i + 1 < w.length; i++) out[w.slice(i, i + 2)] = true;
+    });
+    return Object.keys(out);
+  }
+  function jaccard(a, b) {
+    if (!a.length || !b.length) return 0;
+    var set = {};
+    a.forEach(function (x) { set[x] = true; });
+    var inter = 0;
+    b.forEach(function (x) { if (set[x]) inter++; });
+    return inter / (a.length + b.length - inter);
+  }
+
+  var clusters = [];
+  items.forEach(function (it) {
+    var tk = tokens(it.title);
+    for (var i = 0; i < clusters.length; i++) {
+      if (jaccard(clusters[i].tokens, tk) >= th) {
+        clusters[i].dup++;
+        clusters[i].variants.push(it.title);
+        return;
+      }
+    }
+    var c = {};
+    Object.keys(it).forEach(function (k) { c[k] = it[k]; });
+    c.tokens = tk;
+    c.dup = 1;
+    c.variants = [it.title];
+    clusters.push(c);
+  });
+  return clusters.map(function (c) {
+    delete c.tokens;
+    return c;
+  });
+}
+
+/**
  * テーマ名の同一判定キー。
  *
  * 逆算やNotion同期でテーマが増えると、鉤括弧の有無や空白だけが違う
@@ -265,5 +333,5 @@ function pearson(xs, ys) {
 
 // Nodeテスト用（GASでは module は未定義なので無視される）
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { weightedTweetLength: weightedTweetLength, fitsInTweet: fitsInTweet, parseJsonLoose: parseJsonLoose, salvageJson: salvageJson, pickWeighted: pickWeighted, computeNextSlots: computeNextSlots, normalizeSlackTs: normalizeSlackTs, slackTsEqual: slackTsEqual, rawSlackTs: rawSlackTs, pearson: pearson, dateKey: dateKey, percentileWithinWindow: percentileWithinWindow, normalizeThemeKey: normalizeThemeKey };
+  module.exports = { weightedTweetLength: weightedTweetLength, fitsInTweet: fitsInTweet, parseJsonLoose: parseJsonLoose, salvageJson: salvageJson, pickWeighted: pickWeighted, computeNextSlots: computeNextSlots, normalizeSlackTs: normalizeSlackTs, slackTsEqual: slackTsEqual, rawSlackTs: rawSlackTs, pearson: pearson, dateKey: dateKey, percentileWithinWindow: percentileWithinWindow, normalizeThemeKey: normalizeThemeKey, clusterHeadlines: clusterHeadlines, stripHeadlineSource: stripHeadlineSource };
 }

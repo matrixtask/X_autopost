@@ -11,6 +11,32 @@ vm.createContext(context);
 vm.runInContext(code, context);
 const { weightedTweetLength, fitsInTweet, parseJsonLoose, pickWeighted, computeNextSlots, normalizeSlackTs, slackTsEqual, pearson, dateKey } = context.module.exports;
 
+test('clusterHeadlines: 同じ出来事を媒体をまたいでまとめる', () => {
+  const { clusterHeadlines, stripHeadlineSource } = context.module.exports;
+
+  assert.equal(stripHeadlineSource('トヨタが新型EVを発表 - 日経新聞'), 'トヨタが新型EVを発表');
+  assert.equal(stripHeadlineSource('見出しだけ'), '見出しだけ');
+
+  const items = [
+    { title: 'トヨタが新型EVを発表、航続距離は800km - 日経新聞', area: 'モビリティ' },
+    { title: 'トヨタ、新型EVを発表 航続距離800kmへ - Reuters' },   // 同じ話題
+    { title: 'Waymoがロボタクシーを5都市に拡大 - The Verge' },      // 別の話題
+  ];
+  const c = clusterHeadlines(items);
+  assert.equal(c.length, 2);
+  assert.equal(c[0].dup, 2);        // トヨタの件は2媒体
+  assert.equal(c[0].area, 'モビリティ'); // 先頭の要素の情報を引き継ぐ
+  assert.equal(c[1].dup, 1);
+
+  // 話題が違えばまとめない
+  assert.equal(clusterHeadlines([
+    { title: 'AI半導体の輸出規制が強化される' },
+    { title: '南極の氷が過去最少を記録' },
+  ]).length, 2);
+
+  assert.deepEqual(clusterHeadlines([]), []);
+});
+
 test('normalizeThemeKey: 表記ゆれのテーマを同一視する', () => {
   const { normalizeThemeKey } = context.module.exports;
   const a = '空飛ぶクルマの本命は「医療・緊急」だと思う理由';

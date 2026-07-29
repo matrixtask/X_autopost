@@ -499,11 +499,12 @@ function rotateThemeRoster() {
   rows.forEach(function (t) { taken[normalizeThemeKey(t.theme)] = true; });
   var added = { adjacent: [], random: [], trend: [] };
 
-  // A. 上位に似ているが同一ではないテーマ
-  var topNames = core.slice(0, 15).map(function (t) { return String(t.theme); });
+  // A. 上位に隣接するテーマ。テーマ名だけ渡すと言い換えしか出てこないので、
+  //    実際によく読まれた本文と、それを引き出せたであろう質問を渡す
   added.adjacent = draftThemes('adjacent', sizes.adjacent, {
-    top: topNames,
-    notes: core.slice(0, 15).map(function (t) { return String(t.notes || ''); }),
+    samples: topPostSamples(12),
+    questions: highPerformingQuestions(8).map(function (q) { return q.replace(/^-\s*/, ''); }),
+    existing: core.slice(0, 25).map(function (t) { return String(t.theme); }),
   }, taken, today);
 
   // B. 無作為。まずベンチに眠っているテーマから引き、足りなければ新規に作る
@@ -522,13 +523,13 @@ function rotateThemeRoster() {
   }
 
   // C. 時事・トレンド。実際の見出しから具体的なテーマに落とす
-  var headlines = [];
+  var news = [];
   try {
-    headlines = fetchNewsHeadlines(20);
+    news = fetchNewsItems(30, 3); // 直近3日、話題の大きい順
   } catch (e) {
     logEvent('roster_error', 'ニュース取得に失敗: ' + String(e).slice(0, 200));
   }
-  added.trend = draftThemes('trend', sizes.trend, { headlines: headlines }, taken, today);
+  added.trend = draftThemes('trend', sizes.trend, { news: news }, taken, today);
 
   var summary = {
     core: core.length, adjacent: added.adjacent.length,
@@ -536,6 +537,22 @@ function rotateThemeRoster() {
   };
   logEvent('roster_rotate', JSON.stringify(summary));
   return { summary: summary, added: added, core: core.map(function (t) { return String(t.theme); }) };
+}
+
+/** 実測で上位だった投稿の本文を拾う（隣接テーマ生成の材料） */
+function topPostSamples(limit) {
+  var rows = readTable(SHEET.STOCK).filter(function (r) {
+    return String(r.text).trim() && r.posted_at && Number(r.impressions || 0) > 0 &&
+      !(String(r.promoted) === 'yes' && r.paid_impressions === '');
+  });
+  if (rows.length < 5) return [];
+  var pct = percentileWithinWindow(rows.map(function (r) {
+    return { t: new Date(String(r.posted_at).replace(' ', 'T') + ':00+09:00').getTime(), v: Number(r.impressions) };
+  }), 30);
+  return rows.map(function (r, i) { return { text: String(r.text), p: pct[i] }; })
+    .sort(function (a, b) { return b.p - a.p; })
+    .slice(0, limit || 12)
+    .map(function (x) { return x.text.replace(/\n/g, ' ').slice(0, 140); });
 }
 
 /** 配列をその場でシャッフルする（Fisher-Yates） */
@@ -555,12 +572,29 @@ function draftThemes(kind, count, ctx, taken, today) {
   if (count <= 0) return [];
   var prompts = {
     adjacent: [
-      '以下は、実測でよく読まれているテーマです。',
-      (ctx.top || []).map(function (t, i) { return '- ' + t + (ctx.notes && ctx.notes[i] ? '（' + ctx.notes[i] + '）' : ''); }).join('\n'),
+      '以下は、この人が実際に投稿して**よく読まれた**ポストです。',
+      (ctx.samples || []).map(function (s) { return '- ' + s; }).join('\n'),
       '',
-      'これらに**隣接するが同一ではない**テーマを' + count + '件作ってください。',
-      '- 言い換えや細分化ではなく、切り口・場面・登場人物を変えたもの',
-      '- 上のテーマをそのまま繰り返すものは不可',
+      (ctx.questions && ctx.questions.length
+        ? 'これらを引き出せたであろう質問:\n' + ctx.questions.map(function (q) { return '- ' + q; }).join('\n') + '\n'
+        : ''),
+      'すでにあるテーマ（**これらの言い換えは作らない**）:',
+      (ctx.existing || []).map(function (t) { return '- ' + t; }).join('\n'),
+      '',
+      '上のポストと**同じ人が語れるが、まだテーマになっていない話**を' + count + '件作ってください。',
+      '',
+      '**必須条件**',
+      '- その人が実際に経験していそうなことに限る。' +
+        '経験していないと答えられないテーマ（「◯◯業界の未来予測」等）は不可',
+      '- 具体的な場面・人物・数字が1つは浮かぶこと。' +
+        '浮かばないなら抽象的すぎるので作り直す',
+      '- 上のテーマ一覧の言い換え・細分化・上位下位は不可。' +
+        '**切り口そのものを変える**（例: 技術の話 → その技術を選んだときに揉めた話）',
+      '',
+      '**面白くする方向**',
+      '- 説明ではなく、事件・揉め事・勘違い・思わぬ副作用を聞くテーマにする',
+      '- 立場が出るもの、意見が割れるものを優先する。誰も反論しない話は伸びない',
+      '- 舞台裏（意思決定の内側・断った話・迷った話）は実測でいちばん効いている',
     ].join('\n'),
     random: [
       'テーマを' + count + '件、**実績や過去の傾向とは無関係に**作ってください。',
@@ -569,14 +603,27 @@ function draftThemes(kind, count, ctx, taken, today) {
       '- まだ試していない切り口を狙う。当たるかどうかは考えなくてよい',
     ].join('\n'),
     trend: [
-      (ctx.headlines && ctx.headlines.length
-        ? '今日のニュース見出し:\n' + ctx.headlines.map(function (h) { return '- ' + h; }).join('\n')
-        : '（見出しは取得できませんでした。一般的な時事の切り口で構いません）'),
+      (ctx.news && ctx.news.length
+        ? '直近3日のニュース見出し（「◯媒体が報道」が多いほど話題として大きい）:\n' +
+          ctx.news.map(formatNewsItem).join('\n')
+        : '（見出しを取得できませんでした。一般的な時事の切り口で構いません）'),
       '',
       '時事・トレンドのテーマを' + count + '件作ってください。',
-      '- 見出しの受け売りではなく、当事者として語れる角度に落とす',
-      '- 大企業の既出ニュースより、国際ニュースや小さなスタートアップの話を優先',
-      '- 1週間で鮮度が切れて構わない。具体的であるほどよい',
+      '',
+      '**選び方（ここがいちばん大事）**',
+      '- 上の見出しから、いま実際に読まれている／これから読まれそうな話題を選ぶ。' +
+        '複数媒体が扱っている話題を優先する',
+      '- 対象領域は**テクノロジーとモビリティ全般**。AI・半導体・ロボット・宇宙・EV・自動運転・鉄道・物流など',
+      '- **空飛ぶクルマ/eVTOL のテーマは' + Math.max(1, Math.round(count * 0.15)) + '件まで**。' +
+        'それ以上は作らない。自社領域の話ばかりだと、時事枠が事業紹介の言い換えになってしまう',
+      '- 見出しに無い一般論（「AIの未来について」等）は作らない。特定の出来事に紐づける',
+      '- 自治体の広報・キャンペーン告知・定例発表・株価の値動きは飛ばす。' +
+        '読んだ人が「知らなかった」と思う出来事を選ぶ',
+      '',
+      '**書き方**',
+      '- 見出しの受け売りではなく、この経営者が当事者として一言持てる角度に落とす',
+      '- 「◯◯社が××した件、現場から見るとどう見えるか」のように、出来事＋自分の視点をセットにする',
+      '- 1週間で鮮度が切れて構わない。むしろ具体的で鮮度が高いほどよい',
     ].join('\n'),
   };
 
