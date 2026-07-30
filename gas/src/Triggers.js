@@ -9,7 +9,7 @@
  *   毎週月 10時台 weeklyThemeMaintenance … メモの書き直しとスタメン入れ替え
  */
 
-var TRIGGER_FUNCS = ['startDailyInterview', 'nightlyGateAndSchedule', 'postTick', 'weeklyDigest', 'weeklyMetricsReport', 'dailyFollowerSnapshot', 'weeklyThemeMaintenance'];
+var TRIGGER_FUNCS = ['startDailyInterview', 'nightlyGateAndSchedule', 'postTick', 'weeklyDigest', 'weeklyMetricsReport', 'dailyFollowerSnapshot', 'weeklyThemeMaintenance', 'retryDailyInterview'];
 
 function installTriggers() {
   deleteManagedTriggers();

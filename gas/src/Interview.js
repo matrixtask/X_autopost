@@ -31,7 +31,42 @@ function startDailyInterview() {
   } catch (e) {
     logEvent('themes_sync_error', String(e));
   }
-  startInterviewSession('iv', ':microphone: 今日のインタビュー');
+  // 失敗しても黙って終わると「今日は届かなかった」としか分からない。
+  // 何が起きたかをSlackに出したうえで、5分後にもう一度だけ試す
+  try {
+    startInterviewSession('iv', ':microphone: 今日のインタビュー');
+    clearInterviewRetry();
+  } catch (e) {
+    logEvent('interview_error', String(e).slice(0, 400));
+    var again = !hasInterviewRetry();
+    notifySlack(':warning: 今日のインタビューを作れませんでした: ' + String(e).slice(0, 250) +
+      (again ? '\n5分後にもう一度試します。' : '\n再試行も失敗しました。チャンネルに「インタビュー」と書けば手動で開始できます。'));
+    if (again) ScriptApp.newTrigger('retryDailyInterview').timeBased().after(5 * 60 * 1000).create();
+  }
+}
+
+/** 朝のインタビューが失敗したときの1回だけの再試行 */
+function retryDailyInterview() {
+  clearInterviewRetry();
+  try {
+    startInterviewSession('iv', ':microphone: 今日のインタビュー（再試行）');
+  } catch (e) {
+    logEvent('interview_error', '再試行も失敗: ' + String(e).slice(0, 400));
+    notifySlack(':warning: 再試行も失敗しました: ' + String(e).slice(0, 250) +
+      '\nチャンネルに「インタビュー」と書けば手動で開始できます。');
+  }
+}
+
+function hasInterviewRetry() {
+  return ScriptApp.getProjectTriggers().some(function (t) {
+    return t.getHandlerFunction() === 'retryDailyInterview';
+  });
+}
+
+function clearInterviewRetry() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'retryDailyInterview') ScriptApp.deleteTrigger(t);
+  });
 }
 
 /**
@@ -205,7 +240,10 @@ function generateInterviewQuestions(themes, headlines, count) {
     '合計' + count + '問。各テーマから最低1問。',
     'JSON配列で出力: [{"theme": "...", "category": "evergreen|news|neta", "question": "..."}]',
   ].join('\n');
-  var questions = askClaudeJson(system, user, 1500);
+  // 質問4問なら本文は500トークンもあれば足りるが、モデルが思考ブロックに
+  // 枠を使うため、それを見込んで広めに取る（1500だと思考だけで枠を使い切り、
+  // 本文が0文字になって朝のインタビューが飛んだ）
+  var questions = askClaudeJson(system, user, 6000);
   if (!Array.isArray(questions) || !questions.length) throw new Error('質問生成に失敗しました');
   return questions.slice(0, count);
 }
