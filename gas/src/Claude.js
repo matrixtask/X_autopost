@@ -9,6 +9,18 @@
  */
 var CLAUDE_FATAL = 'Claude API 停止中';
 
+/**
+ * max_tokens で打ち切られたことを示す目印。
+ * モデルが thinking ブロックだけを返して本文が0文字になることがある
+ * （実例: 入力2702トークン / max_tokens=1500 で blocks=thinking のみ）。
+ * この場合は枠を広げて投げ直せば通るので、諦めずに再試行する。
+ */
+var CLAUDE_TRUNCATED = '[出力枠が足りません]';
+
+function isTruncatedError(e) {
+  return String(e && e.message ? e.message : e).indexOf(CLAUDE_TRUNCATED) >= 0;
+}
+
 function isFatalClaudeError(body) {
   var s = String(body || '');
   return /credit balance|billing|authentication_error|invalid x-api-key|permission_error/i.test(s);
@@ -70,7 +82,8 @@ function askClaude(systemPrompt, userPrompt, maxTokens) {
       ' usage=' + JSON.stringify(json.usage || {}) +
       ' max_tokens=' + (maxTokens || 2000);
     logEvent('claude_empty', detail);
-    throw new Error('Claudeが空の応答を返しました: ' + detail);
+    throw new Error((json.stop_reason === 'max_tokens' ? CLAUDE_TRUNCATED + ' ' : '') +
+      'Claudeが空の応答を返しました: ' + detail);
   }
   if (json.stop_reason === 'max_tokens') {
     logEvent('claude_truncated', 'max_tokens=' + (maxTokens || 2000) + 'で打ち切られました。usage=' + JSON.stringify(json.usage || {}));
@@ -78,16 +91,41 @@ function askClaude(systemPrompt, userPrompt, maxTokens) {
   return text;
 }
 
-/** JSONを返させる呼び出し。パース失敗時は1回だけリトライ */
+/** 出力枠を広げて投げ直すときの倍率と上限 */
+var TOKEN_ESCALATION = 3;
+var TOKEN_CEILING = 16000;
+
+/**
+ * JSONを返させる呼び出し。失敗時は**出力枠を3倍にして**1回だけ投げ直す。
+ *
+ * 同じ枠で投げ直しても、枠が足りていないケースでは何度やっても同じ結果になる。
+ * JSONのパース失敗はほとんどが途中で切れたことによるものなので、
+ * 空応答・打ち切り・パース失敗のいずれでも枠を広げて再挑戦する。
+ */
 function askClaudeJson(systemPrompt, userPrompt, maxTokens) {
+  var budget = maxTokens || 2000;
+  var lastErr = null;
   for (var attempt = 0; attempt < 2; attempt++) {
-    var text = askClaude(systemPrompt, userPrompt + '\n\n出力はJSONのみ。前置きや説明は書かない。', maxTokens);
+    var text = null;
     try {
-      return parseJsonLoose(text);
+      text = askClaude(systemPrompt, userPrompt + '\n\n出力はJSONのみ。前置きや説明は書かない。', budget);
     } catch (e) {
-      if (attempt === 1) throw new Error('ClaudeのJSONパースに失敗（応答' + text.length + '文字）: ' + text.slice(0, 300));
+      if (isFatalError(e)) throw e; // 残高切れ等は投げ直しても無駄
+      lastErr = e;
+    }
+    if (text !== null) {
+      try {
+        return parseJsonLoose(text);
+      } catch (e2) {
+        lastErr = new Error('ClaudeのJSONパースに失敗（応答' + text.length + '文字）: ' + text.slice(0, 300));
+      }
+    }
+    if (attempt === 0 && budget < TOKEN_CEILING) {
+      budget = Math.min(budget * TOKEN_ESCALATION, TOKEN_CEILING);
+      logEvent('claude_retry', '出力枠を' + budget + 'に広げて再試行します');
     }
   }
+  throw lastErr;
 }
 
 /**
@@ -97,13 +135,18 @@ function askClaudeJson(systemPrompt, userPrompt, maxTokens) {
  */
 function askClaudeJsonSalvageable(systemPrompt, userPrompt, maxTokens) {
   var lastErr = null;
+  var budget = maxTokens || 2000;
   for (var attempt = 0; attempt < 2; attempt++) {
     var text;
+    if (attempt > 0 && budget < TOKEN_CEILING) {
+      budget = Math.min(budget * TOKEN_ESCALATION, TOKEN_CEILING);
+      logEvent('claude_retry', '出力枠を' + budget + 'に広げて再試行します');
+    }
     try {
-      text = askClaude(systemPrompt, userPrompt + '\n\n出力はJSONのみ。前置きや説明は書かない。', maxTokens);
+      text = askClaude(systemPrompt, userPrompt + '\n\n出力はJSONのみ。前置きや説明は書かない。', budget);
     } catch (e) {
       if (isFatalError(e)) throw e; // 残高切れ等は投げ直しても無駄
-      lastErr = e; // 空応答・一時的なAPIエラー。もう一度だけ投げ直す
+      lastErr = e; // 空応答・一時的なAPIエラー。枠を広げてもう一度だけ投げ直す
       continue;
     }
     var partial = salvageJson(text); // 切れていなければ全部返る
