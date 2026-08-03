@@ -121,20 +121,46 @@ function doPost(e) {
       if (cache.get('ev_' + eventId)) return ContentService.createTextOutput('dup');
       cache.put('ev_' + eventId, '1', 3600);
     }
+    // 画像を添付すると subtype は file_share になる。これを弾いていたため、
+    // 画像つきの返信が丸ごと無視されてインタビューが進まなくなっていた。
+    // thread_broadcast（スレッド返信をチャンネルにも流す）も本文は同じ扱いでよい
+    var ACCEPTED_SUBTYPES = ['', 'file_share', 'thread_broadcast'];
     if (
       event.type === 'message' &&
       !event.bot_id &&
-      !event.subtype &&
+      ACCEPTED_SUBTYPES.indexOf(String(event.subtype || '')) >= 0 &&
       String(event.channel).trim() === String(getProp('SLACK_CHANNEL_ID') || '').trim()
     ) {
       try {
-        if (event.thread_ts) {
-          var handled = handleInterviewReply(event.thread_ts, event.text);
+        // Slackの独自記法（<url|表示名> 等）を素の文へ戻してから渡す
+        var text = normalizeSlackText(event.text);
+        var files = event.files || [];
+
+        // 添付画像はClaudeに読ませて、回答テキストに事実として追記する。
+        // 以降の下書き生成・採点は文章として扱えるので手を入れなくてよい
+        if (files.length) {
+          var desc = describeSlackImages(files, text);
+          if (desc) {
+            text = (text ? text + '\n' : '') + '[画像から] ' + desc;
+            sendSlack(':frame_with_picture: 画像を読みました: ' + desc.slice(0, 200) +
+              '\n違っていたら、そのまま書き直して送ってください。', event.thread_ts || event.ts);
+          } else if (!text) {
+            // 読めなかった画像だけの返信。質問は消費せずひとこと促す
+            logEvent('slack_file_only', files.length + '件のファイルを読めませんでした');
+            sendSlack('画像を読み取れませんでした。ひとこと添えてもらえると下書きにできます。',
+              event.thread_ts || event.ts);
+          }
+        }
+
+        if (!text) {
+          // 本文も画像の読み取り結果も無い。ここで打ち切る（質問は消費しない）
+        } else if (event.thread_ts) {
+          var handled = handleInterviewReply(event.thread_ts, text);
           // 完了済みインタビューのスレッドへの自由記述は運用メモとして取り込む
-          if (!handled) handleThreadFeedback(event.thread_ts, event.text);
+          if (!handled) handleThreadFeedback(event.thread_ts, text);
         } else {
           // スレッド外に書かれた場合も、進行中インタビューへの回答として救済する
-          handleChannelMessage(event.text);
+          handleChannelMessage(text);
         }
       } catch (err) {
         logEvent('slack_event_error', String(err));

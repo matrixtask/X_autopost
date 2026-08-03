@@ -39,6 +39,25 @@ function isFatalError(e) {
 }
 
 function askClaude(systemPrompt, userPrompt, maxTokens) {
+  return claudeMessage(systemPrompt, userPrompt, maxTokens);
+}
+
+/**
+ * 画像つきで問い合わせる。
+ * @param {Array} images [{base64, mimeType}]（先に置くほうが精度が上がる）
+ */
+function askClaudeWithImages(systemPrompt, userPrompt, images, maxTokens) {
+  var content = (images || []).map(function (im) {
+    return { type: 'image', source: { type: 'base64', media_type: im.mimeType, data: im.base64 } };
+  });
+  content.push({ type: 'text', text: userPrompt });
+  return claudeMessage(systemPrompt, content, maxTokens);
+}
+
+/**
+ * Claude APIの本体。content は文字列でもブロック配列でもよい。
+ */
+function claudeMessage(systemPrompt, content, maxTokens) {
   var apiKey = requireProp('ANTHROPIC_API_KEY');
   var model = getProp('CLAUDE_MODEL', 'claude-sonnet-5');
   var res = UrlFetchApp.fetch('https://api.anthropic.com/v1/messages', {
@@ -52,7 +71,7 @@ function askClaude(systemPrompt, userPrompt, maxTokens) {
       model: model,
       max_tokens: maxTokens || 2000,
       system: systemPrompt,
-      messages: [{ role: 'user', content: userPrompt }],
+      messages: [{ role: 'user', content: content }],
     }),
     muteHttpExceptions: true,
   });

@@ -11,6 +11,27 @@ vm.createContext(context);
 vm.runInContext(code, context);
 const { weightedTweetLength, fitsInTweet, parseJsonLoose, pickWeighted, computeNextSlots, normalizeSlackTs, slackTsEqual, pearson, dateKey } = context.module.exports;
 
+test('normalizeSlackText: Slackの独自記法を素の文に戻す', () => {
+  const { normalizeSlackText } = context.module.exports;
+
+  // リンクを添付したときの実際の形。この記法のままだとXにそのまま出てしまう
+  assert.equal(normalizeSlackText('これ見て <https://example.com/a?b=1>'),
+    'これ見て https://example.com/a?b=1');
+  assert.equal(normalizeSlackText('<https://example.com|すごい記事> が面白い'),
+    'すごい記事 https://example.com が面白い');
+
+  assert.equal(normalizeSlackText('<@U12345|tasuku> ありがとう'), 'tasuku ありがとう');
+  assert.equal(normalizeSlackText('<@U12345> ありがとう'), '@U12345 ありがとう');
+  assert.equal(normalizeSlackText('A &amp; B は &lt;重要&gt;'), 'A & B は <重要>');
+
+  // 普通の文は壊さない
+  assert.equal(normalizeSlackText('今日は暑い。試験は延期。'), '今日は暑い。試験は延期。');
+  assert.equal(normalizeSlackText('  前後の空白  '), '前後の空白');
+  assert.equal(normalizeSlackText(''), '');
+  assert.equal(normalizeSlackText(null), '');
+  assert.equal(normalizeSlackText(undefined), '');
+});
+
 test('clusterHeadlines: 同じ出来事を媒体をまたいでまとめる', () => {
   const { clusterHeadlines, stripHeadlineSource } = context.module.exports;
 

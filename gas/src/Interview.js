@@ -115,6 +115,53 @@ function startInterviewSession(kind, title) {
   logEvent('interview_start', sessionId + ' themes=' + JSON.stringify(themes));
 }
 
+/**
+ * 添付画像をClaudeに読ませて、ポストの材料になる説明文にする。
+ *
+ * 説明は回答テキストに追記され、そのまま下書き生成と採点に流れる。
+ * 実測で効いている軸（具体性・内部情報性）を意識して、見たままの
+ * 固有名詞・数字・状況を拾わせる。感想や推測は書かせない。
+ *
+ * @returns {string} 追記する説明（画像が無い・読めない場合は空文字）
+ */
+function describeSlackImages(files, contextText) {
+  var maxImages = Number(getProp('MAX_IMAGES_PER_REPLY', '3'));
+  var images = [];
+  (files || []).slice(0, maxImages).forEach(function (f) {
+    var got = fetchSlackFile(f);
+    if (got) images.push(got);
+  });
+  if (!images.length) return '';
+
+  var system = [
+    'あなたはXの投稿ネタを集める編集者です。送られてきた画像から、',
+    'ポストの材料になる事実を拾います。',
+    '',
+    '- 見えているものだけを書く。推測・感想・評価は書かない',
+    '- 固有名詞・数字・日付・型番・看板の文字など、読み取れる具体は必ず拾う',
+    '- 何が写っているかだけでなく、その場で何が起きているところかを書く',
+    '- 200字以内。箇条書きにせず、続けて書く',
+    '- 人物が写っている場合、誰かを推測しない（「男性2人」のように書く）',
+  ].join('\n');
+
+  var user = [
+    contextText ? '投稿者のコメント: ' + contextText : '（コメントなしで画像だけが送られました）',
+    '',
+    'この画像から読み取れる事実を書いてください。',
+  ].join('\n');
+
+  try {
+    // 説明自体は200字だが、思考ブロックに枠を食われて本文が0文字になることが
+    // あるため広めに取る（朝のインタビューが飛んだのと同じ原因）
+    var desc = askClaudeWithImages(system, user, images, 4000);
+    logEvent('image_read', images.length + '枚を読みました: ' + String(desc).slice(0, 120));
+    return String(desc).trim();
+  } catch (e) {
+    logEvent('image_error', String(e).slice(0, 300));
+    return '';
+  }
+}
+
 function labelForCategory(cat) {
   return { evergreen: '定番', news: '時事', neta: 'ネタ' }[cat] || cat;
 }
