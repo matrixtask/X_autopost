@@ -157,7 +157,7 @@ function doPost(e) {
         if (!text) {
           // 本文も画像の読み取り結果も無い。ここで打ち切る（質問は消費しない）
         } else if (event.thread_ts) {
-          var handled = handleInterviewReply(event.thread_ts, text);
+          var handled = handleInterviewReply(event.thread_ts, text, firstImageRef(files));
           // 完了済みインタビューのスレッドへの自由記述は運用メモとして取り込む
           if (!handled) handleThreadFeedback(event.thread_ts, text);
         } else {
@@ -192,6 +192,7 @@ function api_listPosts(token) {
       status: String(r.status),
       scheduled_at: String(r.scheduled_at || ''),
       posted_at: String(r.posted_at || ''),
+      has_media: String(r.media_url || '').trim() !== '',
     };
   });
   rows.sort(function (a, b) { return a.created_at < b.created_at ? 1 : -1; });

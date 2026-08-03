@@ -14,7 +14,9 @@ function generateDraftsFromInterview(sessionId) {
     'X（Twitter）のポスト下書きを作ってください。',
     '',
     qa.map(function (r) {
-      return '【テーマ: ' + r.theme + ' / カテゴリ: ' + r.category + '】\nQ: ' + r.question + '\nA: ' + r.answer;
+      return '[Q' + r.idx + '] 【テーマ: ' + r.theme + ' / カテゴリ: ' + r.category + '】' +
+        (String(r.media_url || '') ? '（画像あり）' : '') +
+        '\nQ: ' + r.question + '\nA: ' + r.answer;
     }).join('\n\n'),
     '',
     'ルール:',
@@ -25,7 +27,9 @@ function generateDraftsFromInterview(sessionId) {
     '- カテゴリ neta はオチやゆるさを残す。無理に学びに落とさない',
     '- カテゴリ news は見出しの受け売りでなく本人の視点を軸にする',
     '',
-    'JSON配列で出力: [{"theme": "...", "category": "...", "text": "..."}]',
+    '- qi には、その案の元になった質問の番号（[Q1] の数字）を必ず入れる',
+    '',
+    'JSON配列で出力: [{"qi": 1, "theme": "...", "category": "...", "text": "..."}]',
   ].join('\n');
 
   // 6案しか出さないので3000で足りるが、回答が長いと前置きを書きたがることがある。
@@ -33,10 +37,19 @@ function generateDraftsFromInterview(sessionId) {
   var drafts = askClaudeJsonSalvageable(system, user, 4000);
   if (!Array.isArray(drafts)) throw new Error('下書き生成の出力が不正です');
 
+  // 回答ごとの添付画像。下書きは元になった回答（qi）の画像を引き継ぐ
+  var mediaByIdx = {};
+  qa.forEach(function (r) {
+    if (String(r.media_url || '').trim()) {
+      mediaByIdx[String(r.idx)] = { url: String(r.media_url), type: String(r.media_type || '') };
+    }
+  });
+
   var saved = [];
   drafts.forEach(function (d) {
     var text = String(d.text || '').trim();
     if (!text) return;
+    var media = mediaByIdx[String(d.qi)] || null;
     if (!fitsInTweet(text)) {
       text = truncateForTweet(text);
     }
@@ -55,6 +68,8 @@ function generateDraftsFromInterview(sessionId) {
       posted_at: '',
       tweet_id: '',
       notion_page_id: '',
+      media_url: media ? media.url : '',
+      media_type: media ? media.type : '',
     });
     saved.push({ id: id, text: text });
     try {

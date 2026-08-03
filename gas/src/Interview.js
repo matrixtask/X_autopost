@@ -169,6 +169,25 @@ function describeSlackImages(files, contextText) {
   }
 }
 
+/**
+ * 添付ファイルのうち、Xへ添付できる画像1枚分の参照を返す。
+ *
+ * 画像そのものは保存せず、SlackのURLと形式だけを持ち回る。投稿は数日後に
+ * なることもあるが、Slackのファイルは消さない限り残るので、投稿直前に
+ * 取り直すほうが、どこかに複製を溜めるより壊れにくい。
+ * Xの1ポストに複数画像も付けられるが、まずは1枚に絞る。
+ */
+function firstImageRef(files) {
+  var f = (files || []).filter(function (x) {
+    return /^image\//.test(String(x && x.mimetype || ''));
+  })[0];
+  if (!f) return null;
+  return {
+    url: String(f.url_private_download || f.url_private || ''),
+    type: String(f.mimetype || ''),
+  };
+}
+
 function labelForCategory(cat) {
   return { evergreen: '定番', news: '時事', neta: 'ネタ' }[cat] || cat;
 }
@@ -305,7 +324,7 @@ function generateInterviewQuestions(themes, headlines, count) {
 /**
  * Slackスレッドへの返信を処理する（doPost から呼ばれる）。
  */
-function handleInterviewReply(threadTs, text) {
+function handleInterviewReply(threadTs, text, imageRef) {
   // シートが数値解釈でtsの末尾0を落とすことがあるため、正規化して照合する
   var rows = readTable(SHEET.INTERVIEWS).filter(function (r) {
     return slackTsEqual(r.thread_ts, threadTs) && String(r.status) === INTERVIEW_STATUS.OPEN;
@@ -335,10 +354,16 @@ function handleInterviewReply(threadTs, text) {
   }
 
   var isSkip = /^(スキップ|skip|パス)$/i.test(trimmed);
-  updateInterviewRow(sessionId, Number(current.idx), {
+  var updates = {
     answer: isSkip ? '' : trimmed,
     answered_at: isSkip ? 'skipped' : fmtDateTime(nowJst()),
-  });
+  };
+  // この回答に添えられた画像は、ここから作られる下書きに引き継いでXへ添付する
+  if (!isSkip && imageRef && imageRef.url) {
+    updates.media_url = imageRef.url;
+    updates.media_type = imageRef.type;
+  }
+  updateInterviewRow(sessionId, Number(current.idx), updates);
 
   // 記録できたことを必ず返信で知らせる
   var ack = isSkip
