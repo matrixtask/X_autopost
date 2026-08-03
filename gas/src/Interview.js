@@ -132,11 +132,13 @@ function startInterviewSession(kind, title) {
 function describeSlackImages(files, contextText) {
   var maxImages = Number(getProp('MAX_IMAGES_PER_REPLY', '3'));
   var images = [];
+  var problems = [];
   (files || []).slice(0, maxImages).forEach(function (f) {
     var got = fetchSlackFile(f);
-    if (got) images.push(got);
+    if (got && got.base64) images.push(got);
+    else if (got && got.problem) problems.push(got.problem);
   });
-  if (!images.length) return '';
+  if (!images.length) return { description: '', problem: problems.join(' / ') || '画像を取得できませんでした' };
 
   var system = [
     'あなたはXの投稿ネタを集める編集者です。送られてきた画像から、',
@@ -160,10 +162,10 @@ function describeSlackImages(files, contextText) {
     // あるため広めに取る（朝のインタビューが飛んだのと同じ原因）
     var desc = askClaudeWithImages(system, user, images, 4000);
     logEvent('image_read', images.length + '枚を読みました: ' + String(desc).slice(0, 120));
-    return String(desc).trim();
+    return { description: String(desc).trim(), problem: '' };
   } catch (e) {
     logEvent('image_error', String(e).slice(0, 300));
-    return '';
+    return { description: '', problem: 'Claudeが画像を読めませんでした: ' + String(e).slice(0, 150) };
   }
 }
 

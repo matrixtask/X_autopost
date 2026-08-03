@@ -139,15 +139,17 @@ function doPost(e) {
         // 添付画像はClaudeに読ませて、回答テキストに事実として追記する。
         // 以降の下書き生成・採点は文章として扱えるので手を入れなくてよい
         if (files.length) {
-          var desc = describeSlackImages(files, text);
-          if (desc) {
-            text = (text ? text + '\n' : '') + '[画像から] ' + desc;
-            sendSlack(':frame_with_picture: 画像を読みました: ' + desc.slice(0, 200) +
+          var img = describeSlackImages(files, text);
+          if (img.description) {
+            text = (text ? text + '\n' : '') + '[画像から] ' + img.description;
+            sendSlack(':frame_with_picture: 画像を読みました: ' + img.description.slice(0, 200) +
               '\n違っていたら、そのまま書き直して送ってください。', event.thread_ts || event.ts);
-          } else if (!text) {
-            // 読めなかった画像だけの返信。質問は消費せずひとこと促す
-            logEvent('slack_file_only', files.length + '件のファイルを読めませんでした');
-            sendSlack('画像を読み取れませんでした。ひとこと添えてもらえると下書きにできます。',
+          } else {
+            // 失敗は必ず知らせる。本文があるときに黙っていると、画像が
+            // 使われたのかどうかが分からないまま先へ進んでしまう
+            logEvent('slack_file_only', files.length + '件の画像を読めませんでした');
+            sendSlack(':warning: 画像を読み取れませんでした: ' + String(img.problem).slice(0, 300) +
+              (text ? '\n本文だけを回答として記録します。' : '\nひとこと添えてもらえると下書きにできます。'),
               event.thread_ts || event.ts);
           }
         }
