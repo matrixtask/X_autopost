@@ -21,8 +21,13 @@ function startDailyInterview() {
     return String(r.session_id).indexOf(today) === 0 && String(r.session_id).indexOf('_ivx_') < 0;
   });
   if (existing.length) {
+    // 黙って終わると、手で実行したときに壊れているのか正常なのか分からない
+    var msg = '今日（' + today + '）の定期インタビューは作成済みです。' +
+      'もう1回やるなら、Slackのチャンネルに「インタビュー」と書けば追加インタビューが始まります。';
     logEvent('interview_skip', '本日分は作成済み: ' + today);
-    return;
+    console.log(msg);
+    notifySlack(':information_source: ' + msg);
+    return msg;
   }
   expireOldSessions();
   // Notionのテーマデータベースをマスターとして取り込んでから選定する
