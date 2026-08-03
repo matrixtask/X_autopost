@@ -74,6 +74,25 @@ fi
 echo "==> clasp push（コードを反映）"
 clasp push -f
 
+# デプロイの説明文。「デプロイを管理」の一覧には説明しか出ないので、
+# バージョン番号だけでは何が入っているのか後から分からなくなる。
+# 直近のコミット件名を入れて、そのバージョンの中身が読めるようにする。
+build_description() {
+  local when commit
+  when="$(date '+%m/%d %H:%M')"
+  if git rev-parse --git-dir >/dev/null 2>&1; then
+    commit="$(git log -1 --pretty='%h %s' 2>/dev/null || true)"
+  fi
+  if [ -n "${commit:-}" ]; then
+    # GASの説明欄は長すぎると弾かれるので詰める
+    printf '%s %s' "$when" "$commit" | cut -c1-180
+  else
+    printf '%s cli deploy' "$when"
+  fi
+}
+DESCRIPTION="$(build_description)"
+echo "==> 説明: $DESCRIPTION"
+
 # 更新対象を決める: 引数で1本指定 > 登録済みを全部
 TARGETS=()
 if [ "${1:-}" != "" ]; then
@@ -109,7 +128,7 @@ for entry in "${TARGETS[@]}"; do
     continue
   fi
   echo "==> $label を新バージョンで更新: $id"
-  if ! OUT="$(clasp deploy -i "$id" -d "cli $(date '+%Y-%m-%d %H:%M')" 2>&1)"; then
+  if ! OUT="$(clasp deploy -i "$id" -d "$DESCRIPTION" 2>&1)"; then
     echo "$OUT" >&2
     FAILED=1
     continue
