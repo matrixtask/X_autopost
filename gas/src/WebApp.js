@@ -136,11 +136,24 @@ function doPost(e) {
         var text = normalizeSlackText(event.text);
         var files = event.files || [];
 
-        if (!text && files.length) {
-          // 画像だけでは何を言いたいのか分からない。質問は消費せず、ひとこと促す
-          logEvent('slack_file_only', files.length + '件のファイルのみ（本文なし）');
-          sendSlack('画像は受け取りました。ひとこと添えてもらえると下書きにできます。',
-            event.thread_ts || event.ts);
+        // 添付画像はClaudeに読ませて、回答テキストに事実として追記する。
+        // 以降の下書き生成・採点は文章として扱えるので手を入れなくてよい
+        if (files.length) {
+          var desc = describeSlackImages(files, text);
+          if (desc) {
+            text = (text ? text + '\n' : '') + '[画像から] ' + desc;
+            sendSlack(':frame_with_picture: 画像を読みました: ' + desc.slice(0, 200) +
+              '\n違っていたら、そのまま書き直して送ってください。', event.thread_ts || event.ts);
+          } else if (!text) {
+            // 読めなかった画像だけの返信。質問は消費せずひとこと促す
+            logEvent('slack_file_only', files.length + '件のファイルを読めませんでした');
+            sendSlack('画像を読み取れませんでした。ひとこと添えてもらえると下書きにできます。',
+              event.thread_ts || event.ts);
+          }
+        }
+
+        if (!text) {
+          // 本文も画像の読み取り結果も無い。ここで打ち切る（質問は消費しない）
         } else if (event.thread_ts) {
           var handled = handleInterviewReply(event.thread_ts, text);
           // 完了済みインタビューのスレッドへの自由記述は運用メモとして取り込む

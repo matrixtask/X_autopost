@@ -73,7 +73,8 @@
 ## 4. Slackアプリ
 
 1. [api.slack.com/apps](https://api.slack.com/apps) > Create New App > From scratch
-2. **OAuth & Permissions** > Bot Token Scopes に `chat:write` と `channels:history`（プライベートチャンネルなら `groups:history`）を追加し、ワークスペースにインストール
+2. **OAuth & Permissions** > Bot Token Scopes に `chat:write` / `channels:history`（プライベートチャンネルなら `groups:history`）/ `files:read` を追加し、ワークスペースにインストール
+   - `files:read` は画像つきの返信を読むために必要。無いと画像は無視され、テキストだけが回答になる
 3. Bot User OAuth Token（`xoxb-...`）をスクリプトプロパティ `SLACK_BOT_TOKEN` に保存
 4. インタビュー用チャンネルを作成し、`/invite @ボット名` で招待。チャンネルIDをプロパティ `SLACK_CHANNEL_ID` に保存
 5. **Event Subscriptions** を有効化:
@@ -216,6 +217,17 @@ weight = anchor * (1 + s * (perf - 50) / span)
 
 **`reportAxesByOrigin`** を実行すると、取り込んだ手動投稿とこの仕組みが生成した投稿とで、軸の効き方が違うかどうかを比べます。群を分けて符号が反転する軸は、その軸そのものではなく「どちらの群か」を測っている疑いがあります。標本の大半は過去の手動投稿なので、この検証をしないと交絡に気づけません。
 
+## 画像つきの返信
+
+インタビューのスレッドに画像を添付して返信すると、Claudeが画像を読んで**事実として回答テキストに追記**します（`[画像から] …` の形）。以降の下書き生成・採点は文章として扱うので、特別な処理は要りません。
+
+読み取った内容はSlackに返すので、違っていればそのまま書き直して送ってください。
+
+- 対応形式は PNG / JPEG / GIF / WebP。1回の返信につき `MAX_IMAGES_PER_REPLY`（既定3枚）まで
+- `MAX_IMAGE_BYTES`（既定4MB）を超える画像は飛ばします
+- 画像だけで本文が無い場合も、読み取れた内容を回答にします。読み取れなければ質問は消費せず、ひとこと促します
+- 推測や感想は書かせず、看板の文字・型番・数字など**読み取れる具体**を拾わせています（実測で効いている軸が具体性と内部情報性のため）
+
 ## 生成に失敗したインタビューの作り直し
 
 下書き生成でエラーが出た日は、回答だけが `Interviews` に残って `Stock` が空になります。
@@ -248,6 +260,8 @@ GASエディタで **`regenerateFailedInterviews`** を実行すると、
 | `ROSTER_RANDOM` | `20` | 無作為枠の件数 |
 | `ROSTER_TREND` | `20` | 時事枠の件数（毎週入れ替え） |
 | `NOTES_MIN_SAMPLES` | `5` | メモを書き直す最低標本数 |
+| `MAX_IMAGES_PER_REPLY` | `3` | 1回の返信で読む画像の枚数 |
+| `MAX_IMAGE_BYTES` | `4000000` | これを超える画像は飛ばす |
 
 ## CLIでの反映（clasp / Ubuntu）
 
