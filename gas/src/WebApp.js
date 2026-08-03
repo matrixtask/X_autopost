@@ -121,20 +121,33 @@ function doPost(e) {
       if (cache.get('ev_' + eventId)) return ContentService.createTextOutput('dup');
       cache.put('ev_' + eventId, '1', 3600);
     }
+    // 画像を添付すると subtype は file_share になる。これを弾いていたため、
+    // 画像つきの返信が丸ごと無視されてインタビューが進まなくなっていた。
+    // thread_broadcast（スレッド返信をチャンネルにも流す）も本文は同じ扱いでよい
+    var ACCEPTED_SUBTYPES = ['', 'file_share', 'thread_broadcast'];
     if (
       event.type === 'message' &&
       !event.bot_id &&
-      !event.subtype &&
+      ACCEPTED_SUBTYPES.indexOf(String(event.subtype || '')) >= 0 &&
       String(event.channel).trim() === String(getProp('SLACK_CHANNEL_ID') || '').trim()
     ) {
       try {
-        if (event.thread_ts) {
-          var handled = handleInterviewReply(event.thread_ts, event.text);
+        // Slackの独自記法（<url|表示名> 等）を素の文へ戻してから渡す
+        var text = normalizeSlackText(event.text);
+        var files = event.files || [];
+
+        if (!text && files.length) {
+          // 画像だけでは何を言いたいのか分からない。質問は消費せず、ひとこと促す
+          logEvent('slack_file_only', files.length + '件のファイルのみ（本文なし）');
+          sendSlack('画像は受け取りました。ひとこと添えてもらえると下書きにできます。',
+            event.thread_ts || event.ts);
+        } else if (event.thread_ts) {
+          var handled = handleInterviewReply(event.thread_ts, text);
           // 完了済みインタビューのスレッドへの自由記述は運用メモとして取り込む
-          if (!handled) handleThreadFeedback(event.thread_ts, event.text);
+          if (!handled) handleThreadFeedback(event.thread_ts, text);
         } else {
           // スレッド外に書かれた場合も、進行中インタビューへの回答として救済する
-          handleChannelMessage(event.text);
+          handleChannelMessage(text);
         }
       } catch (err) {
         logEvent('slack_event_error', String(err));

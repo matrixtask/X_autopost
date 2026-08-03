@@ -217,6 +217,24 @@ function percentileWithinWindow(items, windowDays) {
 }
 
 /**
+ * Slackのメッセージ本文を素の日本語に戻す。
+ *
+ * Slackはリンクやメンションを独自記法で送ってくる（`<https://x.com|タイトル>`）。
+ * そのまま回答として保存すると、下書きにこの記法が混ざってXへ投稿されてしまう。
+ * &amp; などのHTMLエスケープも戻す。
+ */
+function normalizeSlackText(text) {
+  var s = String(text === null || text === undefined ? '' : text);
+  s = s.replace(/<(https?:\/\/[^>|]+)\|([^>]*)>/g, '$2 $1'); // リンク＋表示名
+  s = s.replace(/<(https?:\/\/[^>]+)>/g, '$1');              // リンクのみ
+  s = s.replace(/<mailto:[^>|]+\|([^>]*)>/g, '$1');
+  s = s.replace(/<[@#!][^>|]+\|([^>]*)>/g, '$1');            // メンション（表示名つき）
+  s = s.replace(/<[@#!]([^>]+)>/g, '@$1');                   // メンション（IDのみ）
+  s = s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+  return s.replace(/[ \t]+\n/g, '\n').trim();
+}
+
+/**
  * 見出しから「Googleニュースが付ける ' - 媒体名' の接尾辞」を外す。
  */
 function stripHeadlineSource(title) {
@@ -333,5 +351,5 @@ function pearson(xs, ys) {
 
 // Nodeテスト用（GASでは module は未定義なので無視される）
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { weightedTweetLength: weightedTweetLength, fitsInTweet: fitsInTweet, parseJsonLoose: parseJsonLoose, salvageJson: salvageJson, pickWeighted: pickWeighted, computeNextSlots: computeNextSlots, normalizeSlackTs: normalizeSlackTs, slackTsEqual: slackTsEqual, rawSlackTs: rawSlackTs, pearson: pearson, dateKey: dateKey, percentileWithinWindow: percentileWithinWindow, normalizeThemeKey: normalizeThemeKey, clusterHeadlines: clusterHeadlines, stripHeadlineSource: stripHeadlineSource };
+  module.exports = { weightedTweetLength: weightedTweetLength, fitsInTweet: fitsInTweet, parseJsonLoose: parseJsonLoose, salvageJson: salvageJson, pickWeighted: pickWeighted, computeNextSlots: computeNextSlots, normalizeSlackTs: normalizeSlackTs, slackTsEqual: slackTsEqual, rawSlackTs: rawSlackTs, pearson: pearson, dateKey: dateKey, percentileWithinWindow: percentileWithinWindow, normalizeThemeKey: normalizeThemeKey, clusterHeadlines: clusterHeadlines, stripHeadlineSource: stripHeadlineSource, normalizeSlackText: normalizeSlackText };
 }
