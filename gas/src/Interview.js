@@ -132,11 +132,13 @@ function startInterviewSession(kind, title) {
 function describeSlackImages(files, contextText) {
   var maxImages = Number(getProp('MAX_IMAGES_PER_REPLY', '3'));
   var images = [];
+  var problems = [];
   (files || []).slice(0, maxImages).forEach(function (f) {
     var got = fetchSlackFile(f);
-    if (got) images.push(got);
+    if (got && got.base64) images.push(got);
+    else if (got && got.problem) problems.push(got.problem);
   });
-  if (!images.length) return '';
+  if (!images.length) return { description: '', problem: problems.join(' / ') || '画像を取得できませんでした' };
 
   var system = [
     'あなたはXの投稿ネタを集める編集者です。送られてきた画像から、',
@@ -160,11 +162,30 @@ function describeSlackImages(files, contextText) {
     // あるため広めに取る（朝のインタビューが飛んだのと同じ原因）
     var desc = askClaudeWithImages(system, user, images, 4000);
     logEvent('image_read', images.length + '枚を読みました: ' + String(desc).slice(0, 120));
-    return String(desc).trim();
+    return { description: String(desc).trim(), problem: '' };
   } catch (e) {
     logEvent('image_error', String(e).slice(0, 300));
-    return '';
+    return { description: '', problem: 'Claudeが画像を読めませんでした: ' + String(e).slice(0, 150) };
   }
+}
+
+/**
+ * 添付ファイルのうち、Xへ添付できる画像1枚分の参照を返す。
+ *
+ * 画像そのものは保存せず、SlackのURLと形式だけを持ち回る。投稿は数日後に
+ * なることもあるが、Slackのファイルは消さない限り残るので、投稿直前に
+ * 取り直すほうが、どこかに複製を溜めるより壊れにくい。
+ * Xの1ポストに複数画像も付けられるが、まずは1枚に絞る。
+ */
+function firstImageRef(files) {
+  var f = (files || []).filter(function (x) {
+    return /^image\//.test(String(x && x.mimetype || ''));
+  })[0];
+  if (!f) return null;
+  return {
+    url: String(f.url_private_download || f.url_private || ''),
+    type: String(f.mimetype || ''),
+  };
 }
 
 function labelForCategory(cat) {
@@ -303,7 +324,7 @@ function generateInterviewQuestions(themes, headlines, count) {
 /**
  * Slackスレッドへの返信を処理する（doPost から呼ばれる）。
  */
-function handleInterviewReply(threadTs, text) {
+function handleInterviewReply(threadTs, text, imageRef) {
   // シートが数値解釈でtsの末尾0を落とすことがあるため、正規化して照合する
   var rows = readTable(SHEET.INTERVIEWS).filter(function (r) {
     return slackTsEqual(r.thread_ts, threadTs) && String(r.status) === INTERVIEW_STATUS.OPEN;
@@ -333,10 +354,16 @@ function handleInterviewReply(threadTs, text) {
   }
 
   var isSkip = /^(スキップ|skip|パス)$/i.test(trimmed);
-  updateInterviewRow(sessionId, Number(current.idx), {
+  var updates = {
     answer: isSkip ? '' : trimmed,
     answered_at: isSkip ? 'skipped' : fmtDateTime(nowJst()),
-  });
+  };
+  // この回答に添えられた画像は、ここから作られる下書きに引き継いでXへ添付する
+  if (!isSkip && imageRef && imageRef.url) {
+    updates.media_url = imageRef.url;
+    updates.media_type = imageRef.type;
+  }
+  updateInterviewRow(sessionId, Number(current.idx), updates);
 
   // 記録できたことを必ず返信で知らせる
   var ack = isSkip

@@ -25,10 +25,10 @@ function slackApi(method, payload) {
  * url_private_download はボットトークンを付けないと取れない（付けないと
  * ログイン画面のHTMLが返ってくる）。Bot Token Scopes に files:read が必要。
  *
- * @returns {Object|null} {base64, mimeType, name} 取れなければ null
+ * @returns {Object} 成功なら {base64, mimeType, name}、失敗なら {problem, name}
  */
 function fetchSlackFile(file) {
-  if (!file) return null;
+  if (!file) return { problem: 'ファイル情報がありません', name: '' };
   var maxBytes = Number(getProp('MAX_IMAGE_BYTES', '4000000')); // Claudeの上限に合わせる
 
   // 元ファイル → サムネイルの順に試す。SlackのサムネイルはJPEG/PNGに
@@ -81,8 +81,10 @@ function fetchSlackFile(file) {
     }
   }
 
-  logEvent('slack_file_error', (file.name || '') + ': ' + (lastProblem || '取得できませんでした'));
-  return null;
+  var problem = lastProblem || '取得できませんでした';
+  logEvent('slack_file_error', (file.name || '') + ': ' + problem);
+  // 呼び出し側が理由をSlackへ出せるよう、理由つきで返す（nullだと原因が消える）
+  return { problem: problem, name: String(file.name || '') };
 }
 
 /**

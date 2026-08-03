@@ -139,15 +139,17 @@ function doPost(e) {
         // 添付画像はClaudeに読ませて、回答テキストに事実として追記する。
         // 以降の下書き生成・採点は文章として扱えるので手を入れなくてよい
         if (files.length) {
-          var desc = describeSlackImages(files, text);
-          if (desc) {
-            text = (text ? text + '\n' : '') + '[画像から] ' + desc;
-            sendSlack(':frame_with_picture: 画像を読みました: ' + desc.slice(0, 200) +
+          var img = describeSlackImages(files, text);
+          if (img.description) {
+            text = (text ? text + '\n' : '') + '[画像から] ' + img.description;
+            sendSlack(':frame_with_picture: 画像を読みました: ' + img.description.slice(0, 200) +
               '\n違っていたら、そのまま書き直して送ってください。', event.thread_ts || event.ts);
-          } else if (!text) {
-            // 読めなかった画像だけの返信。質問は消費せずひとこと促す
-            logEvent('slack_file_only', files.length + '件のファイルを読めませんでした');
-            sendSlack('画像を読み取れませんでした。ひとこと添えてもらえると下書きにできます。',
+          } else {
+            // 失敗は必ず知らせる。本文があるときに黙っていると、画像が
+            // 使われたのかどうかが分からないまま先へ進んでしまう
+            logEvent('slack_file_only', files.length + '件の画像を読めませんでした');
+            sendSlack(':warning: 画像を読み取れませんでした: ' + String(img.problem).slice(0, 300) +
+              (text ? '\n本文だけを回答として記録します。' : '\nひとこと添えてもらえると下書きにできます。'),
               event.thread_ts || event.ts);
           }
         }
@@ -155,7 +157,7 @@ function doPost(e) {
         if (!text) {
           // 本文も画像の読み取り結果も無い。ここで打ち切る（質問は消費しない）
         } else if (event.thread_ts) {
-          var handled = handleInterviewReply(event.thread_ts, text);
+          var handled = handleInterviewReply(event.thread_ts, text, firstImageRef(files));
           // 完了済みインタビューのスレッドへの自由記述は運用メモとして取り込む
           if (!handled) handleThreadFeedback(event.thread_ts, text);
         } else {
@@ -190,6 +192,7 @@ function api_listPosts(token) {
       status: String(r.status),
       scheduled_at: String(r.scheduled_at || ''),
       posted_at: String(r.posted_at || ''),
+      has_media: String(r.media_url || '').trim() !== '',
     };
   });
   rows.sort(function (a, b) { return a.created_at < b.created_at ? 1 : -1; });

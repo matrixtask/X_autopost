@@ -296,7 +296,8 @@
       return (
         '<div class="card" id="card-' + p.id + '">' +
         '<div class="meta">' + meta + '</div>' +
-        '<div class="body-text" id="text-' + p.id + '">' + esc(p.text) + '</div>' +
+        '<div class="body-text" id="text-' + p.id + '">' + esc(p.text) +
+        (p.has_media ? ' <span title="投稿時に画像が添付されます">🖼</span>' : '') + '</div>' +
         '<div id="editor-' + p.id + '" style="display:none">' +
         '<textarea id="ta-' + p.id + '">' + esc(p.text) + '</textarea>' +
         '<div class="actions"><button class="save" onclick="saveText(\'' + p.id + '\')">保存</button>' +

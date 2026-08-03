@@ -4,8 +4,9 @@
 
 var SHEET_HEADERS = {
   // inferred_question: 手動投稿から逆算した「この投稿を引き出せたであろう質問」
-  Stock: ['id', 'created_at', 'theme', 'category', 'session_id', 'text', 'score', 'score_reason', 'status', 'scheduled_at', 'posted_at', 'tweet_id', 'notion_page_id', 'impressions', 'likes', 'retweets', 'replies', 'metrics_at', 'refines', 'promoted', 'paid_impressions', 'profile_clicks', 'link_clicks', 'axes', 'inferred_question'],
-  Interviews: ['session_id', 'thread_ts', 'idx', 'theme', 'category', 'question', 'answer', 'answered_at', 'status'],
+  Stock: ['id', 'created_at', 'theme', 'category', 'session_id', 'text', 'score', 'score_reason', 'status', 'scheduled_at', 'posted_at', 'tweet_id', 'notion_page_id', 'impressions', 'likes', 'retweets', 'replies', 'metrics_at', 'refines', 'promoted', 'paid_impressions', 'profile_clicks', 'link_clicks', 'axes', 'inferred_question', 'media_url', 'media_type'],
+  // media_url / media_type: 回答に添付された画像。下書き経由で投稿時にXへ添付する
+  Interviews: ['session_id', 'thread_ts', 'idx', 'theme', 'category', 'question', 'answer', 'answered_at', 'status', 'media_url', 'media_type'],
   // weight は実績から自動更新される。base_weight は手で決めた初期値で、
   // 学習はここを起点に増減させる（前回の結果に掛け続けて発散しないようにするため）
   // roster: スタメン100件の枠。core（実績上位）/ adjacent（上位の隣接）/

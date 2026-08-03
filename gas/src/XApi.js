@@ -40,19 +40,76 @@ function oauth1Header(method, url, queryParams) {
   }).join(', ');
 }
 
-function postTweet(text) {
-  var url = 'https://api.twitter.com/2/tweets';
+/**
+ * 画像をXにアップロードして media_id を得る。
+ *
+ * メディアのアップロードは v2 に無いので v1.1 の media/upload を使う。
+ * multipart/form-data のボディはOAuth1.0aの署名対象に含めない決まりなので、
+ * 既存の oauth1Header（クエリのみ署名）がそのまま使える。
+ *
+ * @param {Blob} blob 画像のBlob
+ * @returns {string} media_id_string
+ */
+function uploadMediaToX(blob) {
+  var url = 'https://upload.twitter.com/1.1/media/upload.json';
   var res = UrlFetchApp.fetch(url, {
     method: 'post',
-    contentType: 'application/json',
     headers: { Authorization: oauth1Header('POST', url) },
-    payload: JSON.stringify({ text: text }),
+    payload: { media: blob }, // contentTypeを指定しないとGASがmultipartで組み立てる
     muteHttpExceptions: true,
   });
   var code = res.getResponseCode();
   var body = res.getContentText();
-  if (code >= 300) throw new Error('X API error ' + code + ': ' + body.slice(0, 300));
-  return JSON.parse(body).data; // { id, text }
+  if (code >= 300) throw new Error('メディアのアップロードに失敗 ' + code + ': ' + body.slice(0, 300));
+  var json = JSON.parse(body);
+  var id = json.media_id_string || (json.media_id && String(json.media_id));
+  if (!id) throw new Error('media_id が返ってきませんでした: ' + body.slice(0, 200));
+  return id;
+}
+
+function postTweet(text, mediaIds) {
+  var url = 'https://api.twitter.com/2/tweets';
+  var body = { text: text };
+  if (mediaIds && mediaIds.length) body.media = { media_ids: mediaIds };
+  var res = UrlFetchApp.fetch(url, {
+    method: 'post',
+    contentType: 'application/json',
+    headers: { Authorization: oauth1Header('POST', url) },
+    payload: JSON.stringify(body),
+    muteHttpExceptions: true,
+  });
+  var code = res.getResponseCode();
+  var resBody = res.getContentText();
+  if (code >= 300) throw new Error('X API error ' + code + ': ' + resBody.slice(0, 300));
+  return JSON.parse(resBody).data; // { id, text }
+}
+
+/**
+ * 投稿直前に画像を取り直してXへ上げる。
+ *
+ * 画像そのものは持たず、Slackのファイル URL だけを Stock に持たせている。
+ * 投稿は数日後になることもあるが、Slackのファイルは消さない限り残るので
+ * その場で取り直すほうが、どこかに複製を溜めるより壊れにくい。
+ *
+ * @returns {Object} {ids: [media_id...], problem: '理由'}
+ */
+function prepareMediaForPost(row) {
+  var url = String(row.media_url || '').trim();
+  if (!url) return { ids: [], problem: '' };
+  var got = fetchSlackFile({
+    url_private_download: url,
+    mimetype: String(row.media_type || ''),
+    name: String(row.id || ''),
+  });
+  if (!got || !got.base64) {
+    return { ids: [], problem: (got && got.problem) || '画像を取得できませんでした' };
+  }
+  try {
+    var blob = Utilities.newBlob(Utilities.base64Decode(got.base64), got.mimeType, 'image');
+    return { ids: [uploadMediaToX(blob)], problem: '' };
+  } catch (e) {
+    return { ids: [], problem: String(e).slice(0, 200) };
+  }
 }
 
 /**
@@ -68,18 +125,32 @@ function postTick() {
 
   due.forEach(function (post) {
     var text = String(post.text);
+    var hasMedia = String(post.media_url || '').trim() !== '';
     if (isDryRun()) {
       updateStockById(post.id, { status: STATUS.POSTED, posted_at: now, tweet_id: 'dry-run' });
       logEvent('post_dry_run', post.id + ': ' + text.slice(0, 60));
-      notifySlack(':sparkles: [DRY RUN] 投稿予定の内容です（実際には投稿していません）:\n' + text);
+      notifySlack(':sparkles: [DRY RUN] 投稿予定の内容です（実際には投稿していません）:\n' + text +
+        (hasMedia ? '\n（画像1枚を添付予定）' : ''));
       syncSafe(post.id);
       return;
     }
     try {
-      var tweet = postTweet(text);
+      // 画像の準備に失敗しても本文だけは出す。予約枠を落とすより、
+      // 添付なしで出して警告を出すほうが被害が小さい
+      var media = { ids: [], problem: '' };
+      if (hasMedia) {
+        media = prepareMediaForPost(post);
+        if (media.problem) {
+          logEvent('media_failed', post.id + ': ' + media.problem);
+          notifySlack(':warning: 画像を添付できませんでした（' + post.id + '）: ' + media.problem +
+            '\n本文だけを投稿します。');
+        }
+      }
+      var tweet = postTweet(text, media.ids);
       updateStockById(post.id, { status: STATUS.POSTED, posted_at: now, tweet_id: tweet.id });
-      logEvent('posted', post.id + ' tweet_id=' + tweet.id);
-      notifySlack(':bird: 投稿しました:\n' + text + '\nhttps://x.com/i/web/status/' + tweet.id);
+      logEvent('posted', post.id + ' tweet_id=' + tweet.id + (media.ids.length ? ' media=1' : ''));
+      notifySlack(':bird: 投稿しました' + (media.ids.length ? '（画像つき）' : '') + ':\n' + text +
+        '\nhttps://x.com/i/web/status/' + tweet.id);
     } catch (e) {
       updateStockById(post.id, { status: STATUS.FAILED });
       logEvent('post_failed', post.id + ': ' + e);
