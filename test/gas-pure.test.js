@@ -11,6 +11,25 @@ vm.createContext(context);
 vm.runInContext(code, context);
 const { weightedTweetLength, fitsInTweet, parseJsonLoose, pickWeighted, computeNextSlots, normalizeSlackTs, slackTsEqual, pearson, dateKey } = context.module.exports;
 
+test('detectImageMime: 中身のバイト列で画像形式を判定する', () => {
+  const { detectImageMime } = context.module.exports;
+  // GASの Blob.getBytes() は符号付き（0x89 → -119）なので、その形でも通ること
+  const signed = (arr) => arr.map((b) => (b > 127 ? b - 256 : b));
+
+  assert.equal(detectImageMime(signed([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])), 'image/png');
+  assert.equal(detectImageMime(signed([0xff, 0xd8, 0xff, 0xe0])), 'image/jpeg');
+  assert.equal(detectImageMime([0x47, 0x49, 0x46, 0x38, 0x39, 0x61]), 'image/gif');
+  assert.equal(detectImageMime([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50]), 'image/webp');
+
+  // 認証に失敗して返ってきたログインページのHTML（実際に起きたケース）
+  const html = '<!DOCTYPE html><html>'.split('').map((c) => c.charCodeAt(0));
+  assert.equal(detectImageMime(html), null);
+
+  assert.equal(detectImageMime([]), null);
+  assert.equal(detectImageMime(null), null);
+  assert.equal(detectImageMime([0x52, 0x49, 0x46, 0x46]), null); // RIFFだがWEBPではない
+});
+
 test('normalizeSlackText: Slackの独自記法を素の文に戻す', () => {
   const { normalizeSlackText } = context.module.exports;
 

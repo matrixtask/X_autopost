@@ -28,39 +28,85 @@ function slackApi(method, payload) {
  * @returns {Object|null} {base64, mimeType, name} 取れなければ null
  */
 function fetchSlackFile(file) {
-  var url = file && (file.url_private_download || file.url_private);
-  if (!url) return null;
+  if (!file) return null;
   var maxBytes = Number(getProp('MAX_IMAGE_BYTES', '4000000')); // Claudeの上限に合わせる
-  try {
-    var res = UrlFetchApp.fetch(url, {
-      headers: { Authorization: 'Bearer ' + requireProp('SLACK_BOT_TOKEN') },
+
+  // 元ファイル → サムネイルの順に試す。SlackのサムネイルはJPEG/PNGに
+  // 変換済みなので、HEICのような未対応形式や大きすぎる画像の逃げ道になる
+  var candidates = [
+    { url: file.url_private_download || file.url_private, label: '元ファイル' },
+    { url: file.thumb_1024, label: 'サムネイル1024' },
+    { url: file.thumb_720, label: 'サムネイル720' },
+    { url: file.thumb_360, label: 'サムネイル360' },
+  ].filter(function (c) { return c.url; });
+
+  var lastProblem = '';
+  for (var i = 0; i < candidates.length; i++) {
+    var c = candidates[i];
+    try {
+      var res = slackFileFetch(c.url);
+      if (!res) continue;
+      if (res.getResponseCode() >= 300) {
+        lastProblem = 'HTTP ' + res.getResponseCode();
+        continue;
+      }
+      var bytes = res.getBlob().getBytes();
+      if (bytes.length > maxBytes) {
+        lastProblem = c.label + 'が大きすぎます（' + Math.round(bytes.length / 1024) + 'KB）';
+        continue; // 次のサムネイルなら収まるかもしれない
+      }
+
+      // Slackが申告する mimetype は信用しない。認証に失敗するとログインページの
+      // HTMLが200で返るが、mimetype は image/png のままなので、そのまま送ると
+      // Claudeが "Could not process image" で400を返す。中身で判定する。
+      var mime = detectImageMime(bytes);
+      if (!mime) {
+        var head = '';
+        try { head = res.getContentText().slice(0, 120).replace(/\s+/g, ' '); } catch (e2) { /* バイナリ */ }
+        lastProblem = /<html|<!doctype|signin|login/i.test(head)
+          ? 'ログインページが返っています。Slackアプリの Bot Token Scopes に files:read を追加して Reinstall to Workspace を実行してください'
+          : c.label + 'を画像として認識できません（申告: ' + (file.mimetype || '不明') + '）';
+        if (head) lastProblem += ' 先頭: ' + head;
+        continue;
+      }
+
+      if (i > 0) logEvent('slack_file', c.label + 'を使いました: ' + (file.name || ''));
+      return {
+        base64: Utilities.base64Encode(bytes),
+        mimeType: mime,
+        name: String(file.name || ''),
+      };
+    } catch (e) {
+      lastProblem = String(e).slice(0, 150);
+    }
+  }
+
+  logEvent('slack_file_error', (file.name || '') + ': ' + (lastProblem || '取得できませんでした'));
+  return null;
+}
+
+/**
+ * ボットトークンを付けてSlackのファイルを取る。
+ * リダイレクトを自動で追うと Authorization ヘッダが落ちて認証されないため、
+ * 自分で追いかけてヘッダを付け直す。
+ */
+function slackFileFetch(url) {
+  var token = requireProp('SLACK_BOT_TOKEN');
+  var current = url;
+  for (var hop = 0; hop < 3; hop++) {
+    var res = UrlFetchApp.fetch(current, {
+      headers: { Authorization: 'Bearer ' + token },
+      followRedirects: false,
       muteHttpExceptions: true,
     });
-    if (res.getResponseCode() >= 300) {
-      logEvent('slack_file_error', 'HTTP ' + res.getResponseCode() + ' ' + (file.name || ''));
-      return null;
-    }
-    var blob = res.getBlob();
-    var bytes = blob.getBytes();
-    if (bytes.length > maxBytes) {
-      logEvent('slack_file_error', '大きすぎます（' + Math.round(bytes.length / 1024) + 'KB）: ' + (file.name || ''));
-      return null;
-    }
-    // Slackのmimetypeを優先する（Blobは application/octet-stream になることがある）
-    var mime = String(file.mimetype || blob.getContentType() || '');
-    if (!/^image\/(png|jpe?g|gif|webp)$/.test(mime)) {
-      logEvent('slack_file_error', '対応していない形式です: ' + mime);
-      return null;
-    }
-    return {
-      base64: Utilities.base64Encode(bytes),
-      mimeType: mime === 'image/jpg' ? 'image/jpeg' : mime,
-      name: String(file.name || ''),
-    };
-  } catch (e) {
-    logEvent('slack_file_error', String(e).slice(0, 200));
-    return null;
+    var code = res.getResponseCode();
+    if (code < 300 || code >= 400) return res;
+    var next = res.getHeaders().Location || res.getHeaders().location;
+    if (!next) return res;
+    current = next;
   }
+  logEvent('slack_file_error', 'リダイレクトが多すぎます: ' + url);
+  return null;
 }
 
 /** チャンネル（またはスレッド）にメッセージを送る。戻り値に ts が入る */

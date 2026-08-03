@@ -217,6 +217,28 @@ function percentileWithinWindow(items, windowDays) {
 }
 
 /**
+ * バイト列の先頭（マジックナンバー）から画像形式を判定する。
+ *
+ * Slackが申告する mimetype を信じてはいけない。認証に失敗すると
+ * ログインページのHTMLが200で返ってくるが、mimetype は image/png の
+ * ままなので、そのままClaudeへ送って "Could not process image" になる。
+ * 実際に画像かどうかは中身で判断する。
+ *
+ * @param {Array<number>} bytes GASの Blob.getBytes()（符号付き -128〜127）
+ * @returns {string|null} 'image/png' など。画像でなければ null
+ */
+function detectImageMime(bytes) {
+  if (!bytes || bytes.length < 4) return null;
+  function b(i) { return bytes[i] & 0xff; }
+  if (bytes.length >= 8 && b(0) === 0x89 && b(1) === 0x50 && b(2) === 0x4e && b(3) === 0x47) return 'image/png';
+  if (b(0) === 0xff && b(1) === 0xd8 && b(2) === 0xff) return 'image/jpeg';
+  if (bytes.length >= 6 && b(0) === 0x47 && b(1) === 0x49 && b(2) === 0x46 && b(3) === 0x38) return 'image/gif';
+  if (bytes.length >= 12 && b(0) === 0x52 && b(1) === 0x49 && b(2) === 0x46 && b(3) === 0x46 &&
+      b(8) === 0x57 && b(9) === 0x45 && b(10) === 0x42 && b(11) === 0x50) return 'image/webp';
+  return null;
+}
+
+/**
  * Slackのメッセージ本文を素の日本語に戻す。
  *
  * Slackはリンクやメンションを独自記法で送ってくる（`<https://x.com|タイトル>`）。
@@ -351,5 +373,5 @@ function pearson(xs, ys) {
 
 // Nodeテスト用（GASでは module は未定義なので無視される）
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { weightedTweetLength: weightedTweetLength, fitsInTweet: fitsInTweet, parseJsonLoose: parseJsonLoose, salvageJson: salvageJson, pickWeighted: pickWeighted, computeNextSlots: computeNextSlots, normalizeSlackTs: normalizeSlackTs, slackTsEqual: slackTsEqual, rawSlackTs: rawSlackTs, pearson: pearson, dateKey: dateKey, percentileWithinWindow: percentileWithinWindow, normalizeThemeKey: normalizeThemeKey, clusterHeadlines: clusterHeadlines, stripHeadlineSource: stripHeadlineSource, normalizeSlackText: normalizeSlackText };
+  module.exports = { weightedTweetLength: weightedTweetLength, fitsInTweet: fitsInTweet, parseJsonLoose: parseJsonLoose, salvageJson: salvageJson, pickWeighted: pickWeighted, computeNextSlots: computeNextSlots, normalizeSlackTs: normalizeSlackTs, slackTsEqual: slackTsEqual, rawSlackTs: rawSlackTs, pearson: pearson, dateKey: dateKey, percentileWithinWindow: percentileWithinWindow, normalizeThemeKey: normalizeThemeKey, clusterHeadlines: clusterHeadlines, stripHeadlineSource: stripHeadlineSource, normalizeSlackText: normalizeSlackText, detectImageMime: detectImageMime };
 }
