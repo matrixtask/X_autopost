@@ -326,12 +326,35 @@ function generateInterviewQuestions(themes, headlines, count) {
  */
 function handleInterviewReply(threadTs, text, imageRef) {
   // シートが数値解釈でtsの末尾0を落とすことがあるため、正規化して照合する
-  var rows = readTable(SHEET.INTERVIEWS).filter(function (r) {
+  var all = readTable(SHEET.INTERVIEWS);
+  var rows = all.filter(function (r) {
     return slackTsEqual(r.thread_ts, threadTs) && String(r.status) === INTERVIEW_STATUS.OPEN;
   });
+
   if (!rows.length) {
-    logEvent('interview_no_match', 'thread_ts=' + threadTs + ' に一致する進行中セッションなし');
-    return false;
+    // tsが合わなくても、進行中のセッションが1つしか無いならそれへの回答とみなす。
+    // 照合に失敗した理由（保存値の欠損・精度落ち等）で回答を捨てるほうが害が大きい。
+    // 直後の自己修復で保存値が正しいtsに直るので、次回からは普通に一致する。
+    var openIds = {};
+    var storedTs = [];
+    all.forEach(function (r) {
+      if (String(r.status) !== INTERVIEW_STATUS.OPEN) return;
+      if (!openIds[String(r.session_id)]) storedTs.push(String(r.thread_ts));
+      openIds[String(r.session_id)] = true;
+    });
+    var ids = Object.keys(openIds);
+    if (ids.length !== 1) {
+      // 何と比較して外れたのかが分からないと原因を追えないので、保存値も出す
+      logEvent('interview_no_match', 'thread_ts=' + threadTs +
+        ' / 進行中セッション' + ids.length + '件 保存値=' + (storedTs.join(', ') || 'なし'));
+      return false;
+    }
+    rows = all.filter(function (r) {
+      return String(r.session_id) === ids[0] && String(r.status) === INTERVIEW_STATUS.OPEN;
+    });
+    logEvent('interview_ts_fallback',
+      'thread_ts=' + threadTs + ' は一致しなかったが、進行中の ' + ids[0] + ' への回答として扱いました' +
+      '（保存値: ' + storedTs.join(', ') + '）');
   }
   rows.sort(function (a, b) { return Number(a.idx) - Number(b.idx); });
   var sessionId = String(rows[0].session_id);
