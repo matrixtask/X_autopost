@@ -48,6 +48,35 @@ function getVoiceSamples(limit) {
  * 「本人の文体で書く」ための共通スタイル指示。
  * 生成プロンプトのsystemに常に含める。
  */
+/**
+ * 実測で効いている軸を、書き手への指示に変換する。
+ *
+ * 採点は軸スコアと実測相関の内積で決まるのに、生成プロンプトはその軸を
+ * 一度も見ていなかった。何で評価されるかを知らずに書いていたことになる。
+ * 質問生成側（axisGuidanceForQuestions）と同じ考え方を書き手にも渡す。
+ */
+function axisGuidanceForWriting() {
+  var c = axisCorrelations();
+  var ranked = AXES.map(function (a) {
+    return { label: a.label, desc: a.desc, w: Number(c[a.key]) || 0 };
+  }).sort(function (x, y) { return y.w - x.w; });
+
+  var top = ranked.slice(0, 5).filter(function (x) { return x.w > 0; });
+  var bottom = ranked.slice(-3).filter(function (x) { return x.w < 0; });
+  if (!top.length) return '';
+
+  var lines = ['採点で重く見る軸（実測でフォロワー獲得に効いている順）:'];
+  top.forEach(function (x) { lines.push('- ' + x.label + ': ' + x.desc); });
+  if (bottom.length) {
+    lines.push('');
+    lines.push('逆に、この軸に寄せたポストは成果が下がっている。ここを狙わない:');
+    bottom.forEach(function (x) { lines.push('- ' + x.label + ': ' + x.desc); });
+  }
+  lines.push('');
+  lines.push('合格ラインは' + qualityThreshold() + '点。上の軸で平凡なら落ちる。');
+  return lines.join('\n');
+}
+
 function buildStylePrompt() {
   var samples = getVoiceSamples(15);
   var lines = [
@@ -70,6 +99,26 @@ function buildStylePrompt() {
     '- ハッシュタグはサンプルで使われている場合のみ、同じ頻度で使う',
     '',
   ];
+  // 採点は実測相関の内積で行うのに、書き手がその軸を見ていなかった。
+  // 何で評価されるかを知らずに書けば、落ちるのは当然だった
+  var axisGuide = axisGuidanceForWriting();
+  if (axisGuide) {
+    lines.push(axisGuide);
+    lines.push('');
+  }
+
+  // 文体サンプルは「らしさ」の見本だが、伸びたかどうかとは無関係。
+  // 実測で反応が良かったポストを別枠で見せて、水準そのものを示す
+  var winners = [];
+  try {
+    winners = topPostSamples(6);
+  } catch (e) { /* 実測が無い時期は無視 */ }
+  if (winners.length) {
+    lines.push('実測で反応が良かった自分のポスト（内容ではなく、踏み込みの深さと具体の量をこの水準に合わせる）:');
+    winners.forEach(function (w) { lines.push('- ' + w); });
+    lines.push('');
+  }
+
   var memory = buildMemoryPrompt();
   if (memory) {
     lines.push(memory);

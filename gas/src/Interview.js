@@ -483,9 +483,25 @@ function finishInterview(sessionId, threadTs) {
         (url ? '承認: ' + url + '?token=' + getProp('ADMIN_TOKEN') : 'Webアプリから承認してください。');
     }
 
+    // 落ちた下書きについて「次はこの情報を答えてもらえれば強くなる」を出す。
+    // 「具体性が低い」とだけ言われても、次に何を書けばいいか分からない
+    var hintBlock = '';
+    try {
+      var failed = rows.filter(function (r) { return passStatuses.indexOf(String(r.status)) < 0; });
+      var hints = missingInfoHints(failed);
+      if (hints.length) {
+        hintBlock = '\n\n:bulb: *次はここを足すと通ります*\n' +
+          hints.map(function (h) {
+            return '・' + h.missing + (h.example ? '\n　例: ' + h.example : '');
+          }).join('\n');
+      }
+    } catch (e) {
+      logEvent('hint_error', String(e).slice(0, 200));
+    }
+
     sendSlack(
       ':inbox_tray: ' + drafts.length + '件をストックし、採点しました（合格 ' + passed.length + '/' + rows.length + '、閾値' + qualityThreshold() + '点）\n\n' +
-      lines.join('\n\n') + '\n\n' + footer,
+      lines.join('\n\n') + hintBlock + '\n\n' + footer,
       threadTs
     );
   } catch (e) {

@@ -360,6 +360,76 @@ function runQualityGateWithRefinement() {
 }
 
 /**
+ * 不合格の下書きについて「何の具体が足りなかったか」を、次に答えるときの
+ * 形で返す。
+ *
+ * 「具体性が低い」と言われても次に何を書けばいいか分からない。
+ * 足りない情報の種類と、その情報が入った答え方の例（型）を示す。
+ *
+ * 例は**型であって事実ではない**。実際の出来事は本人しか知らないので、
+ * こちらで具体的な出来事を作ると捏造になる。埋めるべき枠として書かせる。
+ *
+ * @param {Array} rows 不合格だったStockの行
+ * @returns {Array} [{id, text, missing, example}]
+ */
+function missingInfoHints(rows) {
+  var targets = (rows || []).filter(function (r) { return String(r.text || '').trim(); }).slice(0, 6);
+  if (!targets.length) return [];
+
+  var c = axisCorrelations();
+  var system = [
+    'あなたはXアカウントの編集者です。合格しなかった下書きについて、',
+    '「次に本人へ聞くとき、どんな情報を答えてもらえれば強くなるか」を示します。',
+    '',
+    '- missing には、足りない情報の種類を15字以内で書く（例:「相手の反応」「かかった時間」）',
+    '- example には、その情報が入った**答え方の型**を40字以内で書く',
+    '- 【最重要】example に具体的な事実を作ってはいけない。実際の出来事は本人しか',
+    '  知らないので、「◯月◯日」「△△社の担当者」「□時間」のように埋める枠で書く',
+    '- 下書きの言い換えを書かない。足りないものだけを指す',
+    '- 抽象語（「もっと具体的に」「深掘りを」）は禁止。何を聞くかまで落とす',
+  ].join('\n');
+
+  var user = [
+    '合格ラインは' + qualityThreshold() + '点です。以下は届かなかった下書きです。',
+    '',
+    targets.map(function (d, i) {
+      var ax = parseAxes(d.axes);
+      var weak = '';
+      if (ax) {
+        var sorted = AXES.filter(function (a) { return isFinite(Number(ax[a.key])); })
+          .sort(function (a, b) {
+            // 実測で重い軸ほど、低いときの痛手が大きい。重み付きで弱点を選ぶ
+            var wa = Math.max(0, Number(c[a.key]) || 0), wb = Math.max(0, Number(c[b.key]) || 0);
+            return (Number(ax[a.key]) * (1 - wa)) - (Number(ax[b.key]) * (1 - wb));
+          });
+        weak = ' / 弱い軸: ' + sorted.slice(0, 3).map(function (a) {
+          return a.label + ' ' + ax[a.key] + '点';
+        }).join('、');
+      }
+      return i + ': ' + String(d.text).slice(0, 200) + '\n   採点: ' + d.score + '点' + weak;
+    }).join('\n\n'),
+    '',
+    'JSON配列で出力: [{"i": 番号, "missing": "...", "example": "..."}]',
+  ].join('\n');
+
+  try {
+    var res = askClaudeJsonSalvageable(system, user, 4000);
+    if (!Array.isArray(res)) return [];
+    return res.map(function (r) {
+      var d = targets[Number(r.i)];
+      if (!d || !r.missing) return null;
+      return {
+        id: String(d.id), text: String(d.text),
+        missing: String(r.missing), example: String(r.example || ''),
+      };
+    }).filter(Boolean);
+  } catch (e) {
+    logEvent('hint_error', String(e).slice(0, 200));
+    return [];
+  }
+}
+
+/**
  * 閾値未満(stock)の下書きを、採点コメントを踏まえて「独り言のつぶやき」へ
  * 書き直し、draftに戻して再採点対象にする。1回の実行で最大10件。
  * @param {boolean} force 上限(REFINE_ROUNDS)到達分も対象にする（手動リライト用）
