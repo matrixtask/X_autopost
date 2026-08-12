@@ -97,7 +97,8 @@ function runQualityGate() {
     var axes = compositeAxes(r.axes);
     if (!axes) return;
     // 全体スコア = 軸スコア · 実測相関ベクトル（0〜100に正規化）
-    var score = compositeScoreFromAxes(axes);
+    // カテゴリごとに重みが変わる（ネタはユーモアを削るほど点が上がる、を防ぐ）
+    var score = compositeScoreFromAxes(axes, String(d.category || ''));
 
     var pass = score >= threshold;
     if (pass) passed++;
@@ -329,6 +330,13 @@ function axisScoringSystemPrompt(samples, terse) {
     '軸ごとの重み付けはこちらで行うので、あなたは各軸を純粋に評価することに集中してください。',
     '中央値を50とし、平凡なら50前後、際立って良ければ80以上、明確に欠けていれば30以下を付けること。',
     '全部の軸に似た点を付けるのは分析上まったく役に立ちません。軸ごとの差をはっきり付けてください。',
+    '',
+    '**カテゴリの型に沿って採点すること。** 同じ軸でも、そのポストが何を狙って',
+    'いるかで評価が変わります。',
+    '- neta: 笑えるか、オチがあるかで見る。教訓に着地していたら「ユーモア」を大きく下げる',
+    '- news: 出来事への立場が言い切れているかで見る。解説止まりなら「立場の明確さ」を下げる',
+    '- evergreen: 舞台裏・当事者性で見る。誰でも書ける一般論なら「内部情報性」を下げる',
+    'ネタと真面目が1つのポストに混ざっているものは、どっちつかずなので低く付けること。',
     '',
     AXES.map(function (a, i) {
       return (i + 1) + '. ' + a.key + '（' + a.label + '）: ' + a.desc;
