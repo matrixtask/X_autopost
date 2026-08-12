@@ -136,15 +136,51 @@ var DEFAULT_AXIS_WEIGHTS = {
  */
 var DEFAULT_AXIS_FLOORS = { voice: 0.05 };
 
-function axisFloors() {
+/**
+ * カテゴリごとに「その型を成立させるために外せない軸」。
+ *
+ * 相関は全カテゴリを混ぜて出しているので、ネタと真面目が打ち消し合う。
+ * その平均でネタを採点すると、ユーモアを削るほど点が上がってしまい、
+ * ネタでも真面目でもない中途半端な文になる。
+ * カテゴリの定義そのものにあたる軸は、成果指標ではなく制約として扱う。
+ */
+var DEFAULT_CATEGORY_FLOORS = {
+  neta: { humor: 0.18, brevity: 0.08 },      // 笑えないネタはネタではない
+  news: { novelty: 0.10, expertise: 0.05 },  // 既知の受け売りなら出す意味がない
+  evergreen: { insider: 0.08 },              // 当事者にしか書けない部分を残す
+};
+
+function axisFloors(category) {
+  var base;
   var raw = getProp('AXIS_FLOORS', '');
-  if (!raw) return DEFAULT_AXIS_FLOORS;
-  try {
-    return JSON.parse(raw);
-  } catch (e) {
-    logEvent('axis_floors_parse_error', String(e));
-    return DEFAULT_AXIS_FLOORS;
+  if (!raw) {
+    base = DEFAULT_AXIS_FLOORS;
+  } else {
+    try {
+      base = JSON.parse(raw);
+    } catch (e) {
+      logEvent('axis_floors_parse_error', String(e));
+      base = DEFAULT_AXIS_FLOORS;
+    }
   }
+
+  var byCat = DEFAULT_CATEGORY_FLOORS;
+  var rawCat = getProp('CATEGORY_FLOORS', '');
+  if (rawCat) {
+    try {
+      byCat = JSON.parse(rawCat);
+    } catch (e2) {
+      logEvent('category_floors_parse_error', String(e2));
+    }
+  }
+
+  var out = {};
+  Object.keys(base).forEach(function (k) { out[k] = base[k]; });
+  var extra = byCat[String(category || '')] || {};
+  Object.keys(extra).forEach(function (k) {
+    if (out[k] === undefined || Number(extra[k]) > Number(out[k])) out[k] = extra[k];
+  });
+  return out;
 }
 
 /** スクリプトプロパティに入った {key: {c, n}} を読む。壊れていたら null */
@@ -175,7 +211,7 @@ function parseCorrStore(key) {
  * どちらも {key: {c: 相関係数, n: 標本数}} 形式。標本が少ない相関は信用できないので
  * n/(n+K) で0へ縮小する（K=SHRINKAGE_K、既定10）。データが無い軸は既定重みで代替する。
  */
-function axisCorrelations() {
+function axisCorrelations(category) {
   var K = Number(getProp('SHRINKAGE_K', '10'));
   var reachW = Number(getProp('REACH_MODEL_WEIGHT', '0.5'));
   var follow = parseCorrStore('AXIS_CORRELATIONS');
@@ -208,8 +244,9 @@ function axisCorrelations() {
   AXES.forEach(function (a) {
     if (out[a.key] === null) out[a.key] = (DEFAULT_AXIS_WEIGHTS[a.key] || 0.05) * scale * 5;
   });
-  // 制約条件の軸は下限で止める（負の相関が出ても減点にしない）
-  var floors = axisFloors();
+  // 制約条件の軸は下限で止める（負の相関が出ても減点にしない）。
+  // カテゴリを渡すと、その型に必須の軸も下限が効く
+  var floors = axisFloors(category);
   Object.keys(floors).forEach(function (key) {
     if (out[key] !== undefined && out[key] < Number(floors[key])) out[key] = Number(floors[key]);
   });
@@ -225,8 +262,8 @@ function axisCorrelations() {
  *   最大 = 正相関の軸すべて100点 かつ 負相関の軸すべて0点 → 100 * Σ(正の相関)
  * なので、この区間を0〜100へ線形写像する。
  */
-function compositeScoreFromAxes(axes) {
-  var c = axisCorrelations();
+function compositeScoreFromAxes(axes, category) {
+  var c = axisCorrelations(category);
   var raw = 0, pos = 0, neg = 0;
   AXES.forEach(function (a) {
     var w = Number(c[a.key]) || 0;

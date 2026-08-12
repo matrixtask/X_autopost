@@ -55,8 +55,8 @@ function getVoiceSamples(limit) {
  * 一度も見ていなかった。何で評価されるかを知らずに書いていたことになる。
  * 質問生成側（axisGuidanceForQuestions）と同じ考え方を書き手にも渡す。
  */
-function axisGuidanceForWriting() {
-  var c = axisCorrelations();
+function axisGuidanceForWriting(category) {
+  var c = axisCorrelations(category);
   var ranked = AXES.map(function (a) {
     return { label: a.label, desc: a.desc, w: Number(c[a.key]) || 0 };
   }).sort(function (x, y) { return y.w - x.w; });
@@ -77,7 +77,7 @@ function axisGuidanceForWriting() {
   return lines.join('\n');
 }
 
-function buildStylePrompt() {
+function buildStylePrompt(category) {
   var samples = getVoiceSamples(15);
   var lines = [
     'あなたは本人（中井）に代わってXのポストを書くゴーストライターです。',
@@ -98,10 +98,17 @@ function buildStylePrompt() {
     '- 過度に整った起承転結にしない。本人のサンプルと同じくらいの砕け具合にする',
     '- ハッシュタグはサンプルで使われている場合のみ、同じ頻度で使う',
     '',
+    'カテゴリごとに振り切る（いちばん大事）:',
+    '- **1つのポストの中でネタと真面目を混ぜない。** 笑わせにいった話を最後に学びへ',
+    '  着地させたり、真面目な話に受け狙いの一文を挟んだりすると、どちらでもなくなる',
+    '- neta（ネタ）: 笑わせにいく。オチで終える。教訓・学び・まとめに落とさない。短く切る',
+    '- news（時事）: 出来事に対する自分の立場を言い切る。解説で終えない。受け売りにしない',
+    '- evergreen（定番）: 舞台裏・意思決定の内側・数字で押す。ウケ狙いを混ぜない',
+    '',
   ];
   // 採点は実測相関の内積で行うのに、書き手がその軸を見ていなかった。
   // 何で評価されるかを知らずに書けば、落ちるのは当然だった
-  var axisGuide = axisGuidanceForWriting();
+  var axisGuide = axisGuidanceForWriting(category);
   if (axisGuide) {
     lines.push(axisGuide);
     lines.push('');
