@@ -24,9 +24,18 @@ function newsFeeds(days) {
     // 「交通」のような広い語を入れると自治体の広報記事ばかり拾うので使わない
     { url: googleNewsFeed('自動運転 OR ロボタクシー OR EV OR ドローン OR 物流', 'ja', days), area: 'モビリティ' },
     { url: googleNewsFeed('autonomous driving OR EV OR mobility OR transportation', 'en', days), area: 'mobility' },
-    // テクノロジー全般
-    { url: googleNewsFeed('AI OR 半導体 OR ロボット OR 宇宙', 'ja', days), area: 'テック' },
-    { url: googleNewsFeed('AI OR robotics OR semiconductor OR space tech', 'en', days), area: 'tech' },
+    // テクノロジー。AIを毎回先頭に置くとAIの話ばかりになるので、
+    // AI以外の技術だけを引く枠を分けて確保する
+    { url: googleNewsFeed('半導体 OR ロボット OR 宇宙 OR 電池 OR 素材', 'ja', days), area: 'テック' },
+    { url: googleNewsFeed('robotics OR semiconductor OR space OR battery OR materials', 'en', days), area: 'tech' },
+    { url: googleNewsFeed('AI OR 生成AI', 'ja', days), area: 'AI' },
+    // エンタメ・カルチャー・スポーツ。技術の話だけだと読者が偏るし、
+    // 本人の人となりが出るポストの種はこちら側から出やすい。
+    // 「炎上」のような多義語は車両火災や野球の失点まで拾うので使わない
+    { url: googleNewsFeed('映画 OR ドラマ OR 音楽 OR ゲーム OR アニメ', 'ja', days), area: 'エンタメ' },
+    { url: googleNewsFeed('優勝 OR 移籍 OR 世界記録 OR 逆転', 'ja', days), area: 'スポーツ' },
+    { url: googleNewsFeed('entertainment OR gaming OR music OR film', 'en', days), area: 'pop' },
+    { url: googleNewsFeed('SNSで話題 OR ヒット商品 OR 流行語 OR 予約殺到', 'ja', days), area: '話題' },
     // スタートアップの資金調達・撤退（まだ知られていない話が出やすい）
     { url: googleNewsFeed('startup funding OR acquisition OR shutdown', 'en', days), area: 'startup' },
     { url: googleNewsFeed('スタートアップ 資金調達 OR 買収', 'ja', days), area: 'スタートアップ' },
@@ -83,7 +92,34 @@ function fetchNewsItems(limit, days) {
     if (b.dup !== a.dup) return b.dup - a.dup;
     return (a.ageHours === null ? 999 : a.ageHours) - (b.ageHours === null ? 999 : b.ageHours);
   });
-  return clustered.slice(0, limit || 15);
+  return balanceByArea(clustered, limit || 15);
+}
+
+/**
+ * 領域ごとに順番に取って、上位が一領域で埋まるのを防ぐ。
+ *
+ * フィードを増やしても、話題の大きさ順に並べるとAIのように記事数が多い
+ * 領域が上位を占める。プロンプトに渡る時点で偏っていたら、そこから選ぶ
+ * テーマも偏る。各領域の1位から順に拾っていく。
+ */
+function balanceByArea(items, limit) {
+  var byArea = {};
+  var order = [];
+  items.forEach(function (it) {
+    var k = String(it.area || '?');
+    if (!byArea[k]) { byArea[k] = []; order.push(k); }
+    byArea[k].push(it);
+  });
+  var out = [];
+  for (var round = 0; out.length < limit; round++) {
+    var added = 0;
+    for (var i = 0; i < order.length && out.length < limit; i++) {
+      var list = byArea[order[i]];
+      if (list.length > round) { out.push(list[round]); added++; }
+    }
+    if (!added) break;
+  }
+  return out;
 }
 
 /** 見出しの文字列だけが欲しい呼び出し向け（従来互換） */
