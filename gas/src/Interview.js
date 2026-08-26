@@ -325,38 +325,45 @@ function generateInterviewQuestions(themes, headlines, count) {
  * Slackスレッドへの返信を処理する（doPost から呼ばれる）。
  */
 function handleInterviewReply(threadTs, text, imageRef) {
-  // シートが数値解釈でtsの末尾0を落とすことがあるため、正規化して照合する
   var all = readTable(SHEET.INTERVIEWS);
-  // まずスレッドで引く。status は見ない。スレッドはセッションを一意に指すので、
-  // 状態を条件に混ぜると「どの質問への回答か」が分かっているのに取りこぼす
-  var byThread = all.filter(function (r) { return slackTsEqual(r.thread_ts, threadTs); });
-  var rows = byThread.filter(function (r) { return String(r.status) === INTERVIEW_STATUS.OPEN; });
 
-  if (!rows.length && byThread.length) {
-    // 前日の答えきれなかったセッションは、翌朝の expireOldSessions で expired に
-    // なる。しかし本人はそのスレッドの質問に答えている。未回答が残っているなら
-    // セッションを復活させて、正しい質問への回答として記録する。
-    // ここで当日の別セッションへ流すと、違う質問への回答になってしまう
-    var revivable = byThread.filter(function (r) {
+  function sessionRows(sid) {
+    return all.filter(function (r) { return String(r.session_id) === sid; })
+      .sort(function (a, b) { return Number(a.idx) - Number(b.idx); });
+  }
+  function unanswered(rs) {
+    return rs.filter(function (r) {
       return !String(r.answer || '').trim() && String(r.answered_at) !== 'skipped';
     });
-    var sid = String(byThread[0].session_id);
-    if (revivable.length) {
-      updateRowsWhere(SHEET.INTERVIEWS, 'session_id', sid, { status: INTERVIEW_STATUS.OPEN });
-      rows = all.filter(function (r) { return String(r.session_id) === sid; });
-      logEvent('interview_revived', sid + ' を再開しました（未回答' + revivable.length + '問）');
-      sendSlack(':arrows_counterclockwise: 前のインタビューを再開しました。残り' +
-        revivable.length + '問です。', threadTs);
-    } else {
-      logEvent('interview_no_match', sid + ' は全問回答済みです（thread_ts=' + threadTs + '）');
-      return false; // 答え終わったスレッドへの書き込みはメモ扱いでよい
+  }
+  // session_id は先頭が日付なので、辞書順の最大がいちばん新しい
+  function newest(ids) { return ids.slice().sort().reverse()[0]; }
+
+  // 1. スレッドで引く。status は見ない（前日分は expired になっているが、
+  //    そのスレッドの質問に答えているのだから拾う）
+  var threadIds = {};
+  all.forEach(function (r) {
+    if (slackTsEqual(r.thread_ts, threadTs)) threadIds[String(r.session_id)] = true;
+  });
+  var ids = Object.keys(threadIds);
+  var matchedByThread = ids.length > 0;
+  var sessionId = null;
+
+  if (matchedByThread) {
+    // **必ず1セッションに絞る。** 行を混ぜると別の日の質問に回答が付く
+    // （Q1に答えたのにQ10がスキップされ、そこで全問終了した実例がある）
+    var withOpen = ids.filter(function (x) { return unanswered(sessionRows(x)).length > 0; });
+    sessionId = newest(withOpen.length ? withOpen : ids);
+    if (ids.length > 1) {
+      logEvent('interview_multi_session',
+        'thread_ts=' + threadTs + ' に ' + ids.length + 'セッションが紐付いています。' +
+        sessionId + ' を使いました（' + ids.join(', ') + '）');
     }
   }
 
-  if (!rows.length) {
-    // tsが合わなくても、進行中のセッションが1つしか無いならそれへの回答とみなす。
-    // 照合に失敗した理由（保存値の欠損・精度落ち等）で回答を捨てるほうが害が大きい。
-    // 直後の自己修復で保存値が正しいtsに直るので、次回からは普通に一致する。
+  if (!matchedByThread) {
+    // tsが合わない。進行中セッションが1つだけならそれへの回答とみなす。
+    // 照合が外れた理由で回答を捨てるほうが害が大きい
     var openIds = {};
     var storedTs = [];
     all.forEach(function (r) {
@@ -364,27 +371,43 @@ function handleInterviewReply(threadTs, text, imageRef) {
       if (!openIds[String(r.session_id)]) storedTs.push(String(r.thread_ts));
       openIds[String(r.session_id)] = true;
     });
-    var ids = Object.keys(openIds);
-    if (ids.length !== 1) {
-      // 何と比較して外れたのかが分からないと原因を追えないので、保存値も出す
+    var openList = Object.keys(openIds);
+    if (openList.length !== 1) {
       logEvent('interview_no_match', 'thread_ts=' + threadTs +
-        ' / 進行中セッション' + ids.length + '件 保存値=' + (storedTs.join(', ') || 'なし'));
+        ' / 進行中セッション' + openList.length + '件 保存値=' + (storedTs.join(', ') || 'なし'));
       return false;
     }
-    rows = all.filter(function (r) {
-      return String(r.session_id) === ids[0] && String(r.status) === INTERVIEW_STATUS.OPEN;
-    });
+    sessionId = openList[0];
     logEvent('interview_ts_fallback',
-      'thread_ts=' + threadTs + ' は一致しなかったが、進行中の ' + ids[0] + ' への回答として扱いました' +
-      '（保存値: ' + storedTs.join(', ') + '）');
+      'thread_ts=' + threadTs + ' は一致しなかったが、進行中の ' + sessionId + ' への回答として扱いました');
   }
-  rows.sort(function (a, b) { return Number(a.idx) - Number(b.idx); });
-  var sessionId = String(rows[0].session_id);
-  // 保存値が欠損していたら、イベントの正確なtsでシートを自己修復する
-  if (String(rows[0].thread_ts) !== 'ts_' + String(threadTs)) {
+
+  var rows = sessionRows(sessionId);
+  var pending = unanswered(rows);
+  if (!pending.length) {
+    // 答え終わったスレッドへの書き込みはメモ扱いでよい
+    logEvent('interview_no_match', sessionId + ' は全問回答済みです（thread_ts=' + threadTs + '）');
+    return false;
+  }
+
+  // 前日の答えきれなかったセッションは翌朝 expireOldSessions で expired になる。
+  // 未回答が残っているなら、返信をきっかけに再開する
+  if (String(rows[0].status) !== INTERVIEW_STATUS.OPEN) {
+    updateRowsWhere(SHEET.INTERVIEWS, 'session_id', sessionId, { status: INTERVIEW_STATUS.OPEN });
+    rows = sessionRows(sessionId);
+    logEvent('interview_revived', sessionId + ' を再開しました（未回答' + pending.length + '問）');
+    sendSlack(':arrows_counterclockwise: 前のインタビューを再開しました。残り' +
+      pending.length + '問です。', threadTs);
+  }
+
+  // 保存値が精度落ちしていたら直す。**スレッドで一致した場合だけ**行う。
+  // 救済で拾ったときに書き込むと、無関係なセッションにこのスレッドのtsが
+  // 焼き付き、次からセッションが混ざる（上のQ10問題の原因がこれ）
+  if (matchedByThread && String(rows[0].thread_ts) !== 'ts_' + String(threadTs)) {
     updateRowsWhere(SHEET.INTERVIEWS, 'session_id', sessionId, { thread_ts: 'ts_' + String(threadTs) });
     logEvent('interview_ts_healed', sessionId + ': ' + rows[0].thread_ts + ' -> ts_' + threadTs);
   }
+
   var trimmed = String(text || '').trim();
 
   if (/^(終了|以上|おわり|done)/.test(trimmed)) {
@@ -415,7 +438,9 @@ function handleInterviewReply(threadTs, text, imageRef) {
     ? ':fast_forward: Q' + current.idx + ' をスキップしました。'
     : ':white_check_mark: Q' + current.idx + ' の回答を記録しました。';
 
-  var remaining = rows.filter(function (r) {
+  // 未回答のものだけを残りとして数える。単に idx が大きい行を拾うと、
+  // 既に答えた質問をもう一度出してしまう
+  var remaining = unanswered(sessionRows(sessionId)).filter(function (r) {
     return Number(r.idx) > Number(current.idx);
   });
   if (remaining.length) {
