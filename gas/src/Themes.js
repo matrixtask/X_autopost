@@ -64,9 +64,21 @@ function pickThemesForToday() {
     return pickWeighted(pool, effectiveWeight);
   }
 
+  // 直近で使ったテーマは時事枠から**外す**。重みを下げるだけだと同じ話題が
+  // 翌日また当たることがあり、「昨日と同じ話」になってしまう
+  var skipDays = Number(getProp('TREND_COOLDOWN_DAYS', '2'));
+  function usedRecently(t) {
+    if (!t.last_used) return false;
+    return (now.getTime() - new Date(t.last_used).getTime()) / 86400000 < skipDays;
+  }
+
   var picked = [];
-  // 1. 時事枠を確保する。今週の trend 枠 → 無ければ news カテゴリ
-  var trend = pickFrom(function (t) { return String(t.roster) === 'trend'; }) ||
+  // 1. 時事枠を確保する。今週の trend 枠 → 無ければ news カテゴリ。
+  //    直近で使ったものを除いて選び、全部使い切っていたら制限を外す
+  var trend =
+    pickFrom(function (t) { return String(t.roster) === 'trend' && !usedRecently(t); }) ||
+    pickFrom(function (t) { return String(t.category) === 'news' && !usedRecently(t); }) ||
+    pickFrom(function (t) { return String(t.roster) === 'trend'; }) ||
     pickFrom(function (t) { return String(t.category) === 'news'; });
   if (trend) picked.push(trend);
 
@@ -529,7 +541,14 @@ function rotateThemeRoster() {
   } catch (e) {
     logEvent('roster_error', 'ニュース取得に失敗: ' + String(e).slice(0, 200));
   }
-  added.trend = draftThemes('trend', sizes.trend, { news: news }, taken, today);
+  // 先週の時事枠と、直近で実際に使ったテーマを渡して同じ話題の繰り返しを防ぐ
+  var recentlyCovered = rows.filter(function (t) {
+    if (String(t.roster) === 'trend') return true; // 先週の時事枠
+    var used = String(t.last_used || '');
+    if (!used) return false;
+    return (nowJst().getTime() - new Date(used).getTime()) / 86400000 <= 7;
+  }).map(function (t) { return String(t.theme); }).slice(0, 40);
+  added.trend = draftThemes('trend', sizes.trend, { news: news, recent: recentlyCovered }, taken, today);
 
   var summary = {
     core: core.length, adjacent: added.adjacent.length,
@@ -604,18 +623,28 @@ function draftThemes(kind, count, ctx, taken, today) {
     ].join('\n'),
     trend: [
       (ctx.news && ctx.news.length
-        ? '直近3日のニュース見出し（「◯媒体が報道」が多いほど話題として大きい）:\n' +
+        ? '直近3日のニュース見出し（「◯媒体が報道」が多いほど話題として大きい / （）内は領域）:\n' +
           ctx.news.map(formatNewsItem).join('\n')
         : '（見出しを取得できませんでした。一般的な時事の切り口で構いません）'),
       '',
+      (ctx.recent && ctx.recent.length
+        ? '**直近で既に扱った話題（別の話題にすること）**:\n' +
+          ctx.recent.map(function (t) { return '- ' + t; }).join('\n') + '\n'
+        : ''),
       '時事・トレンドのテーマを' + count + '件作ってください。',
       '',
       '**選び方（ここがいちばん大事）**',
       '- 上の見出しから、いま実際に読まれている／これから読まれそうな話題を選ぶ。' +
         '複数媒体が扱っている話題を優先する',
-      '- 対象領域は**テクノロジーとモビリティ全般**。AI・半導体・ロボット・宇宙・EV・自動運転・鉄道・物流など',
-      '- **空飛ぶクルマ/eVTOL のテーマは' + Math.max(1, Math.round(count * 0.15)) + '件まで**。' +
-        'それ以上は作らない。自社領域の話ばかりだと、時事枠が事業紹介の言い換えになってしまう',
+      '- **1領域に偏らせない。** 見出しの（）内に領域が書いてあるので、' +
+        'できるだけ多くの領域からまんべんなく選ぶ',
+      '- **AI関連は' + Math.max(1, Math.round(count * 0.2)) + '件まで**。' +
+        'AIの話ばかりだと読み飽きられる',
+      '- **空飛ぶクルマ/eVTOL は' + Math.max(1, Math.round(count * 0.15)) + '件まで**。' +
+        '自社領域の話ばかりだと、時事枠が事業紹介の言い換えになってしまう',
+      '- エンタメ・スポーツ・音楽・ゲーム・映画・世の中の流行も**必ず混ぜる**。' +
+        '技術の話しかしない人だと思われると、読者が広がらない。' +
+        'この人の人となりが出るポストは、むしろこちら側から生まれる',
       '- 見出しに無い一般論（「AIの未来について」等）は作らない。特定の出来事に紐づける',
       '- 自治体の広報・キャンペーン告知・定例発表・株価の値動きは飛ばす。' +
         '読んだ人が「知らなかった」と思う出来事を選ぶ',
