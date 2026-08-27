@@ -56,17 +56,26 @@ function getVoiceSamples(limit) {
  * 質問生成側（axisGuidanceForQuestions）と同じ考え方を書き手にも渡す。
  */
 function axisGuidanceForWriting(category) {
-  var c = axisCorrelations(category);
+  var b = axisWeightBreakdown(category);
+  var c = b.weights;
   var ranked = AXES.map(function (a) {
-    return { label: a.label, desc: a.desc, w: Number(c[a.key]) || 0 };
+    return { key: a.key, label: a.label, desc: a.desc, w: Number(c[a.key]) || 0 };
   }).sort(function (x, y) { return y.w - x.w; });
 
   var top = ranked.slice(0, 5).filter(function (x) { return x.w > 0; });
   var bottom = ranked.slice(-3).filter(function (x) { return x.w < 0; });
   if (!top.length) return '';
 
-  var lines = ['採点で重く見る軸（実測でフォロワー獲得に効いている順）:'];
-  top.forEach(function (x) { lines.push('- ' + x.label + ': ' + x.desc); });
+  // 重みの出どころで書き方を変える。実測で裏が取れていないのに
+  // 「実測で効いている」と書くと、根拠のない指示を強い口調で押し付けることになる
+  var proven = {};
+  b.significant.forEach(function (k) { proven[k] = true; });
+  var lines = [b.significant.length
+    ? '採点で重く見る軸（★は実測で効き目が確認できたもの。他はまだ想定）:'
+    : '採点で重く見る軸（いずれもまだ実測の裏付けはなく、想定にもとづく重みです）:'];
+  top.forEach(function (x) {
+    lines.push('- ' + (proven[x.key] ? '★' : '') + x.label + ': ' + x.desc);
+  });
   if (bottom.length) {
     lines.push('');
     lines.push('逆に、この軸に寄せたポストは成果が下がっている。ここを狙わない:');

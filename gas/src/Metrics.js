@@ -272,15 +272,34 @@ function backfillManualPosts(maxPosts) {
  * 軸同士は相関が高い（良い投稿は全軸で高い）ため重回帰は過学習する。
  * この規模では単相関＋平滑化の方が素直で壊れにくい。
  */
-/** 各軸と成果指標の単相関。標本5件未満の軸は corr=null */
+/**
+ * 各軸と成果指標の相関。標本5件未満の軸は corr=null。
+ *
+ * 生の相関(corr)と、ハローを除いた相関(corrCentered)の両方を出す。
+ *
+ * 生の軸スコアはどれも「そのポストの出来の良さ」を含んでいる（良いポストは
+ * 全軸が高い）ので、そのまま相関を取ると全軸が同じ成分を拾ってしまい、
+ * 軸ごとの効き方の違いが見えない。ポスト内の平均を引くと「そのポストの中で
+ * 相対的に何が強かったか」だけが残る。重みの学習にはこちらを使う。
+ */
 function axisCorrelationsFor(target, outcomes) {
+  var keys = AXES.map(function (a) { return a.key; });
+  var centered = target.map(function (r) {
+    var ax = parseAxes(r.axes);
+    return ax ? centerAxisScores(ax, keys) : {};
+  });
   return AXES.map(function (a) {
-    var xs = [], ys = [];
+    var xs = [], ys = [], cs = [], cys = [];
     target.forEach(function (r, i) {
       var ax = parseAxes(r.axes);
       if (ax && isFinite(Number(ax[a.key]))) { xs.push(Number(ax[a.key])); ys.push(outcomes[i]); }
+      if (isFinite(Number(centered[i][a.key]))) { cs.push(Number(centered[i][a.key])); cys.push(outcomes[i]); }
     });
-    return { key: a.key, label: a.label, n: xs.length, corr: xs.length >= 5 ? pearson(xs, ys) : null };
+    return {
+      key: a.key, label: a.label, n: xs.length,
+      corr: xs.length >= 5 ? pearson(xs, ys) : null,
+      corrCentered: cs.length >= 5 ? pearson(cs, cys) : null,
+    };
   });
 }
 
@@ -293,6 +312,86 @@ function analyzableRows() {
   });
 }
 
+/** 投稿時刻を数値に。読めなければ null */
+function postedAtMs(r) {
+  var t = new Date(String(r.posted_at).replace(' ', 'T') + ':00+09:00').getTime();
+  return isFinite(t) ? t : null;
+}
+
+/**
+ * 窓内インプレッション順位。フォロワー数もアルゴリズムも時期で変わるので、
+ * 生のインプではなく前後30日の投稿内での相対順位に直して比較可能にする。
+ */
+function reachOutcomes(rows) {
+  return percentileWithinWindow(rows.map(function (r) {
+    return { t: postedAtMs(r), v: Number(r.impressions) };
+  }), 30);
+}
+
+/**
+ * 実測から重みベクトルを推定する。クロスバリデーションでも同じ関数を使うので、
+ * 「学習に使っていない投稿でどれだけ当たるか」を正しく測れる。
+ *
+ * Config.js の axisWeightBreakdown() と同じ考え方（有意な分だけ残す →
+ * 塊で分け合う → 事前分布と混ぜる）を、その場のデータに対して行う。
+ */
+function learnAxisWeights(rows, outcomes) {
+  var z = axisSignificanceZ();
+  var results = axisCorrelationsFor(rows, outcomes);
+  var learned = {};
+  var significant = [];
+  results.forEach(function (x) {
+    var c = x.corrCentered === null ? x.corr : x.corrCentered;
+    var v = c === null ? 0 : shrinkCorrelation(c, x.n, z);
+    learned[x.key] = v;
+    if (v !== 0) significant.push(x.key);
+  });
+
+  var clusters = axisClusters();
+  if (String(getProp('CLUSTER_SPLIT', 'learned')) !== 'off') {
+    clusters.forEach(function (g) {
+      var members = g.filter(function (k) { return learned[k] !== undefined; });
+      if (members.length < 2) return;
+      members.forEach(function (k) { learned[k] = learned[k] / members.length; });
+    });
+  }
+
+  var learnedNorm = normalizeWeights(learned);
+  var priorNorm = normalizeWeights(DEFAULT_AXIS_WEIGHTS) || DEFAULT_AXIS_WEIGHTS;
+  var blend = learnedNorm ? Math.min(1, significant.length / Math.max(1, axisLearnedFullAt())) : 0;
+  var w = {};
+  AXES.forEach(function (a) {
+    var pr = Number(priorNorm[a.key]) || 0;
+    var le = learnedNorm ? (Number(learnedNorm[a.key]) || 0) : 0;
+    w[a.key] = pr * (1 - blend) + le * blend;
+  });
+  return { weights: w, results: results, significant: significant, blend: blend };
+}
+
+/** 重みベクトルで1件を採点する（compositeScoreFromAxes と同じ正規化） */
+function scoreWithWeights(axes, w) {
+  var raw = 0, pos = 0, neg = 0;
+  AXES.forEach(function (a) {
+    var wt = Number(w[a.key]) || 0;
+    var v = Number(axes[a.key]);
+    raw += (isFinite(v) ? v : 50) * wt;
+    if (wt > 0) pos += wt; else neg += wt;
+  });
+  var min = 100 * neg, max = 100 * pos;
+  if (max - min <= 0) return 50;
+  return Math.max(0, Math.min(100, 100 * (raw - min) / (max - min)));
+}
+
+/**
+ * 軸別の相関分析と重み学習。
+ *
+ * 各採点軸(0-100)と成果指標の相関を取り、「どの軸が実際に効いているか」を
+ * 推定する。相関はそのまま保存し、重みへの変換（有意性による割り引き・
+ * 塊の分割・事前分布との混合）は読み出し側の axisWeightBreakdown() が行う。
+ *
+ * 軸同士は相関が高い（良い投稿は全軸で高い）ため重回帰は過学習する。
+ * 単相関＋ハロー除去＋有意性の足切り、の方がこの規模では素直で壊れにくい。
+ */
 function analyzeAxes(mode) {
   var rows = analyzableRows();
 
@@ -310,19 +409,30 @@ function analyzeAxes(mode) {
     outcomeName = 'プロフィールクリック率';
     outcomes = target.map(function (r) { return Number(r.profile_clicks) / Number(r.impressions) * 100; });
   } else {
-    // フォロワー数もアルゴリズムも時期で変わるため、生インプではなく
-    // 前後30日の投稿内での相対順位に変換して比較可能にする
-    target = rows.filter(function (r) { return Number(r.impressions || 0) > 0 && r.posted_at; });
+    target = rows.filter(function (r) { return Number(r.impressions || 0) > 0 && postedAtMs(r) !== null; });
     outcomeName = 'インプレッション窓内順位';
-    outcomes = percentileWithinWindow(target.map(function (r) {
-      return { t: new Date(String(r.posted_at).replace(' ', 'T') + ':00+09:00').getTime(), v: Number(r.impressions) };
-    }), 30);
+    outcomes = reachOutcomes(target);
   }
 
   var results = axisCorrelationsFor(target, outcomes);
 
-  // 相関ベクトルをそのまま保存する（重みへの変換はせず、内積の係数として使う）。
-  // 標本数も一緒に残し、読み出し側で n/(n+K) の縮小をかける。
+  // 軸同士の塊を実測から求めて保存する。内積で同じ成分が何度も数えられるのを防ぐ
+  if (target.length >= 15) {
+    var columns = {};
+    AXES.forEach(function (a) {
+      columns[a.key] = target.map(function (r) {
+        var ax = parseAxes(r.axes);
+        return ax && isFinite(Number(ax[a.key])) ? Number(ax[a.key]) : 50;
+      });
+    });
+    var groups = correlationClusters(columns, AXES.map(function (a) { return a.key; }),
+      Number(getProp('CLUSTER_THRESHOLD', '0.7'))).filter(function (g) { return g.length > 1; });
+    PropertiesService.getScriptProperties().setProperty('AXIS_CLUSTERS', JSON.stringify(groups));
+    if (groups.length) logEvent('axis_clusters', JSON.stringify(groups));
+  }
+
+  // 相関ベクトルをそのまま保存する（重みへの変換は読み出し側で行う）。
+  // 学習に使うのはハロー除去後の相関。標本数も一緒に残す
   var minSamples = Number(getProp('MIN_AXIS_SAMPLES', '10'));
   var usable = results.filter(function (x) { return x.corr !== null && x.n >= minSamples; });
   var updated = false;
@@ -331,107 +441,165 @@ function analyzeAxes(mode) {
   if (usable.length >= 3) {
     var store = {};
     results.forEach(function (x) {
-      if (x.corr !== null && x.n >= minSamples) {
-        store[x.key] = { c: Math.round(x.corr * 1000) / 1000, n: x.n };
-      }
+      if (x.corr === null || x.n < minSamples) return;
+      var c = x.corrCentered === null ? x.corr : x.corrCentered;
+      store[x.key] = { c: Math.round(c * 1000) / 1000, n: x.n, raw: Math.round(x.corr * 1000) / 1000 };
     });
     PropertiesService.getScriptProperties().setProperty(storeKey, JSON.stringify(store));
     updated = true;
     logEvent('axis_correlations', storeKey + ' ' + JSON.stringify(store));
   }
 
-  // 実際にスコア計算で使われている係数（縮小後）と、その寄与率
-  var effective = axisCorrelations();
+  // 実際にスコア計算で使われている重みと、その寄与率
+  var breakdown = axisWeightBreakdown();
+  var effective = breakdown.weights;
   var absSum = 0;
   AXES.forEach(function (a) { absSum += Math.abs(Number(effective[a.key]) || 0); });
 
   var floors = axisFloors();
+  var threshold = minDetectableCorrelation(target.length, axisSignificanceZ());
   var ranked = results.slice().sort(function (a, b) {
     return (b.corr === null ? -2 : b.corr) - (a.corr === null ? -2 : a.corr);
   }).map(function (x) {
     var eff = Number(effective[x.key]) || 0;
+    var c = x.corrCentered === null ? x.corr : x.corrCentered;
     return {
-      key: x.key, label: x.label, n: x.n, corr: x.corr,
+      key: x.key, label: x.label, n: x.n, corr: x.corr, corrCentered: x.corrCentered,
       effective: Math.round(eff * 1000) / 1000,
       share: absSum > 0 ? Math.round(Math.abs(eff) / absSum * 1000) / 10 : 0,
-      // 相関が下限を下回っていて、重みが下限で止められている軸
+      // 誤差の範囲を超えているか（超えていないなら重みには入っていない）
+      significant: c !== null && shrinkCorrelation(c, x.n, axisSignificanceZ()) !== 0,
       floored: floors[x.key] !== undefined && eff <= Number(floors[x.key]) + 1e-9,
     };
   });
   return {
     outcomeName: outcomeName, sampleSize: target.length, minSamples: minSamples,
-    ranked: ranked, updated: updated,
+    ranked: ranked, updated: updated, breakdown: breakdown,
+    detectable: threshold,
   };
 }
 
 /**
- * 交絡の検証: 取り込んだ手動投稿と、この仕組みが生成した投稿とで、
- * 軸の効き方が違うかどうかを見る。
+ * 採点の正しさを、学習に使っていない投稿で測る。
  *
- * 標本の大半は取り込んだ過去の手動投稿で、それらは定義上いちばん
- * 「本人らしい」うえに雑談や短い呟きが多い。そのため「本人らしさ」の
- * 負の相関が、文体そのものではなく「昔の雑な呟きかどうか」を拾って
- * いる可能性がある。群を分けて符号が変わるなら、その疑いは濃い。
+ * これがこの仕組みの一次指標。手元のデータに当てはめた相関はいくらでも
+ * 高く出せる（実測では 同一標本 +0.32 に対し、学習に使っていない投稿では
+ * +0.04 だった）ので、必ず分割して測る。
  *
- * 成果指標は analyzeAxes と同じ考え方で、群ごとに窓内インプ順位を使う
- * （プロフィールクリックは直近30日分しかなく、群を割ると足りないため）。
+ * 5分割し、4/5で重みを学習して残り1/5を採点する、を5回。順番はidで固定する
+ * （実行のたびに数字が動くと、良くなったのか偶然なのか分からなくなるため）。
+ *
+ * GASエディタでは Metrics.gs を開いて実行する。
  */
-function analyzeAxesByOrigin() {
-  var rows = analyzableRows().filter(function (r) {
-    return Number(r.impressions || 0) > 0 && r.posted_at;
+function evaluateScoringAccuracy(mode) {
+  // 成果指標を選ぶ。プロフィールクリック率を優先する。
+  //
+  // インプレッションは「内容で動いていない」ことが実測で分かっている
+  // （どの軸も、文字数も投稿時刻も、有意な相関を持たない）。ノイズを
+  // 相手に予測力を測ると、採点がどれだけ良くなっても数字は0のままで、
+  // 改善したかどうかが判定できない。
+  // プロフィールクリック率はフォローの直前行動で、実測でも軸との相関が出る。
+  var all = analyzableRows();
+  var withClicks = all.filter(function (r) {
+    return r.profile_clicks !== '' && Number(r.impressions || 0) > 0;
   });
-  var groups = {
-    manual: rows.filter(function (r) { return String(r.category) === 'manual'; }),
-    generated: rows.filter(function (r) { return String(r.category) !== 'manual'; }),
-  };
-
-  var out = {};
-  Object.keys(groups).forEach(function (name) {
-    var g = groups[name];
-    if (g.length < 10) { out[name] = { n: g.length, ranked: null }; return; }
-    // 群ごとに窓内順位を取り直す（群をまたいで順位を比べても意味がないため）
-    var outcomes = percentileWithinWindow(g.map(function (r) {
-      return { t: new Date(String(r.posted_at).replace(' ', 'T') + ':00+09:00').getTime(), v: Number(r.impressions) };
-    }), 30);
-    out[name] = { n: g.length, ranked: axisCorrelationsFor(g, outcomes) };
-  });
-  return out;
-}
-
-/** 交絡検証をSlackに投げる。手動実行用 */
-function reportAxesByOrigin() {
-  var a = analyzeAxesByOrigin();
-  if (!a.manual.ranked || !a.generated.ranked) {
-    var msg = ':mag: 交絡検証: 群が足りません（手動投稿' + a.manual.n + '件 / 生成投稿' + a.generated.n +
-      '件。それぞれ10件以上必要です）';
-    notifySlack(msg);
-    return msg;
+  var useClicks = mode !== 'reach' && withClicks.length >= 25;
+  var rows, outcomes, outcomeName;
+  if (useClicks) {
+    rows = withClicks.slice();
+    outcomeName = 'プロフィールクリック率';
+  } else {
+    rows = all.filter(function (r) { return Number(r.impressions || 0) > 0 && postedAtMs(r) !== null; });
+    outcomeName = 'インプレッション窓内順位';
   }
-  var byKey = {};
-  a.generated.ranked.forEach(function (x) { byKey[x.key] = x; });
+
+  var K = 5;
+  if (rows.length < 25) {
+    var short = ':straight_ruler: 採点の予測力: 標本不足（軸スコアと実測が揃った投稿が' +
+      rows.length + '件。25件以上必要です）';
+    notifySlack(short);
+    return short;
+  }
+  rows.sort(function (a, b) { return String(a.id) < String(b.id) ? -1 : 1; });
+  outcomes = useClicks
+    ? rows.map(function (r) { return Number(r.profile_clicks) / Number(r.impressions) * 100; })
+    : reachOutcomes(rows);
+
+  var predicted = [], actual = [], priorPred = [];
+  for (var f = 0; f < K; f++) {
+    var train = [], trainOut = [], test = [];
+    rows.forEach(function (r, i) {
+      if (i % K === f) test.push({ row: r, out: outcomes[i] });
+      else { train.push(r); trainOut.push(outcomes[i]); }
+    });
+    if (train.length < 10 || !test.length) continue;
+    var w = learnAxisWeights(train, trainOut).weights;
+    test.forEach(function (t) {
+      var ax = parseAxes(t.row.axes);
+      if (!ax) return;
+      predicted.push(scoreWithWeights(ax, w));
+      priorPred.push(scoreWithWeights(ax, DEFAULT_AXIS_WEIGHTS));
+      actual.push(t.out);
+    });
+  }
+  if (predicted.length < 10) {
+    var few = ':straight_ruler: 採点の予測力: 検証できた件数が' + predicted.length + '件しかありません';
+    notifySlack(few);
+    return few;
+  }
+
+  var rho = spearman(predicted, actual);
+  var rhoPrior = spearman(priorPred, actual);
+  // 順位相関だけだと実感が湧かないので、上位半分と下位半分の実測差も出す
+  var idx = predicted.map(function (_, i) { return i; })
+    .sort(function (a, b) { return predicted[b] - predicted[a]; });
+  var half = Math.floor(idx.length / 2);
+  function med(list) {
+    var v = list.slice().sort(function (a, b) { return a - b; });
+    if (!v.length) return 0;
+    return v.length % 2 ? v[(v.length - 1) / 2] : (v[v.length / 2 - 1] + v[v.length / 2]) / 2;
+  }
+  var topHalf = med(idx.slice(0, half).map(function (i) { return actual[i]; }));
+  var lowHalf = med(idx.slice(half).map(function (i) { return actual[i]; }));
+  var unit = useClicks ? '%' : 'パーセンタイル';
+
+  // n件での「偶然でも出てしまう順位相関」の目安
+  var noise = minDetectableCorrelation(predicted.length, 2.0);
+  var verdict = rho === null ? '計算不能'
+    : Math.abs(rho) < noise ? '実質ゼロ（偶然の範囲）'
+    : rho > 0 ? '予測できている' : '逆に効いている（重みの符号が疑わしい）';
 
   var lines = [
-    ':mag: *交絡検証: 手動投稿 vs 生成投稿*（成果指標はどちらもインプレッション窓内順位）',
-    '手動' + a.manual.n + '件 / 生成' + a.generated.n + '件。',
-    '符号が入れ替わる軸は、その軸そのものではなく「どちらの群か」を測っている疑いがあります。',
+    ':straight_ruler: *採点の予測力*（' + K + '分割クロスバリデーション / 検証' + predicted.length + '件）',
+    '成果指標: ' + outcomeName,
+    '学習に使っていない投稿を採点して、実測をどれだけ当てられたかです。',
+    '手元のデータへの当てはまりは重みをいじれば上がりますが、この数字は上がりません。',
     '',
+    '学習した重み: 順位相関 ' + (rho === null ? '—' : (rho >= 0 ? '+' : '') + rho.toFixed(2)) + '  → ' + verdict,
+    '事前分布のみ: 順位相関 ' + (rhoPrior === null ? '—' : (rhoPrior >= 0 ? '+' : '') + rhoPrior.toFixed(2)),
+    '偶然でも出る大きさ: ±' + noise.toFixed(2) + '（これを超えて初めて意味があります）',
+    '',
+    'スコア上位半分の実測 中央値 ' + topHalf.toFixed(2) + unit,
+    'スコア下位半分の実測 中央値 ' + lowHalf.toFixed(2) + unit,
+    '差 ' + (topHalf - lowHalf).toFixed(2) + unit + '（0なら採点は当たっていません）',
   ];
-  var flipped = [];
-  a.manual.ranked.slice().sort(function (x, y) {
-    return (y.corr === null ? -2 : y.corr) - (x.corr === null ? -2 : x.corr);
-  }).forEach(function (m) {
-    var g = byKey[m.key];
-    if (m.corr === null || !g || g.corr === null) return;
-    var flip = (m.corr < -0.05 && g.corr > 0.05) || (m.corr > 0.05 && g.corr < -0.05);
-    if (flip) flipped.push(m.label);
-    lines.push((flip ? ':warning: ' : '') + m.label +
-      ': 手動 ' + (m.corr >= 0 ? '+' : '') + m.corr.toFixed(2) +
-      ' / 生成 ' + (g.corr >= 0 ? '+' : '') + g.corr.toFixed(2));
-  });
-  lines.push('');
-  lines.push(flipped.length
-    ? '符号が反転した軸: ' + flipped.join('、') + '。これらは交絡の疑いが濃いので、重みをそのまま信じないでください。'
-    : '符号が反転した軸はありません。群による交絡は見当たりません。');
+  if (rho !== null && Math.abs(rho) < noise) {
+    lines.push('');
+    lines.push('※ いまの標本数では、どんな重みでもこの水準を超えられません。' +
+      '重みをいじるより、まず measureScoringReliability（Quality.gs）で' +
+      '採点自体が再現するかを確かめてください。');
+  }
+  if (!useClicks) {
+    lines.push('');
+    lines.push('※ 成果指標がインプレッションのときは、そもそも実測が内容で' +
+      'ほとんど動きません（文字数も投稿時刻も有意な相関を持たない）。' +
+      'プロフィールクリック付きの投稿が25件たまると、そちらで測るようになります' +
+      '（現在' + withClicks.length + '件）。');
+  }
+  logEvent('scoring_accuracy', outcomeName + ' n=' + predicted.length +
+    ' rho=' + (rho === null ? 'null' : rho.toFixed(3)) +
+    ' prior=' + (rhoPrior === null ? 'null' : rhoPrior.toFixed(3)) +
+    ' gap=' + (topHalf - lowHalf).toFixed(2));
   notifySlack(lines.join('\n'));
   return lines.join('\n');
 }
@@ -439,6 +607,13 @@ function reportAxesByOrigin() {
 /**
  * 軸別分析をSlackに投げる（週次から呼ばれる。手動実行も可）。
  * リーチモデルとフォローモデルの両方を回して、それぞれの効き方を並べて出す。
+ *
+ * **有意でない相関は「効いている」と書かない。** 以前はどんなに小さい相関でも
+ * 棒グラフを立てて並べていたので、誤差の範囲の数字が根拠のように見えていた。
+ *
+ * 重みの状態は最後に1回だけ出す。モデルごとに出すと、1本目を回した時点と
+ * 2本目を回した時点で保存済みの相関が変わっており、同じレポートの中に
+ * 違う状態が2つ並んでしまう。
  */
 function reportAxisAnalysis() {
   var models = [analyzeAxes('reach')];
@@ -455,43 +630,73 @@ function reportAxisAnalysis() {
     return msg;
   }
 
-  var lines = [
-    ':microscope: *軸別の効き方分析*',
-    '全体スコアは「軸スコア × 下の相関」の内積で算出されます。',
-  ];
+  var lines = [':microscope: *軸別の効き方分析*'];
   models.forEach(function (a) {
     lines.push('');
     lines.push('*' + a.outcomeName + '*（n=' + a.sampleSize + '）');
+    lines.push('この標本数だと、|相関|が ' + a.detectable.toFixed(2) +
+      ' を超えて初めて「偶然ではない」と言えます。');
+    var sig = a.ranked.filter(function (x) { return x.significant; });
     var shown = 0;
     a.ranked.forEach(function (x) {
       if (x.corr === null) return;
       shown++;
-      var bar = '█'.repeat(Math.max(1, Math.round(Math.abs(x.corr) * 12)));
-      // 寄与率は2モデルを合成した後の最終的な重みなので、両モデルで同じ値になる。
-      // モデルごとの数字と誤読されないよう、相関とは別物であることを明示する
-      lines.push((x.corr >= 0 ? '+' : '−') + Math.abs(x.corr).toFixed(2) + ' ' + bar +
-        ' ' + x.label + '（n=' + x.n + ' / 合成後の寄与' + x.share + '%' +
-        (x.floored ? '・下限で固定' : '') + '）');
+      // 学習に使うのはハロー除去後の相関。生の相関も併記する
+      var c = x.corrCentered === null ? x.corr : x.corrCentered;
+      var bar = x.significant ? ' ' + '█'.repeat(Math.max(1, Math.round(Math.abs(c) * 12))) : '';
+      lines.push((x.significant ? '' : ':grey_question: ') +
+        (c >= 0 ? '+' : '−') + Math.abs(c).toFixed(2) + bar +
+        ' ' + x.label + '（n=' + x.n + ' / 生の相関' + (x.corr >= 0 ? '+' : '−') + Math.abs(x.corr).toFixed(2) +
+        (x.floored ? ' / 下限で固定' : '') + '）');
     });
     if (!shown) lines.push('（このモデルはまだデータ不足）');
-    var lacking = a.ranked.filter(function (x) { return x.corr === null; });
-    if (lacking.length && shown) {
-      lines.push('データ不足の軸: ' + lacking.map(function (x) { return x.label; }).join('、'));
-    }
+    lines.push(sig.length
+      ? ':white_check_mark: 偶然とは言えない軸: ' + sig.map(function (x) { return x.label; }).join('、') +
+        '（' + sig.length + '/' + a.ranked.length + '軸）'
+      : ':grey_question: がついた軸は、数字は出ていますが誤差の範囲です。**どれも重みには入れていません。**');
     lines.push(a.updated
-      ? ':white_check_mark: 相関を更新しました。次回の採点から反映されます。'
-      : ':hourglass: 相関は未更新（各軸' + a.minSamples + '件以上たまると自動更新します）。');
-    var negatives = a.ranked.filter(function (x) { return x.corr !== null && x.corr < -0.1; });
-    if (negatives.length) {
-      lines.push('※ ' + negatives.map(function (x) { return x.label; }).join('、') +
-        ' は負の相関。高いポストほど成果が下がっているため、スコアでは減点として働きます。');
-    }
+      ? '相関を保存しました。' : '相関は未保存（各軸' + a.minSamples + '件以上たまると保存します）。');
   });
+
+  // 2モデルぶんを保存し終えた状態で、いまの重みを1回だけ出す
+  var b = axisWeightBreakdown();
+  lines.push('');
+  lines.push('*いまの重み*');
+  lines.push('事前分布 ' + Math.round((1 - b.blend) * 100) + '% / 実測 ' + Math.round(b.blend * 100) + '%' +
+    (b.significant.length ? '（実測が効いている軸: ' + b.significant.join('、') + '）' : '（実測で言い切れる軸がまだ無いため、全部が事前の想定です）'));
+  if (b.dropped.length) lines.push('再現しないため使っていない軸: ' + b.dropped.join('、'));
+
+  var groups = axisClusters();
+  if (groups.length) {
+    var mass = 0;
+    AXES.forEach(function (ax) { mass += Math.abs(Number(b.weights[ax.key]) || 0); });
+    lines.push('');
+    lines.push('*ほぼ同じものを測っている軸の塊*（内積で同じ成分が何度も数えられます）:');
+    groups.forEach(function (g) {
+      var share = 0;
+      g.forEach(function (k) { share += Math.abs(Number(b.weights[k]) || 0); });
+      var labels = g.map(function (k) {
+        var found = k;
+        AXES.forEach(function (ax) { if (ax.key === k) found = ax.label; });
+        return found;
+      });
+      lines.push('　・' + labels.join('＋') + ' → 合計で重みの' +
+        (mass > 0 ? Math.round(share / mass * 1000) / 10 : 0) + '%');
+    });
+    lines.push('　別々の軸に見えて、実測では中身が1つです。塊が重みの多くを占めていると、' +
+      'スコアは実質その1成分だけで決まります。');
+    lines.push('　塊の中で重みを分け合わせたい場合は、スクリプトプロパティ ' +
+      'CLUSTER_SPLIT を all にしてください（既定 learned = 学習した分だけ分割）。');
+  }
+
   if (models.length < 2) {
     lines.push('');
     lines.push('フォローモデル（プロフィールクリック率）はまだ標本不足です。' +
       'クリック数はXの仕様で直近30日分しか取れないため、投稿を重ねながらたまるのを待ちます。');
   }
+  lines.push('');
+  lines.push('※ ここに出る相関は「手元のデータへの当てはまり」です。' +
+    '採点が実際に当たるかは evaluateScoringAccuracy（Metrics.gs）で測ってください。');
   notifySlack(lines.join('\n'));
   return lines.join('\n');
 }
@@ -572,7 +777,13 @@ function evaluateScoring() {
     2000
   );
 
-  if (result && result.rubric) {
+  // 相関が誤差の範囲のときに「上位と下位の共通点」を学習させると、
+  // ただの偶然を採点基準として固定してしまう。しかもその基準は次の採点に
+  // 効いてくるので、ノイズが自分自身を強化する。有意なときだけ更新する。
+  var mainCorr = useClicks ? corrClicks : corr;
+  var noise = minDetectableCorrelation(useClicks ? withClicks.length : rows.length, 2.0);
+  var trustworthy = mainCorr !== null && Math.abs(mainCorr) >= noise;
+  if (result && result.rubric && trustworthy) {
     PropertiesService.getScriptProperties().setProperty('QUALITY_RUBRIC_LEARNED', String(result.rubric));
   }
   var report = [
@@ -580,11 +791,82 @@ function evaluateScoring() {
       (useClicks ? ' / 対プロフクリック率相関 ' + corrClicks.toFixed(2) : '') + '）',
     '判定: ' + (result && result.verdict ? result.verdict : '(取得失敗)'),
     '',
-    '学習した追加採点基準（次回の品質ゲートから適用）:',
+    trustworthy
+      ? '学習した追加採点基準（次回の品質ゲートから適用）:'
+      : '※ 採点と実測の相関が誤差の範囲（|' + (mainCorr === null ? '—' : Math.abs(mainCorr).toFixed(2)) +
+        '| < ' + noise.toFixed(2) + '）のため、採点基準は**更新していません**。' +
+        'ここで見えている共通点は偶然の可能性が高く、基準にすると次の採点を歪めます。\n' +
+        '参考（採用していません）:',
     result && result.rubric ? result.rubric : '(なし)',
   ].join('\n');
   logEvent('scoring_eval', '相関=' + corrText);
   notifySlack(report);
+  return report;
+}
+
+/**
+ * 採点の健康診断。「採点は当てになるのか」に一度で答えるための入口。
+ *
+ * 見るのは3つだけ:
+ *   1. 採点は再現するか（同じポストを2回採点して一致するか）
+ *   2. 採点は当たるか（学習に使っていない投稿で実測を予測できるか）
+ *   3. 重みは実測に基づいているのか、それとも事前分布のままか
+ *
+ * 2が悪いとき、原因は「採点がブレている」か「実測が内容で動いていない」の
+ * どちらか。1を先に見ないと切り分けられないので、この順に出す。
+ *
+ * GASエディタでは Metrics.gs を開いて実行する。
+ * Claude APIを2回ぶん多く使う（再現性の測定で同じ標本を2度採点するため）。
+ *
+ * @param {boolean} skipReliability 再現性の測定を飛ばす（APIを節約したいとき）
+ */
+function diagnoseScoring(skipReliability) {
+  var out = [':stethoscope: *採点の健康診断*', ''];
+
+  var rows = analyzableRows().filter(function (r) {
+    return Number(r.impressions || 0) > 0 && postedAtMs(r) !== null;
+  });
+  out.push('軸スコアと実測が揃った投稿: ' + rows.length + '件');
+  out.push('この標本数で「偶然ではない」と言える相関の大きさ: ±' +
+    minDetectableCorrelation(rows.length, axisSignificanceZ()).toFixed(2));
+  out.push('');
+
+  if (!skipReliability) {
+    try {
+      out.push('── 1. 採点は再現するか ──');
+      out.push(String(measureScoringReliability()).replace(/^:repeat: \*[^*]*\*[^\n]*\n/, ''));
+    } catch (e) {
+      out.push('（再現性の測定に失敗: ' + String(e).slice(0, 150) + '）');
+    }
+    out.push('');
+  }
+
+  try {
+    out.push('── 2. 採点は当たるか ──');
+    out.push(String(evaluateScoringAccuracy()).replace(/^:straight_ruler: \*[^*]*\*[^\n]*\n/, ''));
+  } catch (e) {
+    out.push('（予測力の測定に失敗: ' + String(e).slice(0, 150) + '）');
+  }
+  out.push('');
+
+  try {
+    out.push('── 3. いまの重みの出どころ ──');
+    var b = axisWeightBreakdown();
+    out.push('事前分布 ' + Math.round((1 - b.blend) * 100) + '% / 実測 ' + Math.round(b.blend * 100) + '%');
+    out.push(b.significant.length
+      ? '実測で効いていると言える軸: ' + b.significant.join('、')
+      : '実測で効いていると言える軸は**まだ1つもありません**。いまの重みは全部が事前の想定です。');
+    if (b.dropped.length) out.push('再現しないため使っていない軸: ' + b.dropped.join('、'));
+    var groups = axisClusters();
+    if (groups.length) {
+      out.push('中身が同じ軸の塊: ' + groups.map(function (g) { return g.join('＋'); }).join(' , '));
+    }
+  } catch (e) {
+    out.push('（重みの取得に失敗: ' + String(e).slice(0, 150) + '）');
+  }
+
+  var report = out.join('\n');
+  logEvent('scoring_diagnosis', report.slice(0, 500));
   return report;
 }
 
@@ -672,6 +954,13 @@ function weeklyMetricsReport() {
     reportAxisAnalysis();
   } catch (e) {
     logEvent('axis_analysis_error', String(e));
+  }
+  // 採点が実際に当たっているかを、学習に使っていない投稿で測る。
+  // 手元への当てはまりは重みをいじれば上がるが、この数字だけは上がらない
+  try {
+    evaluateScoringAccuracy();
+  } catch (e) {
+    logEvent('scoring_accuracy_error', String(e));
   }
   // テーマの重みも実績で更新する（採点だけ学習しても、聞くテーマが
   // 変わらなければ同じような下書きしか出てこないため）

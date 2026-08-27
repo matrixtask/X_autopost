@@ -229,3 +229,121 @@ test('computeNextSlots: maxPerDayで1日の投稿数を制限する', () => {
   });
   assert.deepEqual(slots, ['2026-07-16 08:00', '2026-07-17 08:00', '2026-07-18 08:00']);
 });
+
+test('shrinkCorrelation: 偶然の範囲の相関は0にする', () => {
+  const { shrinkCorrelation, minDetectableCorrelation } = context.module.exports;
+
+  // 実データ(n=66)で最も高かった軸が r=0.26。17軸を同時に見ている以上、
+  // この大きさは偶然の範囲なので重みに入れてはいけない
+  assert.equal(shrinkCorrelation(0.26, 66, 2.5), 0);
+  assert.ok(minDetectableCorrelation(66, 2.5) > 0.26);
+
+  // 標本が増えれば同じ相関でも通る
+  assert.ok(shrinkCorrelation(0.26, 600, 2.5) > 0.15);
+  // 通った場合でも生の相関より必ず小さい（割り引いた分だけ残す）
+  assert.ok(shrinkCorrelation(0.26, 600, 2.5) < 0.26);
+
+  // 符号は保つ
+  assert.ok(shrinkCorrelation(-0.5, 400, 2.5) < 0);
+  assert.equal(Math.sign(shrinkCorrelation(-0.5, 400, 2.5)), -1);
+
+  // 壊れた入力で NaN を返さない
+  assert.equal(shrinkCorrelation(NaN, 100, 2.5), 0);
+  assert.equal(shrinkCorrelation(0.5, 3, 2.5), 0);
+  assert.equal(shrinkCorrelation(0.5, null, 2.5), 0);
+  assert.equal(shrinkCorrelation(1, 100, 2.5) > 0, true); // r=1 でも発散しない
+  assert.ok(isFinite(shrinkCorrelation(1, 100, 2.5)));
+});
+
+test('centerAxisScores: ポスト自身の平均を引いてハローを除く', () => {
+  const { centerAxisScores } = context.module.exports;
+  const keys = ['a', 'b', 'c'];
+
+  // 全軸が高いポストと全軸が低いポストは、差し引くと同じ形になる
+  const high = centerAxisScores({ a: 90, b: 80, c: 70 }, keys);
+  const low = centerAxisScores({ a: 40, b: 30, c: 20 }, keys);
+  assert.equal(high.a, 10);
+  assert.equal(low.a, 10);
+  assert.equal(high.c, -10);
+
+  // 欠けている軸は結果に含めない（50で埋めると形が歪むため）
+  const partial = centerAxisScores({ a: 60, b: 40 }, keys);
+  assert.deepEqual(Object.keys(partial).sort(), ['a', 'b']);
+  assert.equal(partial.a, 10);
+
+  assert.deepEqual(centerAxisScores({}, keys), {});
+  assert.deepEqual(centerAxisScores(null, keys), {});
+});
+
+test('correlationClusters: 同じものを測っている軸をまとめる', () => {
+  const { correlationClusters } = context.module.exports;
+  // x1/x2 はほぼ同じ、y は独立
+  const columns = {
+    x1: [1, 2, 3, 4, 5, 6],
+    x2: [1.1, 2.0, 3.2, 3.9, 5.1, 6.0],
+    y: [3, 1, 6, 2, 5, 4],
+  };
+  const groups = correlationClusters(columns, ['x1', 'x2', 'y'], 0.7);
+  const sizes = groups.map((g) => g.length).sort();
+  assert.deepEqual(sizes, [1, 2]);
+  const pair = groups.find((g) => g.length === 2).sort();
+  assert.deepEqual(pair, ['x1', 'x2']);
+
+  // 閾値を上げれば分かれる
+  assert.equal(correlationClusters(columns, ['x1', 'x2', 'y'], 0.999).length, 3);
+  // 列が無い軸は単独扱いで落ちない
+  assert.equal(correlationClusters(columns, ['x1', 'missing'], 0.7).length, 2);
+
+  // 鎖でつながらないこと（完全連結）。a-b は近いが a-c は遠い場合、
+  // 単連結だと3軸が1塊になってしまう。実データで7軸が1塊になったのがこの形
+  const { pearson: pr } = context.module.exports;
+  const chain = {
+    a: [1, 2, 3, 4, 5, 6, 7, 8],
+    b: [1.4, 2, 3.4, 4, 5.4, 6, 7.4, 8],
+    c: [8, 7, 6, 5, 4, 3, 2, 1],
+  };
+  assert.ok(Math.abs(pr(chain.a, chain.b)) >= 0.8, 'a と b は近い');
+  assert.ok(Math.abs(pr(chain.b, chain.c)) >= 0.8, 'b と c も近い');
+  assert.ok(Math.abs(pr(chain.a, chain.c)) >= 0.8, 'この例では a-c も近いので3つで1塊になる');
+  assert.equal(correlationClusters(chain, ['a', 'b', 'c'], 0.8).length, 1);
+
+  // 本題: a-b と b-c だけが近く、a-c が遠い場合は繋がないこと
+  const noChain = {
+    a: [1, 2, 3, 4, 5, 6, 7, 8],
+    b: [4, 1, 6, 3, 8, 5, 2, 7],
+    c: [8, 7, 6, 5, 4, 3, 2, 1],
+  };
+  assert.ok(Math.abs(pr(noChain.a, noChain.c)) >= 0.99, 'a と c は（符号違いで）同じもの');
+  assert.ok(Math.abs(pr(noChain.a, noChain.b)) < 0.7, 'b はどちらとも遠い');
+  const g = correlationClusters(noChain, ['a', 'b', 'c'], 0.7);
+  assert.equal(g.length, 2);
+  assert.deepEqual(g.find((x) => x.length === 2).sort(), ['a', 'c']);
+});
+
+test('agreementStats: 2回採点の一致度を測る', () => {
+  const { agreementStats } = context.module.exports;
+
+  const same = agreementStats([10, 20, 30], [10, 20, 30]);
+  assert.equal(same.mad, 0);
+  assert.equal(same.maxDiff, 0);
+  assert.ok(same.corr > 0.99);
+
+  const noisy = agreementStats([10, 20, 30, 40], [40, 10, 35, 15]);
+  assert.ok(noisy.mad > 10);
+
+  assert.equal(agreementStats([1], [1]).corr, null);
+  assert.equal(agreementStats([], []).n, 0);
+  // 長さが違っても短い方に合わせる
+  assert.equal(agreementStats([1, 2, 3], [1, 2]).n, 2);
+});
+
+test('spearman: 順位で見る相関', () => {
+  const { spearman } = context.module.exports;
+  assert.ok(spearman([1, 2, 3, 4], [10, 20, 30, 40]) > 0.99);
+  assert.ok(spearman([1, 2, 3, 4], [40, 30, 20, 10]) < -0.99);
+  // 外れ値1件に引きずられない（生の相関ならほぼ1になる形）
+  assert.ok(spearman([1, 2, 3, 100], [1, 3, 2, 100]) < 0.9);
+  assert.equal(spearman([1, 2], [1, 2]), null);
+  // 同値は中間順位
+  assert.ok(spearman([1, 1, 2, 3], [1, 1, 2, 3]) > 0.99);
+});

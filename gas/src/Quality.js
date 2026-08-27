@@ -45,6 +45,223 @@ function parseAxes(v) {
   }
 }
 
+/**
+ * 採点の物差しを固定するための実例。
+ *
+ * 採点はバッチで投げているので、同じポストでも「一緒に採点された他のポスト」
+ * 次第で点が動く。時期をまたぐと基準そのものがずれるため、過去の採点と
+ * 今の採点を混ぜて相関を取ること自体が成立しなくなる。
+ * このアカウントの典型例を毎回固定で見せて、50点の位置を釘付けにする。
+ *
+ * **実測（インプレッション）は絶対に載せない。** 「よく伸びた例」を見せると、
+ * 採点が「伸びた投稿に似ているか」に化けてしまい、そのスコアと実測の相関を
+ * 取っても当たり前の結果しか出ない（循環参照になる）。
+ * ここで固定したいのは物差しの位置だけ。
+ */
+function scoringAnchorIds() {
+  var stored = getProp('SCORING_ANCHOR_IDS', '');
+  if (stored) {
+    try {
+      var arr = JSON.parse(stored);
+      if (Array.isArray(arr) && arr.length) return arr;
+    } catch (e) {
+      logEvent('anchor_parse_error', String(e));
+    }
+  }
+  // 未設定なら、投稿済みから満遍なく3件を選んで固定する。
+  // 一度決めたら変えない（変えると過去のスコアと比較できなくなる）
+  var posted = readTable(SHEET.STOCK).filter(function (r) {
+    return String(r.status) === STATUS.POSTED && String(r.text || '').trim().length > 20;
+  }).sort(function (a, b) { return String(a.id) < String(b.id) ? -1 : 1; });
+  if (posted.length < 3) return [];
+  var picked = [0, Math.floor(posted.length / 2), posted.length - 1].map(function (i) {
+    return String(posted[i].id);
+  });
+  PropertiesService.getScriptProperties().setProperty('SCORING_ANCHOR_IDS', JSON.stringify(picked));
+  logEvent('scoring_anchors', '基準例を固定しました: ' + picked.join(', '));
+  return picked;
+}
+
+/** 基準例を選び直す。物差しがずれるので、必要なときだけ手で実行する */
+function resetScoringAnchors() {
+  PropertiesService.getScriptProperties().deleteProperty('SCORING_ANCHOR_IDS');
+  var ids = scoringAnchorIds();
+  return ids.length
+    ? '基準例を選び直しました: ' + ids.join(', ') + '\n※ これ以前のスコアとは物差しが変わります。'
+    : '投稿済みポストが3件未満のため、基準例を作れませんでした。';
+}
+
+/** 基準例の本文を採点プロンプト用に整形する */
+function scoringAnchorBlock() {
+  var ids = scoringAnchorIds();
+  if (!ids.length) return '';
+  var byId = {};
+  readTable(SHEET.STOCK).forEach(function (r) { byId[String(r.id)] = r; });
+  var lines = ids.map(function (id) {
+    var r = byId[id];
+    return r ? '・' + String(r.text).replace(/\n/g, ' ').slice(0, 120) : null;
+  }).filter(Boolean);
+  if (!lines.length) return '';
+  return [
+    '## 点数の物差し（このアカウントの典型例）',
+    lines.join('\n'),
+    'これらがこのアカウントの「ふつう」です。各軸でおおむね50点にあたります。',
+    'この位置を基準に、上回るなら50より上、下回るなら50より下を付けてください。',
+    '',
+  ].join('\n');
+}
+
+/**
+ * 行の配列を採点して {id: 軸スコア} を返す。
+ *
+ * 品質ゲートと遡及採点で**必ず同じ関数を通す**。以前は別々にプロンプトを
+ * 組んでいて、遡及採点だけ「カテゴリを渡さない・学習した基準を載せない」
+ * 短縮版になっていた。相関を学習する標本（遡及採点した過去投稿）と、
+ * その相関を当てはめる対象（ゲートが採点する下書き）が別の物差しで
+ * 測られていたことになる。相関がノイズになる原因のひとつ。
+ *
+ * @param {Array} rows id/category/text を持つ行
+ * @param {Object} opts {chunkSize, maxTokens, maxTextChars}
+ * @returns {Object} {byId: {id: axes}, failed: [id...]}
+ */
+function scoreAxesForRows(rows, opts) {
+  var o = opts || {};
+  var chunkSize = Number(o.chunkSize || 10);
+  var maxTokens = Number(o.maxTokens || 8000);
+  var maxChars = Number(o.maxTextChars || 400);
+  var system = axisScoringSystemPrompt(getVoiceSamples(8));
+  var order = AXES.map(function (a) { return a.key; }).join(', ');
+  var byId = {};
+
+  for (var i = 0; i < rows.length; i += chunkSize) {
+    var chunk = rows.slice(i, i + chunkSize);
+    var user = [
+      '以下のポストを採点してください。',
+      '**1件ずつ独立に採点すること。** 同じバッチに入っている他のポストと',
+      '見比べて相対評価をしてはいけません（バッチが変わると点が動いてしまうため）。',
+      '物差しは上の「点数の物差し」だけです。',
+      '',
+      chunk.map(function (d) {
+        return 'id: ' + d.id +
+          '\ncategory: ' + String(d.category || '不明') +
+          '\n本文:\n' + String(d.text).slice(0, maxChars);
+      }).join('\n\n====\n\n'),
+      '',
+      '出力はJSONオブジェクト1つ。キーがid、値が下記の順に並べた' + AXES.length + '個の整数(0-100)。',
+      '順序: ' + order,
+      '例: {"' + chunk[0].id + '": [' + AXES.map(function () { return '50'; }).join(',') + ']}',
+      '全' + chunk.length + '件を必ず含めること。説明や軸名は書かない（トークンの無駄なので）。',
+    ].join('\n');
+
+    var results = null;
+    try {
+      results = askClaudeJsonSalvageable(system, user, maxTokens);
+    } catch (e) {
+      logEvent('score_axes_error', String(e).slice(0, 300));
+      if (isFatalError(e)) throw e;
+      continue;
+    }
+    // 指示に反して [{"id":..., "axes":...}] 形式で返ってきた場合も拾う
+    if (Array.isArray(results)) {
+      var m = {};
+      results.forEach(function (r) {
+        if (r && r.id !== undefined) m[String(r.id)] = r.axes !== undefined ? r.axes : r;
+      });
+      results = m;
+    }
+    if (!results || typeof results !== 'object') continue;
+    chunk.forEach(function (d) {
+      var axes = compositeAxes(results[String(d.id)]);
+      if (axes) byId[String(d.id)] = axes;
+    });
+  }
+
+  var failed = rows.filter(function (d) { return !byId[String(d.id)]; })
+    .map(function (d) { return String(d.id); });
+  return { byId: byId, failed: failed };
+}
+
+/**
+ * 採点の再現性を測る。
+ *
+ * 採点が実測を当てられない原因は2つに分かれる。「実測が内容で動いていない」
+ * のか「採点そのものがブレている」のか。同じポストを2回採点して、軸ごとに
+ * どれだけ一致するかを見れば切り分けられる。
+ *
+ * 一致しない軸は、重みをどう調整しても意味がない（測れていないものに
+ * 係数を掛けても測れていないままなので）。基準を下回った軸は
+ * AXIS_UNRELIABLE に記録し、以後その軸は重み0になる。
+ *
+ * GASエディタでは Quality.gs を開いて実行する。
+ *
+ * @param {number} sampleSize 何件を2回採点するか（既定12）
+ */
+function measureScoringReliability(sampleSize) {
+  var n = Number(sampleSize || getProp('RELIABILITY_SAMPLE', '12'));
+  var rows = readTable(SHEET.STOCK).filter(function (r) {
+    return String(r.status) === STATUS.POSTED && String(r.text || '').trim().length > 20;
+  });
+  if (rows.length < 5) return '投稿済みポストが足りません（' + rows.length + '件）';
+  // 満遍なく選ぶ（先頭から取ると時期が偏る）
+  var step = Math.max(1, Math.floor(rows.length / n));
+  var sample = [];
+  for (var i = 0; i < rows.length && sample.length < n; i += step) sample.push(rows[i]);
+
+  var a = scoreAxesForRows(sample, { chunkSize: 10 });
+  var b = scoreAxesForRows(sample, { chunkSize: 10 });
+  var both = sample.filter(function (d) {
+    return a.byId[String(d.id)] && b.byId[String(d.id)];
+  });
+  if (both.length < 4) {
+    return '2回とも採点できたのが' + both.length + '件しかなく、再現性を測れませんでした。';
+  }
+
+  var minCorr = Number(getProp('RELIABILITY_MIN_CORR', '0.5'));
+  var maxMad = Number(getProp('RELIABILITY_MAX_MAD', '15'));
+  var report = [];
+  var unreliable = [];
+  AXES.forEach(function (ax) {
+    var xs = both.map(function (d) { return a.byId[String(d.id)][ax.key]; });
+    var ys = both.map(function (d) { return b.byId[String(d.id)][ax.key]; });
+    var st = agreementStats(xs, ys);
+    var sd = 0;
+    var mean = xs.reduce(function (s, v) { return s + v; }, 0) / xs.length;
+    xs.forEach(function (v) { sd += (v - mean) * (v - mean); });
+    sd = Math.sqrt(sd / xs.length);
+    // 相関が計算できない＝ほぼ定数。定数の軸は差を作れないので使えない
+    var flat = sd < 5;
+    var bad = flat || st.corr === null || st.corr < minCorr || st.mad > maxMad;
+    if (bad) unreliable.push(ax.key);
+    report.push({
+      key: ax.key, label: ax.label,
+      corr: st.corr, mad: st.mad, sd: sd, flat: flat, bad: bad,
+    });
+  });
+
+  PropertiesService.getScriptProperties().setProperty('AXIS_UNRELIABLE', JSON.stringify(unreliable));
+
+  var lines = [
+    ':repeat: *採点の再現性*（同じ' + both.length + '件を2回採点して比較）',
+    '一致しない軸は、重みをどう調整しても意味がありません。以後その軸は重み0にします。',
+    '合格ライン: 相関' + minCorr + '以上 かつ 平均差' + maxMad + '点以内 かつ ばらつきsd5以上',
+    '',
+  ];
+  report.sort(function (x, y) { return (y.corr === null ? -2 : y.corr) - (x.corr === null ? -2 : x.corr); });
+  report.forEach(function (x) {
+    lines.push((x.bad ? ':x: ' : ':white_check_mark: ') + x.label +
+      '（相関' + (x.corr === null ? '計算不能' : x.corr.toFixed(2)) +
+      ' / 平均差' + x.mad.toFixed(1) + '点 / ばらつきsd' + x.sd.toFixed(1) +
+      (x.flat ? '・ほぼ定数' : '') + '）');
+  });
+  lines.push('');
+  lines.push(unreliable.length
+    ? '使わない軸に設定しました: ' + unreliable.join('、') + '（' + unreliable.length + '/' + AXES.length + '軸）'
+    : 'すべての軸が基準を満たしました。');
+  logEvent('scoring_reliability', unreliable.length + '軸を除外: ' + unreliable.join(','));
+  notifySlack(lines.join('\n'));
+  return lines.join('\n');
+}
+
 function runQualityGate() {
   var drafts = readTable(SHEET.STOCK).filter(function (r) {
     return String(r.status) === STATUS.DRAFT;
@@ -56,47 +273,15 @@ function runQualityGate() {
 
   ensureHeaders(SHEET.STOCK);
   var threshold = qualityThreshold();
-  var system = axisScoringSystemPrompt(getVoiceSamples(10), false);
-
-  // 軸名をキーで書かせると1件250トークン近くかかり、下書きが溜まっていると
-  // max_tokensの途中で応答が切れて全件無駄になる。AXES順の配列で受け取り、
-  // さらに10件ずつに分けて投げる。
-  var byId = {};
-  for (var i = 0; i < drafts.length; i += 10) {
-    var chunk = drafts.slice(i, i + 10);
-    var user = [
-      '以下の下書きを採点してください。',
-      '',
-      chunk.map(function (d) {
-        return 'id: ' + d.id + '\ncategory: ' + d.category + '\n本文:\n' + d.text;
-      }).join('\n\n====\n\n'),
-      '',
-      'JSON配列で出力: [{"id": "...", "axes": [下記の順に' + AXES.length + '個の整数(0-100)],' +
-        ' "reason": "最も高い軸と最も低い軸に触れて50字以内で"}]',
-      '軸の順序: ' + AXES.map(function (a) { return a.key; }).join(', '),
-    ].join('\n');
-
-    var results;
-    try {
-      results = askClaudeJsonSalvageable(system, user, 8000);
-    } catch (e) {
-      // 一部が採点できなくても、採点できた分は反映して先へ進む
-      logEvent('quality_gate_error', String(e).slice(0, 300));
-      if (isFatalError(e)) throw e; // 残高切れ等は残りを投げても無駄
-      continue;
-    }
-    if (!Array.isArray(results)) continue;
-    results.forEach(function (r) { if (r && r.id !== undefined) byId[String(r.id)] = r; });
-  }
-  if (!Object.keys(byId).length) throw new Error('採点結果が1件も得られませんでした');
+  // 遡及採点とまったく同じ関数を通す。物差しを揃えるのが目的
+  var scored = scoreAxesForRows(drafts, { chunkSize: 10 });
+  if (!Object.keys(scored.byId).length) throw new Error('採点結果が1件も得られませんでした');
 
   var passed = 0;
   drafts.forEach(function (d) {
-    var r = byId[String(d.id)];
-    if (!r) return;
-    var axes = compositeAxes(r.axes);
+    var axes = scored.byId[String(d.id)];
     if (!axes) return;
-    // 全体スコア = 軸スコア · 実測相関ベクトル（0〜100に正規化）
+    // 全体スコア = 軸スコア · 重みベクトル（0〜100に正規化）
     // カテゴリごとに重みが変わる（ネタはユーモアを削るほど点が上がる、を防ぐ）
     var score = compositeScoreFromAxes(axes, String(d.category || ''));
 
@@ -105,7 +290,7 @@ function runQualityGate() {
     var newStatus = pass ? (isAutoApprove() ? STATUS.APPROVED : STATUS.READY) : STATUS.STOCK;
     updateStockById(d.id, {
       score: score,
-      score_reason: String(r.reason || ''),
+      score_reason: weakAxisSummary(axes),
       axes: JSON.stringify(axes),
       status: newStatus,
     });
@@ -118,6 +303,22 @@ function runQualityGate() {
 
   logEvent('quality_gate', '採点' + drafts.length + '件 / 合格' + passed + '件（閾値' + threshold + '）');
   return { scored: drafts.length, passed: passed };
+}
+
+/**
+ * 採点理由を軸スコアから組み立てる。
+ *
+ * 以前はLLMに50字の講評を書かせていたが、これは軸スコアとは別に生成された
+ * 文なので、スコアと食い違うことがあった（「具体性が高い」と書いてあるのに
+ * concrete が30点、など）。数字から機械的に作れば必ず一致する。
+ */
+function weakAxisSummary(axes) {
+  var scored = AXES.filter(function (a) { return isFinite(Number(axes[a.key])); });
+  if (!scored.length) return '';
+  var sorted = scored.slice().sort(function (a, b) { return Number(axes[b.key]) - Number(axes[a.key]); });
+  var top = sorted.slice(0, 2).map(function (a) { return a.label + Number(axes[a.key]); });
+  var low = sorted.slice(-2).map(function (a) { return a.label + Number(axes[a.key]); });
+  return '強み: ' + top.join('・') + ' / 弱み: ' + low.join('・');
 }
 
 /**
@@ -170,54 +371,27 @@ function backfillAxisScoresLocked() {
 
   var cursor = 0;
   var scored = 0;
-  var samples = getVoiceSamples(8);
-  var system = axisScoringSystemPrompt(samples, true);
-  // 軸名をキーにすると1件あたり250トークン近く使い、25件でmax_tokensを超えて
-  // JSONが途中で切れる。AXES順の数値配列にすると1件40トークン程度に収まる。
-  var order = AXES.map(function (a) { return a.key; }).join(', ');
 
   while (new Date().getTime() - started < budgetMs) {
     var batch = pendingAll.slice(cursor, cursor + batchSize);
     if (!batch.length) break;
-    var user = [
-      '以下は過去に投稿されたポストです。各ポストの全軸を採点してください。',
-      '',
-      batch.map(function (d) {
-        return 'id: ' + d.id + '\n本文:\n' + String(d.text).slice(0, 400);
-      }).join('\n\n====\n\n'),
-      '',
-      '出力はJSONオブジェクト1つ。キーがid、値が下記の順に並べた' + AXES.length + '個の整数(0-100)。',
-      '順序: ' + order,
-      '例: {"' + batch[0].id + '": [' + AXES.map(function () { return '50'; }).join(',') + ']}',
-      '全' + batch.length + '件を必ず含めること。説明や軸名は書かない（トークンの無駄なので）。',
-    ].join('\n');
 
-    var results = null;
-    var fatal = false;
+    // 品質ゲートとまったく同じ関数・同じプロンプトで採点する。
+    // ここだけ短縮版を使っていたせいで、学習用の標本と運用時の下書きが
+    // 別の物差しで測られていた
+    var res;
     try {
-      results = askClaudeJsonSalvageable(system, user, 8000);
+      res = scoreAxesForRows(batch, { chunkSize: batchSize, maxTextChars: 400 });
     } catch (e) {
       logEvent('backfill_error', 'batch=' + batchSize + ' ' + String(e).slice(0, 300));
-      fatal = isFatalError(e);
-    }
-    if (fatal) break; // 残高切れ等。バッチを縮めても直らない
-
-    // 指示に反して [{"id": ..., "axes": ...}] 形式で返ってきた場合も拾う
-    if (Array.isArray(results)) {
-      var byId = {};
-      results.forEach(function (r) {
-        if (r && r.id !== undefined) byId[String(r.id)] = r.axes !== undefined ? r.axes : r;
-      });
-      results = byId;
+      break; // scoreAxesForRows は致命的エラーだけを投げる。縮めても直らない
     }
 
     var writes = [];
-    if (results && typeof results === 'object') {
-      batch.forEach(function (d) {
-        var axes = compositeAxes(results[String(d.id)]);
-        if (axes) writes.push({ row: d._row, value: JSON.stringify(axes) });
-      });
-    }
+    batch.forEach(function (d) {
+      var axes = res.byId[String(d.id)];
+      if (axes) writes.push({ row: d._row, value: JSON.stringify(axes) });
+    });
 
     if (!writes.length) {
       // 件数が多すぎて応答が不安定なのかもしれないので、半分にして同じ位置から
@@ -273,13 +447,14 @@ function debugBackfillSample() {
   }).slice(0, 3);
   if (!pending.length) return '未採点の投稿済みポストはありません';
 
-  var system = axisScoringSystemPrompt(getVoiceSamples(8), true);
+  var system = axisScoringSystemPrompt(getVoiceSamples(8));
   var order = AXES.map(function (a) { return a.key; }).join(', ');
   var user = [
-    '以下は過去に投稿されたポストです。各ポストの全軸を採点してください。',
+    '以下のポストを採点してください。',
     '',
     pending.map(function (d) {
-      return 'id: ' + d.id + '\n本文:\n' + String(d.text).slice(0, 400);
+      return 'id: ' + d.id + '\ncategory: ' + String(d.category || '不明') +
+        '\n本文:\n' + String(d.text).slice(0, 400);
     }).join('\n\n====\n\n'),
     '',
     '出力はJSONオブジェクト1つ。キーがid、値が下記の順に並べた' + AXES.length + '個の整数(0-100)。',
@@ -319,8 +494,14 @@ function clearBackfillTrigger() {
   });
 }
 
-/** 軸採点の共通systemプロンプト。@param {boolean} terse 遡及採点用に短縮するか */
-function axisScoringSystemPrompt(samples, terse) {
+/**
+ * 軸採点の共通systemプロンプト。
+ *
+ * 以前は遡及採点用に terse フラグで内容を削っていたが、それだと
+ * 「相関を学習する標本」と「その相関を当てはめる下書き」が別の基準で
+ * 採点されることになる。分けるのをやめて、常に同じ物差しを使う。
+ */
+function axisScoringSystemPrompt(samples) {
   var learnedRubric = getProp('QUALITY_RUBRIC_LEARNED', '');
   return [
     'あなたはXアカウント運用の編集長です。ポストを採点します。',
@@ -331,19 +512,24 @@ function axisScoringSystemPrompt(samples, terse) {
     '中央値を50とし、平凡なら50前後、際立って良ければ80以上、明確に欠けていれば30以下を付けること。',
     '全部の軸に似た点を付けるのは分析上まったく役に立ちません。軸ごとの差をはっきり付けてください。',
     '',
+    '**同じポストには何度採点しても同じ点を付けられるように、根拠を軸の定義に置くこと。**',
+    '印象で微妙に上下させると、採点そのものがノイズになり、何の分析もできなくなります。',
+    '5点刻み（50, 55, 60…）で付けてください。',
+    '',
+    scoringAnchorBlock(),
     '**カテゴリの型に沿って採点すること。** 同じ軸でも、そのポストが何を狙って',
     'いるかで評価が変わります。',
     '- neta: 笑えるか、オチがあるかで見る。教訓に着地していたら「ユーモア」を大きく下げる',
     '- news: 出来事への立場が言い切れているかで見る。解説止まりなら「立場の明確さ」を下げる',
     '- evergreen: 舞台裏・当事者性で見る。誰でも書ける一般論なら「内部情報性」を下げる',
+    '- manual: 本人が過去に手で投稿したもの。型の指定はないので軸の定義どおりに採点する',
     'ネタと真面目が1つのポストに混ざっているものは、どっちつかずなので低く付けること。',
     '',
     AXES.map(function (a, i) {
       return (i + 1) + '. ' + a.key + '（' + a.label + '）: ' + a.desc;
     }).join('\n'),
     '',
-    terse ? '' : (learnedRubric ? '実測データの分析から学習した追加基準（採点に反映すること）:\n' + learnedRubric + '\n' : ''),
-    terse ? '' : (function () { var m = buildMemoryPrompt(); return m ? m + '\n' : ''; })(),
+    learnedRubric ? '実測データの分析から学習した追加基準（採点に反映すること）:\n' + learnedRubric + '\n' : '',
     '文体サンプル:',
     samples.map(function (s, i) { return '--- ' + (i + 1) + ' ---\n' + s; }).join('\n'),
   ].join('\n');

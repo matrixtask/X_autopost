@@ -199,18 +199,28 @@ function labelForCategory(cat) {
  * していたら点は伸びない。何を聞くかの段階で相関を効かせる。
  */
 function axisGuidanceForQuestions() {
-  var c = axisCorrelations();
+  var b = axisWeightBreakdown();
+  var c = b.weights;
   var ranked = AXES.map(function (a) {
-    return { label: a.label, desc: a.desc, w: Number(c[a.key]) || 0 };
+    return { key: a.key, label: a.label, desc: a.desc, w: Number(c[a.key]) || 0 };
   }).sort(function (x, y) { return y.w - x.w; });
 
   var top = ranked.slice(0, 4).filter(function (x) { return x.w > 0; });
   var bottom = ranked.slice(-3).filter(function (x) { return x.w < 0; });
   if (!top.length) return '';
 
-  var lines = ['実測データから、この軸が高いポストほどフォロワー獲得に繋がっています。',
-    'この軸が引き出せる質問を優先してください:'];
-  top.forEach(function (x) { lines.push('- ' + x.label + ': ' + x.desc); });
+  // 実測の裏が取れている軸とそうでない軸を混ぜて「実測データから」と
+  // 言い切ると、想定にすぎない重みが根拠のように見える
+  var proven = {};
+  b.significant.forEach(function (k) { proven[k] = true; });
+  var lines = b.significant.length
+    ? ['採点で重く見ている軸です（★は実測で効き目が確認できたもの）。',
+      'この軸が引き出せる質問を優先してください:']
+    : ['採点で重く見ている軸です（まだ実測の裏付けはなく、想定にもとづきます）。',
+      'この軸が引き出せる質問を優先してください:'];
+  top.forEach(function (x) {
+    lines.push('- ' + (proven[x.key] ? '★' : '') + x.label + ': ' + x.desc);
+  });
   if (bottom.length) {
     lines.push('');
     lines.push('逆に、この軸が高いポストは成果が下がっています。' +

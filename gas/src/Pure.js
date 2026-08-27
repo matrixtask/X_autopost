@@ -371,7 +371,186 @@ function pearson(xs, ys) {
   return cov / Math.sqrt(vx * vy);
 }
 
+/**
+ * 相関係数を「標本数から見て言い切れる分」まで0へ縮める。
+ *
+ * これまでは n/(n+K) で縮めていたが、これは標本数しか見ておらず、
+ * 相関の大きさが偶然の範囲かどうかを判定していない。n=66 なら 0.87倍にしか
+ * ならないので、まぐれで出た r=0.2 がほぼそのまま重みになってしまう。
+ *
+ * 相関はフィッシャーz変換すると標準誤差が 1/√(n-3) になる。z本ぶんの
+ * 誤差を引いてなお0を跨がない分だけを残す（跨いだら0＝「効いているとは言えない」）。
+ *
+ * @param {number} c 相関係数
+ * @param {number} n 標本数
+ * @param {number} z 何標準誤差ぶん割り引くか（2.5なら17軸を同時に見ても概ね安全）
+ * @returns {number} 縮小後の相関。有意でなければ 0
+ */
+function shrinkCorrelation(c, n, z) {
+  var r = Number(c);
+  var N = Number(n);
+  if (!isFinite(r) || !isFinite(N) || N <= 3) return 0;
+  if (r <= -1) r = -0.999;
+  if (r >= 1) r = 0.999;
+  var se = 1 / Math.sqrt(N - 3);
+  var fisher = 0.5 * Math.log((1 + Math.abs(r)) / (1 - Math.abs(r)));
+  var lower = fisher - (isFinite(Number(z)) ? Number(z) : 2.5) * se;
+  if (lower <= 0) return 0; // 誤差の範囲。効いている証拠がない
+  var shrunk = Math.tanh(lower);
+  return r < 0 ? -shrunk : shrunk;
+}
+
+/** その相関が偶然では説明しづらいと言える最小の |r|。報告用 */
+function minDetectableCorrelation(n, z) {
+  var N = Number(n);
+  if (!isFinite(N) || N <= 3) return 1;
+  var se = 1 / Math.sqrt(N - 3);
+  return Math.tanh((isFinite(Number(z)) ? Number(z) : 2.5) * se);
+}
+
+/**
+ * 軸スコアからポスト自身の平均を引く（ハロー除去）。
+ *
+ * 「良いポストは全軸が高い」ので、生の軸スコアはどれも「そのポストの
+ * 出来の良さ」を含んでいる。そのまま相関を取ると、どの軸も同じ成分を
+ * 拾ってしまい、軸ごとの効き方の違いが見えない。
+ * ポスト内の平均を引くと「そのポストの中で相対的に何が強かったか」だけが残る。
+ *
+ * @param {Object} axes {key: 0-100}
+ * @param {Array<string>} keys 対象の軸キー
+ * @returns {Object} {key: 平均からの差}
+ */
+function centerAxisScores(axes, keys) {
+  var vals = [];
+  keys.forEach(function (k) {
+    var v = Number(axes ? axes[k] : NaN);
+    if (isFinite(v)) vals.push(v);
+  });
+  if (!vals.length) return {};
+  var mean = vals.reduce(function (s, v) { return s + v; }, 0) / vals.length;
+  var out = {};
+  keys.forEach(function (k) {
+    var v = Number(axes ? axes[k] : NaN);
+    if (isFinite(v)) out[k] = v - mean;
+  });
+  return out;
+}
+
+/**
+ * 互いに強く相関している軸をまとめる（完全連結クラスタリング）。
+ *
+ * 実測では expertise/insider/novelty/profile が r=0.74〜0.90 で
+ * ほぼ同じものを測っていた。内積で重みを足すと、この1つの成分が
+ * 4回数えられて過大評価になる。同じ塊は1つ分として扱いたい。
+ *
+ * 単連結（1組でも閾値を超えたら繋ぐ）だと A-B と B-C が近いだけで
+ * A と C が無関係でも1つの塊になり、鎖のように伸びて実データでは
+ * 7軸が1塊になってしまった。塊の中の**全組み合わせ**が閾値を超える
+ * ことを条件にする（完全連結）。まとめすぎるより、まとめ損ねる方が安全。
+ *
+ * @param {Object} columns {key: [値...]} 全キーで長さが揃っていること
+ * @param {Array<string>} keys 対象キー
+ * @param {number} threshold |r| がこれ以上なら同じ塊とみなす（既定0.7）
+ * @returns {Array<Array<string>>} 塊の配列。単独の軸も長さ1の塊として入る
+ */
+function correlationClusters(columns, keys, threshold) {
+  var th = isFinite(Number(threshold)) ? Number(threshold) : 0.7;
+  var corr = {};
+  function pairKey(a, b) { return a < b ? a + ' ' + b : b + ' ' + a; }
+  for (var i = 0; i < keys.length; i++) {
+    for (var j = i + 1; j < keys.length; j++) {
+      var a = columns[keys[i]], b = columns[keys[j]];
+      var r = (a && b) ? pearson(a, b) : null;
+      corr[pairKey(keys[i], keys[j])] = r === null ? 0 : Math.abs(r);
+    }
+  }
+
+  var clusters = keys.map(function (k) { return [k]; });
+  // 塊どうしの近さは「全組み合わせのうち最も弱い相関」。これが閾値を
+  // 超えるものだけを、強い順に繋いでいく
+  function linkage(x, y) {
+    var worst = Infinity;
+    x.forEach(function (p) {
+      y.forEach(function (q) {
+        var v = corr[pairKey(p, q)];
+        if (v === undefined) v = 0;
+        if (v < worst) worst = v;
+      });
+    });
+    return worst;
+  }
+
+  for (;;) {
+    var best = th, bi = -1, bj = -1;
+    for (var m = 0; m < clusters.length; m++) {
+      for (var n = m + 1; n < clusters.length; n++) {
+        var l = linkage(clusters[m], clusters[n]);
+        if (l >= best) { best = l; bi = m; bj = n; }
+      }
+    }
+    if (bi < 0) break;
+    clusters[bi] = clusters[bi].concat(clusters[bj]);
+    clusters.splice(bj, 1);
+  }
+  return clusters;
+}
+
+/**
+ * 同じ対象を2回採点した結果がどれだけ一致しているか。
+ *
+ * 採点が実測を当てられない原因は2つある。「実測が内容で動いていない」か
+ * 「採点そのものがブレている」か。後者はこれで切り分けられる。
+ * 一致しない軸は、重みをどう調整しても意味がない。
+ *
+ * @returns {Object} {n, corr, mad, maxDiff} 標本2未満なら n だけ
+ */
+function agreementStats(a, b) {
+  var xs = [], ys = [];
+  var len = Math.min(a ? a.length : 0, b ? b.length : 0);
+  for (var i = 0; i < len; i++) {
+    var x = Number(a[i]), y = Number(b[i]);
+    if (isFinite(x) && isFinite(y)) { xs.push(x); ys.push(y); }
+  }
+  if (xs.length < 2) return { n: xs.length, corr: null, mad: null, maxDiff: null };
+  var sum = 0, max = 0;
+  for (var j = 0; j < xs.length; j++) {
+    var d = Math.abs(xs[j] - ys[j]);
+    sum += d;
+    if (d > max) max = d;
+  }
+  return {
+    n: xs.length,
+    corr: pearson(xs, ys),
+    mad: sum / xs.length,
+    maxDiff: max,
+  };
+}
+
+/**
+ * スピアマンの順位相関。外れ値1件で数字が動く生の相関より、
+ * 「順位を当てられているか」を見たいときに使う。
+ */
+function spearman(xs, ys) {
+  function ranks(v) {
+    var idx = v.map(function (_, i) { return i; });
+    idx.sort(function (p, q) { return Number(v[p]) - Number(v[q]); });
+    var out = new Array(v.length);
+    var i = 0;
+    while (i < idx.length) {
+      var j = i;
+      while (j + 1 < idx.length && Number(v[idx[j + 1]]) === Number(v[idx[i]])) j++;
+      var avg = (i + j) / 2 + 1;
+      for (var k = i; k <= j; k++) out[idx[k]] = avg;
+      i = j + 1;
+    }
+    return out;
+  }
+  var n = Math.min(xs.length, ys.length);
+  if (n < 3) return null;
+  return pearson(ranks(xs.slice(0, n)), ranks(ys.slice(0, n)));
+}
+
 // Nodeテスト用（GASでは module は未定義なので無視される）
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { weightedTweetLength: weightedTweetLength, fitsInTweet: fitsInTweet, parseJsonLoose: parseJsonLoose, salvageJson: salvageJson, pickWeighted: pickWeighted, computeNextSlots: computeNextSlots, normalizeSlackTs: normalizeSlackTs, slackTsEqual: slackTsEqual, rawSlackTs: rawSlackTs, pearson: pearson, dateKey: dateKey, percentileWithinWindow: percentileWithinWindow, normalizeThemeKey: normalizeThemeKey, clusterHeadlines: clusterHeadlines, stripHeadlineSource: stripHeadlineSource, normalizeSlackText: normalizeSlackText, detectImageMime: detectImageMime };
+  module.exports = { weightedTweetLength: weightedTweetLength, fitsInTweet: fitsInTweet, parseJsonLoose: parseJsonLoose, salvageJson: salvageJson, pickWeighted: pickWeighted, computeNextSlots: computeNextSlots, normalizeSlackTs: normalizeSlackTs, slackTsEqual: slackTsEqual, rawSlackTs: rawSlackTs, pearson: pearson, dateKey: dateKey, percentileWithinWindow: percentileWithinWindow, normalizeThemeKey: normalizeThemeKey, clusterHeadlines: clusterHeadlines, stripHeadlineSource: stripHeadlineSource, normalizeSlackText: normalizeSlackText, detectImageMime: detectImageMime, shrinkCorrelation: shrinkCorrelation, minDetectableCorrelation: minDetectableCorrelation, centerAxisScores: centerAxisScores, correlationClusters: correlationClusters, agreementStats: agreementStats, spearman: spearman };
 }
