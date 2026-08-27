@@ -46,8 +46,13 @@ function fetchSlackFile(file) {
     try {
       var res = slackFileFetch(c.url);
       if (!res) continue;
-      if (res.getResponseCode() >= 300) {
-        lastProblem = 'HTTP ' + res.getResponseCode();
+      var code = res.getResponseCode();
+      if (code >= 300) {
+        // 403/404 はほぼ権限。番号だけ出しても何をすればいいか分からない
+        lastProblem = (code === 403 || code === 404)
+          ? 'HTTP ' + code + '（権限不足）。Slackアプリの Bot Token Scopes に files:read を追加し、' +
+            'Reinstall to Workspace を実行してください'
+          : 'HTTP ' + code;
         continue;
       }
       var bytes = res.getBlob().getBytes();

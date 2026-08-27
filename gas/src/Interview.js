@@ -620,12 +620,25 @@ function handleChannelMessage(text) {
     notifySlack(':memo: メモとして取り込みました。今後の生成・採点に反映します。');
     return true;
   }
-  var open = readTable(SHEET.INTERVIEWS).filter(function (r) {
+  // スレッド外の書き込みは**回答として扱わない。**
+  // チャンネルには実績の共有や独り言も書かれるが、それを勝手に回答に
+  // されると、答えていない質問が消費され、意図しない下書きが作られる
+  // （フォロワー推移の報告が回答になった実例がある）。
+  // 回答はスレッドで受ける、という一本の道に揃える。
+  if (String(getProp('CHANNEL_AS_ANSWER', 'false')).toLowerCase() === 'true') {
+    var open = readTable(SHEET.INTERVIEWS).filter(function (r) {
+      return String(r.status) === INTERVIEW_STATUS.OPEN && r.thread_ts;
+    });
+    if (open.length) return handleInterviewReply(rawSlackTs(open[0].thread_ts), text);
+  }
+
+  addMemory(trimmed, 'チャンネルへの書き込み');
+  var openNow = readTable(SHEET.INTERVIEWS).filter(function (r) {
     return String(r.status) === INTERVIEW_STATUS.OPEN && r.thread_ts;
   });
-  if (!open.length) return false;
-  var threadTs = rawSlackTs(open[0].thread_ts);
-  return handleInterviewReply(threadTs, text);
+  notifySlack(':memo: メモとして取り込みました。今後の生成・採点に反映します。' +
+    (openNow.length ? '\n（インタビューの回答にしたい場合は、質問のスレッドに返信してください）' : ''));
+  return true;
 }
 
 /** 前日以前の未完了セッションを期限切れにする（回答が来ても誤反応しないように） */
