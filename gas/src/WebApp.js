@@ -148,8 +148,12 @@ function doPost(e) {
             // 失敗は必ず知らせる。本文があるときに黙っていると、画像が
             // 使われたのかどうかが分からないまま先へ進んでしまう
             logEvent('slack_file_only', files.length + '件の画像を読めませんでした');
+            // スレッド外の書き込みは回答にならないので、そう言わない
+            var willAnswer = text && event.thread_ts;
             sendSlack(':warning: 画像を読み取れませんでした: ' + String(img.problem).slice(0, 300) +
-              (text ? '\n本文だけを回答として記録します。' : '\nひとこと添えてもらえると下書きにできます。'),
+              (willAnswer ? '\n本文だけを回答として記録します。'
+                : text ? '\n本文はメモとして取り込みます。'
+                : '\nひとこと添えてもらえると下書きにできます。'),
               event.thread_ts || event.ts);
           }
         }
