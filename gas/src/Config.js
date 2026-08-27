@@ -208,49 +208,155 @@ function parseCorrStore(key) {
  * リーチもフォローも両方がKGIの構成要素。よって片方への切り替えではなく加算する。
  * ただしリーチはKGIの代理指標にすぎないので REACH_MODEL_WEIGHT（既定0.5）で割り引く。
  *
- * どちらも {key: {c: 相関係数, n: 標本数}} 形式。標本が少ない相関は信用できないので
- * n/(n+K) で0へ縮小する（K=SHRINKAGE_K、既定10）。データが無い軸は既定重みで代替する。
+ * 重みの作り方（2026-08-27に作り直した）:
+ *
+ * 1. **偶然の範囲の相関は0にする。** 以前は n/(n+K) で縮めていたが、これは
+ *    標本数しか見ておらず、相関が誤差の範囲かどうかを見ていなかった。実測
+ *    (n=66)で検証したところ、17軸のうち有意なものは1つも無いのに、まぐれの
+ *    r=0.2 前後がそのまま重みになっていた。交差検証では、学習した重みは
+ *    学習に使っていない投稿に対して spearman +0.04（＝ほぼ無予測）だった。
+ *    shrinkCorrelation() でフィッシャーz上の信頼下限まで割り引く。
+ *
+ * 2. **事前分布から出発して、言い切れる分だけ動かす。** 有意な軸が1つも
+ *    無いときに学習値で上書きすると、全重みが0になり全ポートが同点になる。
+ *    DEFAULT_AXIS_WEIGHTS を土台にして、有意な軸が増えるほど実測側へ寄せる。
+ *
+ * 3. **同じものを測っている軸の重みを分け合う。** 実測では
+ *    expertise/insider/novelty/profile が r=0.74〜0.90 でほぼ同一だった。
+ *    内積で足すとこの1成分が4回数えられる。AXIS_CLUSTERS（analyzeAxes が
+ *    書く）にある塊は、塊の中で重みを分割する。
+ *
+ * 4. **再現しない軸は使わない。** 同じポストを2回採点して一致しない軸は、
+ *    重みをどう調整しても意味がない。measureScoringReliability() が
+ *    AXIS_UNRELIABLE に書き、その軸は重み0になる。
  */
-function axisCorrelations(category) {
-  var K = Number(getProp('SHRINKAGE_K', '10'));
+
+/** 何標準誤差ぶん割り引くか。17軸を同時に見るので既定は強め */
+function axisSignificanceZ() {
+  return Number(getProp('AXIS_SIG_Z', '2.5'));
+}
+
+/** 実測で言い切れる軸がいくつ揃ったら学習側へ全面的に寄せるか */
+function axisLearnedFullAt() {
+  return Number(getProp('AXIS_LEARNED_FULL_AT', '6'));
+}
+
+/** 再現性が低いと判定された軸のリスト */
+function unreliableAxes() {
+  var raw = getProp('AXIS_UNRELIABLE', '');
+  if (!raw) return {};
+  try {
+    var arr = JSON.parse(raw);
+    var out = {};
+    (Array.isArray(arr) ? arr : []).forEach(function (k) { out[String(k)] = true; });
+    return out;
+  } catch (e) {
+    logEvent('axis_unreliable_parse_error', String(e));
+    return {};
+  }
+}
+
+/** 互いに強く相関している軸の塊。analyzeAxes() が実測から書く */
+function axisClusters() {
+  var raw = getProp('AXIS_CLUSTERS', '');
+  if (!raw) return [];
+  try {
+    var arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr.filter(function (g) { return Array.isArray(g) && g.length > 1; }) : [];
+  } catch (e) {
+    logEvent('axis_clusters_parse_error', String(e));
+    return [];
+  }
+}
+
+
+/** ベクトルの絶対値合計を1に揃える。全部0なら null */
+function normalizeWeights(w) {
+  var mass = 0;
+  Object.keys(w).forEach(function (k) { mass += Math.abs(Number(w[k]) || 0); });
+  if (mass <= 0) return null;
+  var out = {};
+  Object.keys(w).forEach(function (k) { out[k] = (Number(w[k]) || 0) / mass; });
+  return out;
+}
+
+/**
+ * 重みの内訳を返す（レポート用）。axisCorrelations() はこの weights だけを使う。
+ * @returns {Object} {weights, learned, prior, blend, significant, clustered, dropped}
+ */
+function axisWeightBreakdown(category) {
+  var z = axisSignificanceZ();
   var reachW = Number(getProp('REACH_MODEL_WEIGHT', '0.5'));
   var follow = parseCorrStore('AXIS_CORRELATIONS');
   var reach = parseCorrStore('AXIS_CORRELATIONS_REACH');
-  var out = {};
+  var bad = unreliableAxes();
 
-  function shrunk(store, key) {
-    var rec = store ? store[key] : null;
-    if (!rec || !isFinite(Number(rec.c))) return null;
-    var n = Number(rec.n) || 0;
-    return Number(rec.c) * (n / (n + K)); // 標本数による縮小
+  // 1. 有意な分だけを残した相関を2モデルぶん合成する
+  var learnedRaw = {};
+  var significant = [];
+  AXES.forEach(function (a) {
+    if (bad[a.key]) { learnedRaw[a.key] = 0; return; }
+    var f = follow && follow[a.key] ? shrinkCorrelation(follow[a.key].c, follow[a.key].n, z) : 0;
+    var r = reach && reach[a.key] ? shrinkCorrelation(reach[a.key].c, reach[a.key].n, z) : 0;
+    var v = f + r * reachW;
+    learnedRaw[a.key] = v;
+    if (v !== 0) significant.push(a.key);
+  });
+
+  // 2. 同じものを測っている塊は、塊の中で重みを分け合う
+  var mode = String(getProp('CLUSTER_SPLIT', 'learned'));
+  var clustered = [];
+  function splitClusters(w) {
+    var out = {};
+    Object.keys(w).forEach(function (k) { out[k] = w[k]; });
+    axisClusters().forEach(function (g) {
+      var members = g.filter(function (k) { return out[k] !== undefined; });
+      if (members.length < 2) return;
+      clustered.push(members);
+      members.forEach(function (k) { out[k] = Number(out[k]) / members.length; });
+    });
+    return out;
   }
 
-  var any = false;
+  var prior = {};
+  AXES.forEach(function (a) { prior[a.key] = bad[a.key] ? 0 : (DEFAULT_AXIS_WEIGHTS[a.key] || 0); });
+  if (mode === 'all') prior = splitClusters(prior);
+  if (mode === 'all' || mode === 'learned') learnedRaw = splitClusters(learnedRaw);
+
+  // 3. 事前分布と学習値を、証拠の量に応じて混ぜる
+  var learnedNorm = normalizeWeights(learnedRaw);
+  var priorNorm = normalizeWeights(prior) || DEFAULT_AXIS_WEIGHTS;
+  var blend = learnedNorm ? Math.min(1, significant.length / Math.max(1, axisLearnedFullAt())) : 0;
+
+  var out = {};
   AXES.forEach(function (a) {
-    var f = shrunk(follow, a.key);
-    var r = shrunk(reach, a.key);
-    if (f === null && r === null) {
-      out[a.key] = null; // 未学習
-      return;
-    }
-    out[a.key] = (f || 0) + (r || 0) * reachW;
-    any = true;
+    var p = Number(priorNorm[a.key]) || 0;
+    var l = learnedNorm ? (Number(learnedNorm[a.key]) || 0) : 0;
+    out[a.key] = p * (1 - blend) + l * blend;
   });
-  if (!any) return DEFAULT_AXIS_WEIGHTS;
-  // 未学習の軸は既定重みで埋める（学習済みの軸と桁を合わせるため縮尺を合わせる）
-  var learned = [];
-  AXES.forEach(function (a) { if (out[a.key] !== null) learned.push(Math.abs(out[a.key])); });
-  var scale = learned.length ? learned.reduce(function (s, v) { return s + v; }, 0) / learned.length : 0.1;
-  AXES.forEach(function (a) {
-    if (out[a.key] === null) out[a.key] = (DEFAULT_AXIS_WEIGHTS[a.key] || 0.05) * scale * 5;
-  });
-  // 制約条件の軸は下限で止める（負の相関が出ても減点にしない）。
-  // カテゴリを渡すと、その型に必須の軸も下限が効く
+
+  // 4. 制約条件の軸は下限で止める（負の相関が出ても減点にしない）。
+  //    ただし再現しない軸は下限も効かせない（測れていないものを守っても仕方がない）
   var floors = axisFloors(category);
   Object.keys(floors).forEach(function (key) {
+    if (bad[key]) return;
     if (out[key] !== undefined && out[key] < Number(floors[key])) out[key] = Number(floors[key]);
   });
-  return out;
+
+  return {
+    weights: out,
+    learned: learnedRaw,
+    prior: priorNorm,
+    blend: blend,
+    significant: significant,
+    clustered: clustered,
+    dropped: Object.keys(bad),
+    z: z,
+  };
+}
+
+function axisCorrelations(category) {
+  return axisWeightBreakdown(category).weights;
 }
 
 /**
