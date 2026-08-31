@@ -7,20 +7,76 @@
  * installTriggers() で毎週月曜8時台に自動実行される。
  */
 
+/**
+ * 計測対象を選ぶ。
+ *
+ * これまでは投稿済みの行を**毎回すべて**取り直していた。取り込んだ過去の
+ * 手動投稿も含まれるので、数字がもう動かない何年も前のツイートを毎週
+ * 読み直していたことになる。X APIの読み取り枠は「読んだポスト数」で
+ * 消費されるため、履歴が増えるほど毎週の消費が増え続ける。
+ * 2026-08-26に月次上限（spend cap）に当たったのはこれが原因。
+ *
+ * 3つに分ける:
+ *   1. 未計測 … 必ず取る。これを逃すと標本にならない
+ *   2. 計測済みだが投稿から METRICS_SETTLE_DAYS 日以内 … 取り直す。
+ *      数字がまだ伸びるし、プロフィールクリックはX側で直近30日ぶんしか
+ *      保持されないので、この窓を逃すと二度と取れない
+ *   3. それより古い … 取らない。数字は固定されていて、
+ *      プロフィールクリックはもう返ってこない
+ *
+ * @returns {Object} {targets, frozen, settleDays}
+ */
+function metricsTargets(rows) {
+  var settleDays = Number(getProp('METRICS_SETTLE_DAYS', '30'));
+  var settleH = settleDays * 24;
+  var fresh = [], never = [], frozen = 0;
+  rows.forEach(function (r) {
+    if (String(r.status) !== STATUS.POSTED) return;
+    if (!r.tweet_id || String(r.tweet_id) === 'dry-run') return;
+    if (!String(r.metrics_at || '').trim()) { never.push(r); return; }
+    // 判定は「いまの投稿の古さ」ではなく「記録されている数字が投稿から
+    // 何時間後のものか」で行う。枠切れで計測が飛ぶと、投稿3日目の数字を
+    // 持ったまま投稿が35日目になる、ということが起きる。投稿の古さで
+    // 判定すると、それを「固定済み」と誤認して未熟な数字が残り続ける。
+    // 計測時点の経過時間で見れば、枠が戻ったときに自動で取り直される。
+    var age = metricsAgeHours(r);
+    if (age === null || age < settleH) fresh.push(r); else frozen++;
+  });
+  // 未計測を先に。次に新しい投稿（＝プロフィールクリックが消える前に取るべきもの）
+  fresh.sort(function (a, b) { return (postedAtMs(b) || 0) - (postedAtMs(a) || 0); });
+  return { targets: never.concat(fresh), frozen: frozen, settleDays: settleDays };
+}
+
 function fetchTweetMetrics() {
   ensureHeaders(SHEET.STOCK);
-  var posted = readTable(SHEET.STOCK).filter(function (r) {
-    return String(r.status) === STATUS.POSTED &&
-      r.tweet_id && String(r.tweet_id) !== 'dry-run';
-  });
-  if (!posted.length) return '対象なし（実投稿された行がありません）';
+
+  // 月次上限に当たったまま月が変わっていないなら、投げるだけ無駄
+  var capped = spendCapActiveUntil();
+  if (capped) {
+    var msg = 'X APIの月次上限に到達中のため取得を見送りました（復帰見込み ' + capped + '）';
+    logEvent('metrics', msg);
+    return msg;
+  }
+
+  var sel = metricsTargets(readTable(SHEET.STOCK));
+  if (!sel.targets.length) {
+    return '対象なし（未計測の投稿も、まだ数字が動く投稿もありません。計測済みで固定済み ' +
+      sel.frozen + '件）';
+  }
+
+  // 1回の実行で読む上限。履歴が一気に増えても枠を食い潰さないための保険
+  var maxPerRun = Number(getProp('METRICS_MAX_PER_RUN', '150'));
+  var targets = sel.targets.slice(0, maxPerRun);
+  var deferred = sel.targets.length - targets.length;
 
   var byTweetId = {};
-  posted.forEach(function (r) { byTweetId[String(r.tweet_id)] = r; });
+  targets.forEach(function (r) { byTweetId[String(r.tweet_id)] = r; });
   var ids = Object.keys(byTweetId);
 
-  var now = fmtDateTime(nowJst());
+  var nowStr = fmtDateTime(nowJst());
+  var nowMs = nowJst().getTime();
   var updated = 0;
+  var hitCap = false;
   // organic_metrics(広告分を除いた実測)とnon_public_metrics(プロフィールクリック等)は
   // ユーザー認証の自分のツイートで取得可能。いずれも直近30日程度が対象。
   // プランや期間の制約で拒否された場合はpublic_metricsのみにフォールバックする
@@ -36,13 +92,30 @@ function fetchTweetMetrics() {
         'tweet.fields': withOrganic ? 'public_metrics,organic_metrics,non_public_metrics' : 'public_metrics',
       });
     } catch (e) {
+      // 枠切れは投げ方を変えても通らない。フォールバックすると通らない
+      // リクエストで枠をさらに削るので、ここで打ち切る
+      if (isQuotaExhausted(e)) {
+        if (isSpendCapError(e)) noteSpendCap();
+        else logEvent('metrics_rate_limited', String(e).slice(0, 200));
+        hitCap = true;
+        break;
+      }
       if (withOrganic) {
         logEvent('metrics_organic_unavailable', String(e).slice(0, 200));
         withOrganic = false;
-        res = xApiGet('/tweets', {
-          ids: chunk.join(','),
-          'tweet.fields': 'public_metrics',
-        });
+        try {
+          res = xApiGet('/tweets', {
+            ids: chunk.join(','),
+            'tweet.fields': 'public_metrics',
+          });
+        } catch (e2) {
+          if (isQuotaExhausted(e2)) {
+            if (isSpendCapError(e2)) noteSpendCap();
+            hitCap = true;
+            break;
+          }
+          throw e2;
+        }
       } else {
         throw e;
       }
@@ -56,12 +129,16 @@ function fetchTweetMetrics() {
       // 分析に使うimpressions/likesはオーガニック値。広告分はpaid_impressionsに分離
       var imp = hasOrganic ? org.impression_count : (pub.impression_count || 0);
       var paid = hasOrganic ? Math.max(0, (pub.impression_count || 0) - org.impression_count) : '';
+      var postedMs = postedAtMs(row);
       var updates = {
         impressions: imp,
         likes: hasOrganic && typeof org.like_count === 'number' ? org.like_count : (pub.like_count || 0),
         retweets: pub.retweet_count || 0,
         replies: pub.reply_count || 0,
-        metrics_at: now,
+        metrics_at: nowStr,
+        // 「投稿から何時間後の数字か」。計測が不定期になると、若い投稿ほど
+        // 数字が小さく出て、内容の差と区別がつかなくなる。分析側で揃えるために残す
+        metrics_age_h: postedMs === null ? '' : Math.round((nowMs - postedMs) / 3600000),
       };
       if (hasOrganic) {
         updates.paid_impressions = paid;
@@ -78,8 +155,24 @@ function fetchTweetMetrics() {
       updated++;
     });
   }
-  logEvent('metrics', updated + '件のメトリクスを更新' + (withOrganic ? '（広告分を自動分離）' : '（organic取得不可: public値のみ）'));
-  return updated + '件のメトリクスを更新しました';
+
+  var note = updated + '件のメトリクスを更新' +
+    '（対象' + targets.length + '件 / 数字が固定済みで対象外' + sel.frozen + '件' +
+    (deferred > 0 ? ' / 今回の上限を超えて次回送り' + deferred + '件' : '') + '）' +
+    (withOrganic ? '' : '（organic取得不可: public値のみ）');
+  logEvent('metrics', note);
+
+  if (hitCap) {
+    var until = spendCapActiveUntil();
+    var capMsg = ':warning: X APIの枠に到達したため途中で打ち切りました。' +
+      updated + '件は更新済みです。' +
+      (until ? '月次上限のため、復帰見込みは ' + until + ' です。' +
+        '開発者ポータルで上限を上げれば即時復帰できます。'
+        : 'レート制限のため、しばらく置けば戻ります。');
+    notifySlack(capMsg);
+    return capMsg;
+  }
+  return note;
 }
 
 /**
@@ -97,7 +190,21 @@ function snapshotFollowers(note) {
     sheet.getRange(1, 1, sheet.getMaxRows(), headers.length).setNumberFormat('@');
   }
 
-  var me = xApiGet('/users/me', { 'user.fields': 'public_metrics' });
+  var capped = spendCapActiveUntil();
+  if (capped) {
+    logEvent('followers', 'X APIの月次上限に到達中のため記録を見送りました（復帰見込み ' + capped + '）');
+    return 'X APIの月次上限に到達中のため記録を見送りました（復帰見込み ' + capped + '）';
+  }
+  var me;
+  try {
+    me = xApiGet('/users/me', { 'user.fields': 'public_metrics' });
+  } catch (e) {
+    if (isSpendCapError(e)) {
+      var until = noteSpendCap();
+      return 'X APIの月次上限に到達しました（復帰見込み ' + until + '）';
+    }
+    throw e;
+  }
   var followers = Number(((me.data || {}).public_metrics || {}).followers_count || 0);
   var today = fmtDate(nowJst());
 
@@ -169,11 +276,24 @@ function followerSummary(days) {
  * 注意: 遡って取れるのは本文と公開メトリクスまで。オーガニックインプと
  * プロフィールクリックはX側の仕様で直近30日分しか存在しない。
  *
- * @param {number} maxPosts 取得上限（既定100 = 1ページ）
+ * 週次の呼び出し（maxPosts を渡さない場合）は since_id を付けて、前回より
+ * 後のツイートだけを取る。以前は毎週かならず直近100件を読み直していたが、
+ * その大半は既に取り込み済みで、読み取り枠だけを消費していた。
+ *
+ * @param {number} maxPosts 取得上限（既定100 = 1ページ）。渡すと since_id を使わず遡る
  */
 function importManualPosts(maxPosts) {
   ensureHeaders(SHEET.STOCK);
+  var incremental = !maxPosts; // 週次の自動実行かどうか
   var limit = Number(maxPosts || 100);
+
+  var capped = spendCapActiveUntil();
+  if (capped) {
+    var skip = '手動投稿の取り込みを見送りました（X APIの月次上限に到達中 / 復帰見込み ' + capped + '）';
+    logEvent('manual_import', skip);
+    return skip;
+  }
+
   // /users/me も読み取り枠を消費するため、ユーザーIDは初回取得後にキャッシュする
   var userId = getProp('X_USER_ID');
   if (!userId) {
@@ -183,8 +303,12 @@ function importManualPosts(maxPosts) {
   }
 
   var known = {};
+  var newestId = '';
   readTable(SHEET.STOCK).forEach(function (r) {
-    if (r.tweet_id) known[String(r.tweet_id)] = true;
+    if (!r.tweet_id) return;
+    var id = String(r.tweet_id);
+    known[id] = true;
+    if (id !== 'dry-run' && compareTweetIds(id, newestId) > 0) newestId = id;
   });
 
   var now = fmtDateTime(nowJst());
@@ -192,17 +316,26 @@ function importManualPosts(maxPosts) {
   var fetched = 0;
   var pages = 0;
   var token = null;
+  var hitCap = false;
   do {
     var params = {
       max_results: '100',
       exclude: 'retweets,replies',
       'tweet.fields': 'created_at,public_metrics',
     };
+    // 前回以降だけを取る。1ページ目にだけ付ければよい（以降はトークンで辿る）
+    if (incremental && newestId && !token) params.since_id = newestId;
     if (token) params.pagination_token = token;
     var res;
     try {
       res = xApiGet('/users/' + userId + '/tweets', params);
     } catch (e) {
+      // 枠切れは投げ直しても通らないので、記録して打ち切る
+      if (isQuotaExhausted(e)) {
+        if (isSpendCapError(e)) noteSpendCap();
+        hitCap = true;
+        break;
+      }
       // レート制限などで途中で落ちても、ここまでの分は保存して次回に続きから取る
       logEvent('manual_import_error', 'page ' + (pages + 1) + ': ' + String(e).slice(0, 200));
       break;
@@ -243,9 +376,13 @@ function importManualPosts(maxPosts) {
 
   // 1行ずつappendすると数百行で実行時間上限に当たるため一括で書き込む
   appendRowsObj(SHEET.STOCK, pending);
-  logEvent('manual_import', pending.length + '件を取り込み（取得' + fetched + '件 / ' + pages + 'ページ）');
-  return pending.length + '件の手動投稿を取り込みました（' + fetched + '件走査 / ' + pages + 'ページ）';
+  var how = incremental && newestId ? '前回以降のみ' : '遡って';
+  logEvent('manual_import', pending.length + '件を取り込み（' + how + '取得' + fetched +
+    '件 / ' + pages + 'ページ' + (hitCap ? ' / 枠切れで中断' : '') + '）');
+  return pending.length + '件の手動投稿を取り込みました（' + how + fetched + '件走査 / ' +
+    pages + 'ページ' + (hitCap ? ' / X APIの枠に到達して中断' : '') + '）';
 }
+
 
 /**
  * 過去投稿の大量遡及取り込み。相関分析の標本を一気に増やすために使う。
@@ -303,19 +440,111 @@ function axisCorrelationsFor(target, outcomes) {
   });
 }
 
-/** 分析対象になる投稿済み行（軸スコア付き・広告インプを分離できているもの） */
-function analyzableRows() {
-  return readTable(SHEET.STOCK).filter(function (r) {
-    if (String(r.status) !== STATUS.POSTED || !r.metrics_at) return false;
-    if (String(r.promoted) === 'yes' && r.paid_impressions === '') return false;
-    return parseAxes(r.axes) !== null;
-  });
-}
-
 /** 投稿時刻を数値に。読めなければ null */
 function postedAtMs(r) {
   var t = new Date(String(r.posted_at).replace(' ', 'T') + ':00+09:00').getTime();
   return isFinite(t) ? t : null;
+}
+
+/**
+ * 「投稿から何時間後に計測した数字か」。
+ *
+ * 列に入っていればそれを使い、無ければ posted_at と metrics_at から出す
+ * （metrics_age_h 列を足す前に計測した行のため）。
+ */
+function metricsAgeHours(r) {
+  var stored = Number(r.metrics_age_h);
+  if (isFinite(stored) && stored > 0) return stored;
+  var p = postedAtMs(r);
+  var m = new Date(String(r.metrics_at).replace(' ', 'T') + ':00+09:00').getTime();
+  if (p === null || !isFinite(m)) return null;
+  var h = (m - p) / 3600000;
+  return h > 0 ? h : null;
+}
+
+/**
+ * 分析対象になる投稿済み行。
+ *
+ * 軸スコアと計測値が揃っていることに加えて、**計測が十分に遅い**ことを条件にする。
+ *
+ * インプレッションは投稿直後から数日かけて伸びる。計測が不定期になると
+ * （X APIの枠切れで週次が飛ぶと必ずそうなる）、たまたま投稿2時間後に
+ * 計測された投稿と、30日後に計測された投稿が同じ土俵に並んでしまう。
+ * そうなると数字の差が「内容の差」なのか「計測が早かっただけ」なのか
+ * 区別できず、相関はそこを拾って壊れる。
+ *
+ * 伸びきる前の計測値は、内容の指標としては使わない。
+ */
+function analyzableRows() {
+  var minAge = Number(getProp('METRICS_MIN_AGE_H', '48'));
+  return readTable(SHEET.STOCK).filter(function (r) {
+    if (String(r.status) !== STATUS.POSTED || !r.metrics_at) return false;
+    if (String(r.promoted) === 'yes' && r.paid_impressions === '') return false;
+    if (parseAxes(r.axes) === null) return false;
+    var age = metricsAgeHours(r);
+    // 経過時間が分からない行は残す（弾きすぎるより、下の交絡チェックで見張る）
+    return age === null || age >= minAge;
+  });
+}
+
+/**
+ * 計測データの状態。「いつの数字を見ているのか」を分析の頭に出すため。
+ * 計測が飛んでいることに気づかないまま相関を読むのがいちばん危ない。
+ */
+function metricsHealth() {
+  // シート読み込みはGASでは重いので1回だけにする
+  var sheet = readTable(SHEET.STOCK);
+  var all = sheet.filter(function (r) {
+    return String(r.status) === STATUS.POSTED && r.tweet_id && String(r.tweet_id) !== 'dry-run';
+  });
+  var measured = all.filter(function (r) { return String(r.metrics_at || '').trim(); });
+  var minAge = Number(getProp('METRICS_MIN_AGE_H', '48'));
+  var ages = [], tooYoung = 0, latest = '';
+  measured.forEach(function (r) {
+    var a = metricsAgeHours(r);
+    if (a !== null) { ages.push(a); if (a < minAge) tooYoung++; }
+    var at = String(r.metrics_at || '');
+    if (at > latest) latest = at;
+  });
+  ages.sort(function (x, y) { return x - y; });
+  var sel = metricsTargets(sheet);
+  return {
+    posted: all.length,
+    measured: measured.length,
+    unmeasured: all.length - measured.length,
+    pending: sel.targets.length,
+    frozen: sel.frozen,
+    latest: latest,
+    tooYoung: tooYoung,
+    minAge: minAge,
+    ageMin: ages.length ? ages[0] : null,
+    ageMed: ages.length ? ages[Math.floor(ages.length / 2)] : null,
+    ageMax: ages.length ? ages[ages.length - 1] : null,
+    spendCapUntil: spendCapActiveUntil(),
+  };
+}
+
+/** 計測データの状態を1行にまとめる（レポートの頭に置く） */
+function metricsHealthLines() {
+  var h = metricsHealth();
+  var lines = [
+    '計測: ' + h.measured + '/' + h.posted + '件' +
+      (h.latest ? '（最終計測 ' + h.latest + '）' : '（未計測）') +
+      ' / まだ数字が動く未取得 ' + h.pending + '件 / 数字が固定済み ' + h.frozen + '件',
+  ];
+  if (h.ageMed !== null) {
+    lines.push('計測タイミング: 投稿から ' + Math.round(h.ageMin) + '〜' + Math.round(h.ageMax) +
+      '時間後（中央値 ' + Math.round(h.ageMed) + '時間）');
+  }
+  if (h.tooYoung) {
+    lines.push(':warning: 伸びきる前（' + h.minAge + '時間未満）に計測した ' + h.tooYoung +
+      '件は、内容の差と計測の早さを区別できないため分析から除外しています。');
+  }
+  if (h.spendCapUntil) {
+    lines.push(':rotating_light: X APIの月次上限に到達中です（復帰見込み ' + h.spendCapUntil + '）。' +
+      'それまで数字は更新されません。開発者ポータルで上限を上げれば即時復帰できます。');
+  }
+  return lines;
 }
 
 /**
@@ -823,12 +1052,35 @@ function evaluateScoring() {
 function diagnoseScoring(skipReliability) {
   var out = [':stethoscope: *採点の健康診断*', ''];
 
+  out.push('── 0. 見ている数字はいつのものか ──');
+  metricsHealthLines().forEach(function (l) { out.push(l); });
+  out.push('');
+
   var rows = analyzableRows().filter(function (r) {
     return Number(r.impressions || 0) > 0 && postedAtMs(r) !== null;
   });
   out.push('軸スコアと実測が揃った投稿: ' + rows.length + '件');
   out.push('この標本数で「偶然ではない」と言える相関の大きさ: ±' +
     minDetectableCorrelation(rows.length, axisSignificanceZ()).toFixed(2));
+
+  // 計測の早さが成果指標に効いていないか。効いていたら、軸の相関は
+  // 内容ではなく「いつ計測したか」を拾っている
+  var ages = [], imps = [];
+  rows.forEach(function (r) {
+    var a = metricsAgeHours(r);
+    if (a !== null) { ages.push(a); imps.push(Number(r.impressions)); }
+  });
+  if (ages.length >= 10) {
+    var rhoAge = spearman(ages, imps);
+    var noiseAge = minDetectableCorrelation(ages.length, 2.0);
+    if (rhoAge !== null) {
+      out.push('計測タイミングとインプの相関: ' + (rhoAge >= 0 ? '+' : '') + rhoAge.toFixed(2) +
+        (Math.abs(rhoAge) >= noiseAge
+          ? ' :warning: 数字の差が「計測が遅かったから」で説明できてしまいます。' +
+            'METRICS_MIN_AGE_H を上げて、伸びきった後の数字だけで見てください。'
+          : '（誤差の範囲。計測タイミングによる歪みは見当たりません）'));
+    }
+  }
   out.push('');
 
   if (!skipReliability) {
@@ -943,6 +1195,13 @@ function weeklyMetricsReport() {
   }
   notifySlack(lines.join('\n'));
 
+  // 計測が飛んでいることに気づかないまま数字を読むのがいちばん危ないので、
+  // 分析より先に「いつの数字か」を出す
+  try {
+    notifySlack([':satellite: *計測データの状態*'].concat(metricsHealthLines()).join('\n'));
+  } catch (e) {
+    logEvent('metrics_health_error', String(e));
+  }
   // データが溜まっていれば採点基準の妥当性検証と学習も回す
   try {
     if (rows.length >= 8) evaluateScoring();

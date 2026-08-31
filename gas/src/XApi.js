@@ -170,6 +170,59 @@ function syncSafe(id) {
 }
 
 /** X API v2 のGET呼び出し（クエリパラメータ込みでOAuth1署名する） */
+/**
+ * X APIの「もう今月は打てない」系のエラーかどうか。
+ *
+ *   spend-cap-reached … 月次の利用上限（開発者ポータルで設定した金額枠）に到達。
+ *                       月が変わるか、ポータルで上限を上げるまで復帰しない。
+ *   429               … レート制限。時間を置けば戻る。
+ *
+ * この2つは「リクエストの投げ方を変えれば通る」たぐいのものではないので、
+ * 検知したら即座に打ち切る。特に spend-cap のときにフォールバックで
+ * 投げ直すと、通らないリクエストで枠をさらに削ることになる。
+ */
+function isSpendCapError(e) {
+  var m = String((e && e.message) || e);
+  return m.indexOf('spend-cap-reached') >= 0 || m.indexOf('spend cap') >= 0;
+}
+
+function isRateLimitError(e) {
+  var m = String((e && e.message) || e);
+  return m.indexOf('X API error 429') >= 0 || m.indexOf('TooManyRequests') >= 0;
+}
+
+/** これ以上APIを叩いても無駄な状態か */
+function isQuotaExhausted(e) {
+  return isSpendCapError(e) || isRateLimitError(e);
+}
+
+/**
+ * 月次上限に当たったことを記録する。復帰見込みは翌月1日。
+ * 記録しておくと、次の実行が「まだ枠が無い」ことを知って無駄打ちを避けられる。
+ */
+function noteSpendCap() {
+  var now = nowJst();
+  var next = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  PropertiesService.getScriptProperties().setProperty('X_SPEND_CAP_AT', fmtDateTime(now));
+  PropertiesService.getScriptProperties().setProperty('X_SPEND_CAP_UNTIL', fmtDate(next));
+  logEvent('x_spend_cap', '月次上限に到達。復帰見込み ' + fmtDate(next));
+  return fmtDate(next);
+}
+
+/** 月次上限に当たったまま復帰していないなら、その復帰予定日を返す */
+function spendCapActiveUntil() {
+  var until = getProp('X_SPEND_CAP_UNTIL', '');
+  if (!until) return null;
+  if (fmtDate(nowJst()) >= until) {
+    // 月が変わった。次の実行で普通に試させる
+    PropertiesService.getScriptProperties().deleteProperty('X_SPEND_CAP_AT');
+    PropertiesService.getScriptProperties().deleteProperty('X_SPEND_CAP_UNTIL');
+    logEvent('x_spend_cap', '復帰予定日を過ぎたので上限フラグを解除しました');
+    return null;
+  }
+  return until;
+}
+
 function xApiGet(path, params) {
   var url = 'https://api.twitter.com/2' + path;
   var qs = Object.keys(params || {}).map(function (k) {

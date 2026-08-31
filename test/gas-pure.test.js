@@ -347,3 +347,25 @@ test('spearman: 順位で見る相関', () => {
   // 同値は中間順位
   assert.ok(spearman([1, 1, 2, 3], [1, 1, 2, 3]) > 0.99);
 });
+
+test('compareTweetIds: 桁数の違うIDでも新しい方を選べる', () => {
+  const { compareTweetIds } = context.module.exports;
+
+  // 桁が増える境目。文字列比較だけだと "999..." の方が新しく見えてしまい、
+  // since_id に古いIDを渡してタイムライン全体を読み直すことになる
+  assert.ok(compareTweetIds('1000000000000000000', '999999999999999999') > 0);
+  assert.ok(compareTweetIds('999999999999999999', '1000000000000000000') < 0);
+
+  // 同じ桁数なら辞書順で正しい
+  assert.ok(compareTweetIds('2079410195222909349', '2078007715910099239') > 0);
+  assert.equal(compareTweetIds('2079410195222909349', '2079410195222909349'), 0);
+
+  // 2^53 を超えても壊れない（数値化していたら丸められて同値になる組）
+  assert.ok(compareTweetIds('9007199254740993', '9007199254740992') > 0);
+
+  // 空・未設定は常に「古い」扱い
+  assert.ok(compareTweetIds('', '123') < 0);
+  assert.ok(compareTweetIds('123', '') > 0);
+  assert.equal(compareTweetIds('', ''), 0);
+  assert.equal(compareTweetIds(null, undefined), 0);
+});
