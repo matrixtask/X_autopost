@@ -550,7 +550,25 @@ function spearman(xs, ys) {
   return pearson(ranks(xs.slice(0, n)), ranks(ys.slice(0, n)));
 }
 
+/**
+ * ツイートIDの新旧比較。負なら a が古い、正なら a が新しい。
+ *
+ * Snowflake IDは時間とともに桁が増える。単純な文字列比較だと
+ * "999..."(18桁) が "1000..."(19桁) より新しいと判定され、since_id に
+ * 古いIDを渡してしまう（＝毎回タイムライン全部を読み直すことになる）。
+ * 数値化すると 2^53 を超えて精度が落ちるので、桁数→辞書順で比べる。
+ */
+function compareTweetIds(a, b) {
+  var x = String(a === null || a === undefined ? '' : a);
+  var y = String(b === null || b === undefined ? '' : b);
+  if (!x && !y) return 0;
+  if (!x) return -1;
+  if (!y) return 1;
+  if (x.length !== y.length) return x.length - y.length;
+  return x < y ? -1 : (x > y ? 1 : 0);
+}
+
 // Nodeテスト用（GASでは module は未定義なので無視される）
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { weightedTweetLength: weightedTweetLength, fitsInTweet: fitsInTweet, parseJsonLoose: parseJsonLoose, salvageJson: salvageJson, pickWeighted: pickWeighted, computeNextSlots: computeNextSlots, normalizeSlackTs: normalizeSlackTs, slackTsEqual: slackTsEqual, rawSlackTs: rawSlackTs, pearson: pearson, dateKey: dateKey, percentileWithinWindow: percentileWithinWindow, normalizeThemeKey: normalizeThemeKey, clusterHeadlines: clusterHeadlines, stripHeadlineSource: stripHeadlineSource, normalizeSlackText: normalizeSlackText, detectImageMime: detectImageMime, shrinkCorrelation: shrinkCorrelation, minDetectableCorrelation: minDetectableCorrelation, centerAxisScores: centerAxisScores, correlationClusters: correlationClusters, agreementStats: agreementStats, spearman: spearman };
+  module.exports = { weightedTweetLength: weightedTweetLength, fitsInTweet: fitsInTweet, parseJsonLoose: parseJsonLoose, salvageJson: salvageJson, pickWeighted: pickWeighted, computeNextSlots: computeNextSlots, normalizeSlackTs: normalizeSlackTs, slackTsEqual: slackTsEqual, rawSlackTs: rawSlackTs, pearson: pearson, dateKey: dateKey, percentileWithinWindow: percentileWithinWindow, normalizeThemeKey: normalizeThemeKey, clusterHeadlines: clusterHeadlines, stripHeadlineSource: stripHeadlineSource, normalizeSlackText: normalizeSlackText, detectImageMime: detectImageMime, shrinkCorrelation: shrinkCorrelation, minDetectableCorrelation: minDetectableCorrelation, centerAxisScores: centerAxisScores, correlationClusters: correlationClusters, agreementStats: agreementStats, spearman: spearman, compareTweetIds: compareTweetIds };
 }
