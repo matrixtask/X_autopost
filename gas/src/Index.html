@@ -67,6 +67,7 @@
   <button class="ghost" onclick="refineNow()">リライト</button>
   <button class="ghost" onclick="approveAll()">全承認</button>
   <button class="ghost" onclick="scheduleNow()">予約実行</button>
+  <button class="ghost" onclick="forceApproveStock()">ストック全承認→予約</button>
 </header>
 <div class="tabs" id="tabs"></div>
 <main id="list"><div class="empty">読み込み中…</div></main>
@@ -361,6 +362,17 @@
       .withSuccessHandler(function (msg) { toast(msg); load(); })
       .withFailureHandler(function (e) { toast(e.message); })
       .api_approveAll(TOKEN);
+  }
+
+  function forceApproveStock() {
+    var n = posts.filter(function (p) { return p.status === 'stock' || p.status === 'ready'; }).length;
+    if (!n) { toast('保留ストック・承認待ちが0件です'); return; }
+    if (!confirm('採点に関係なく、保留ストックと承認待ちの ' + n + '件をすべて承認して予約します。よろしいですか？')) return;
+    toast('強制承認と予約を実行中…');
+    google.script.run
+      .withSuccessHandler(function (msg) { toast(msg); load(); })
+      .withFailureHandler(function (e) { toast(e.message); })
+      .api_forceApproveStock(TOKEN);
   }
 
   function scheduleNow() {

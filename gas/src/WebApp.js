@@ -418,6 +418,41 @@ function api_analytics(token) {
   });
 }
 
+/**
+ * 保留ストック(stock)と承認待ち(ready)を、採点に関係なくすべて承認して予約する。
+ *
+ * 品質ゲートを飛ばす操作なので、通常運用ではなく「ストックが薄くて予約を
+ * 埋めたい」ときの非常口。何件が承認され、何件が枠に入ったかを返す。
+ * 枠は MAX_POSTS_PER_DAY × 21日ぶんしか無いので、それを超えた分は
+ * approved のまま残り、次の「予約実行」で順に入る。
+ *
+ * 副産物として、閾値未満のポストが実際に投稿されることになる。採点の
+ * 妥当性検証（evaluateScoringAccuracy）は「合格したものしか投稿されない」
+ * 偏りを抱えているので、これは検証の標本としてはむしろ貴重。
+ */
+function api_forceApproveStock(token) {
+  assertAccess(token);
+  var rows = readTable(SHEET.STOCK).filter(function (r) {
+    var st = String(r.status);
+    return (st === STATUS.STOCK || st === STATUS.READY) && String(r.text || '').trim();
+  });
+  if (!rows.length) return '対象がありません（保留ストック・承認待ちが0件）';
+
+  // updateStockById は1件ごとに全行を読み直すので、行番号直指定で一括更新する
+  setColumnByRows(SHEET.STOCK, 'status', rows.map(function (r) {
+    return { row: r._row, value: STATUS.APPROVED };
+  }));
+  rows.forEach(function (r) {
+    try { syncStockRowToNotion(r.id); } catch (e) { logEvent('notion_error', r.id + ': ' + e); }
+  });
+
+  var scheduled = scheduleApprovedPosts();
+  var left = rows.length - scheduled.length;
+  logEvent('webapp_force_approve', rows.length + '件を強制承認 / ' + scheduled.length + '件を予約');
+  return rows.length + '件を承認し、' + scheduled.length + '件を予約しました' +
+    (left > 0 ? '（残り' + left + '件は枠待ち。枠が空いたら「予約実行」で入ります）' : '');
+}
+
 /** 承認待ち(ready)を一括で承認する */
 function api_approveAll(token) {
   assertAccess(token);
