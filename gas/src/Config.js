@@ -17,7 +17,14 @@
  *   NOTION_DATABASE_ID  ストック同期先NotionデータベースID
  *   NOTION_THEMES_DATABASE_ID  テーマ管理DB（トークテーマ（運用中）_X）のID。
  *                       設定するとNotionの行がThemesシートへ毎朝同期される
- *   CLAUDE_MODEL        既定: claude-sonnet-5
+ *   CLAUDE_MODEL        既定: claude-sonnet-5（質問生成・分析など）
+ *   CLAUDE_MODEL_GENERATE 下書き生成・リライト用。未設定なら CLAUDE_MODEL。
+ *                       文体の質が直接ポストに出るので、ここだけ上位モデルにできる
+ *   CLAUDE_MODEL_SCORE  採点用。未設定なら CLAUDE_MODEL。途中で変えると過去の
+ *                       スコアと比較できなくなるので、変えるなら意図して変える
+ *   CLAUDE_EFFORT_GENERATE 生成の思考の深さ low/medium/high/xhigh/max（既定 medium）
+ *   CLAUDE_FALLBACKS    拒否時に別モデルへ自動で引き継ぐか auto/on/off（既定 auto =
+ *                       Fable/Opus 5 系のときだけ付ける）
  *   DRY_RUN             "false" にするまでXへは投稿しない（既定: true）
  *   AUTO_APPROVE        "true" で品質ゲート通過分を承認なしで予約（既定: false）
  *   QUALITY_THRESHOLD   品質ゲートの合格点 0-100（既定: 75）

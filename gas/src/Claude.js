@@ -38,47 +38,125 @@ function isFatalError(e) {
   return String(e && e.message ? e.message : e).indexOf(CLAUDE_FATAL) >= 0;
 }
 
-function askClaude(systemPrompt, userPrompt, maxTokens) {
-  return claudeMessage(systemPrompt, userPrompt, maxTokens);
+/**
+ * 安全分類器に拒否されたことを示す目印。
+ * Fable 5.1 系は、危険とみなした依頼を HTTP 200 のまま stop_reason=refusal で
+ * 返す。同じ内容を投げ直しても同じ結果になるので、出力枠を広げる再試行の
+ * 対象にしない（枠の問題ではない）。
+ */
+var CLAUDE_REFUSED = '[Claudeが応答を拒否]';
+
+function isRefusalError(e) {
+  return String(e && e.message ? e.message : e).indexOf(CLAUDE_REFUSED) >= 0;
+}
+
+/**
+ * 用途ごとのモデル。
+ *
+ *   generate … 下書き生成・リライト。文体の質が直接ポストに出るので、
+ *              ここだけ上位モデル（CLAUDE_MODEL_GENERATE）を使う
+ *   score    … 採点・遡及採点。数百件を回すうえ、途中でモデルを変えると
+ *              過去のスコアと比較できなくなる。CLAUDE_MODEL_SCORE で固定
+ *   それ以外 … 質問生成・分析など。CLAUDE_MODEL（既定 claude-sonnet-5）
+ *
+ * 用途別の設定が無ければ CLAUDE_MODEL に落ちる。
+ */
+function claudeModelFor(purpose) {
+  var base = getProp('CLAUDE_MODEL', 'claude-sonnet-5');
+  if (purpose === 'generate') return getProp('CLAUDE_MODEL_GENERATE', base);
+  if (purpose === 'score') return getProp('CLAUDE_MODEL_SCORE', base);
+  return base;
+}
+
+/**
+ * 用途ごとの effort（思考の深さ）。
+ *
+ * Fable 5.1 は思考が常時オンで、放っておくと定型作業でも深く考えて
+ * 出力枠を思考で使い切る（本文が0文字で返る claude_empty の再来）。
+ * 生成のような定型作業は medium で十分。未設定なら送らない
+ * （effort を受け付けないモデルで 400 にしないため）。
+ */
+function claudeEffortFor(purpose) {
+  if (purpose === 'generate') return getProp('CLAUDE_EFFORT_GENERATE', 'medium');
+  if (purpose === 'score') return getProp('CLAUDE_EFFORT_SCORE', '');
+  return getProp('CLAUDE_EFFORT', '');
+}
+
+/**
+ * 拒否時に別モデルへ自動で引き継ぐか。
+ *
+ * Fable 5.1 / Opus 5 系は安全分類器が誤検知することがある（技術系の話題で
+ * 起きうる）。fallbacks: "default" を付けると、拒否された依頼を同じ
+ * リクエストの中で別モデルに流し、その答えが返る。それ以外のモデルには
+ * 付けない（既定 auto）。CLAUDE_FALLBACKS=off で止められる。
+ */
+function claudeUsesFallbacks(model) {
+  var mode = String(getProp('CLAUDE_FALLBACKS', 'auto')).toLowerCase();
+  if (mode === 'off') return false;
+  if (mode === 'on') return true;
+  return /fable|mythos|opus-5/.test(String(model));
+}
+
+function askClaude(systemPrompt, userPrompt, maxTokens, opts) {
+  return claudeMessage(systemPrompt, userPrompt, maxTokens, opts);
 }
 
 /**
  * 画像つきで問い合わせる。
  * @param {Array} images [{base64, mimeType}]（先に置くほうが精度が上がる）
  */
-function askClaudeWithImages(systemPrompt, userPrompt, images, maxTokens) {
+function askClaudeWithImages(systemPrompt, userPrompt, images, maxTokens, opts) {
   var content = (images || []).map(function (im) {
     return { type: 'image', source: { type: 'base64', media_type: im.mimeType, data: im.base64 } };
   });
   content.push({ type: 'text', text: userPrompt });
-  return claudeMessage(systemPrompt, content, maxTokens);
+  return claudeMessage(systemPrompt, content, maxTokens, opts);
 }
 
 /**
  * Claude APIの本体。content は文字列でもブロック配列でもよい。
+ *
+ * @param {Object} opts {purpose: 'generate'|'score'|undefined, effort: 'low'..'max'}
+ *   purpose で用途別のモデルと effort を選ぶ。effort を直接渡すと用途の既定より優先。
+ *
+ * 送るのは model / max_tokens / system / messages と、あれば output_config.effort と
+ * fallbacks だけ。thinking や temperature は送らない（Fable 5.1 系は
+ * thinking の明示指定も temperature も 400 を返す）。
  */
-function claudeMessage(systemPrompt, content, maxTokens) {
+function claudeMessage(systemPrompt, content, maxTokens, opts) {
+  var o = opts || {};
   var apiKey = requireProp('ANTHROPIC_API_KEY');
-  var model = getProp('CLAUDE_MODEL', 'claude-sonnet-5');
+  var model = claudeModelFor(o.purpose);
+  var effort = o.effort || claudeEffortFor(o.purpose);
+  var useFallbacks = claudeUsesFallbacks(model);
+
+  var payload = {
+    model: model,
+    max_tokens: maxTokens || 2000,
+    system: systemPrompt,
+    messages: [{ role: 'user', content: content }],
+  };
+  if (effort) payload.output_config = { effort: effort };
+  if (useFallbacks) payload.fallbacks = 'default';
+
+  var headers = {
+    'x-api-key': apiKey,
+    'anthropic-version': '2023-06-01',
+  };
+  // fallbacks: "default" はこのベータヘッダとセットでないと 400 になる
+  if (useFallbacks) headers['anthropic-beta'] = 'server-side-fallback-2026-07-01';
+
   var res = UrlFetchApp.fetch('https://api.anthropic.com/v1/messages', {
     method: 'post',
     contentType: 'application/json',
-    headers: {
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-    },
-    payload: JSON.stringify({
-      model: model,
-      max_tokens: maxTokens || 2000,
-      system: systemPrompt,
-      messages: [{ role: 'user', content: content }],
-    }),
+    headers: headers,
+    payload: JSON.stringify(payload),
     muteHttpExceptions: true,
   });
   var code = res.getResponseCode();
   var body = res.getContentText();
   if (code >= 300) {
-    logEvent('claude_error', code + ': ' + body.slice(0, 500));
+    logEvent('claude_error', model + ' ' + code + ': ' + body.slice(0, 500));
     // 残高切れ・APIキー不正はリトライしても直らない。呼び出し側が
     // すぐ諦められるよう、目印を付けて区別できるようにする
     if (isFatalClaudeError(body)) {
@@ -88,6 +166,24 @@ function claudeMessage(systemPrompt, content, maxTokens) {
   }
   var json = JSON.parse(body);
   var blocks = json.content || [];
+
+  // 拒否は HTTP 200 で返る。content が空のまま text を探しても「空応答」に
+  // しか見えず、枠を広げて投げ直す無駄なループに入る。先に見分ける。
+  if (json.stop_reason === 'refusal') {
+    var sd = json.stop_details || {};
+    var why = 'category=' + (sd.category === undefined ? '不明' : String(sd.category)) +
+      (sd.explanation ? ' / ' + String(sd.explanation).slice(0, 200) : '') +
+      (json.model && json.model !== model ? ' / 引き継ぎ先 ' + json.model + ' も拒否' : '');
+    logEvent('claude_refusal', model + ' ' + why);
+    throw new Error(CLAUDE_REFUSED + ' ' + why);
+  }
+  // 拒否されて別モデルが答えた場合は、どこで引き継がれたかを残す
+  blocks.forEach(function (b) {
+    if (b.type === 'fallback') {
+      logEvent('claude_fallback', ((b.from || {}).model || model) + ' が拒否 → ' +
+        ((b.to || {}).model || json.model) + ' が応答');
+    }
+  });
   var text = blocks
     .filter(function (b) { return b.type === 'text'; })
     .map(function (b) { return b.text; })
@@ -121,15 +217,15 @@ var TOKEN_CEILING = 16000;
  * JSONのパース失敗はほとんどが途中で切れたことによるものなので、
  * 空応答・打ち切り・パース失敗のいずれでも枠を広げて再挑戦する。
  */
-function askClaudeJson(systemPrompt, userPrompt, maxTokens) {
+function askClaudeJson(systemPrompt, userPrompt, maxTokens, opts) {
   var budget = maxTokens || 2000;
   var lastErr = null;
   for (var attempt = 0; attempt < 2; attempt++) {
     var text = null;
     try {
-      text = askClaude(systemPrompt, userPrompt + '\n\n出力はJSONのみ。前置きや説明は書かない。', budget);
+      text = askClaude(systemPrompt, userPrompt + '\n\n出力はJSONのみ。前置きや説明は書かない。', budget, opts);
     } catch (e) {
-      if (isFatalError(e)) throw e; // 残高切れ等は投げ直しても無駄
+      if (isFatalError(e) || isRefusalError(e)) throw e; // 残高切れ・拒否は投げ直しても無駄
       lastErr = e;
     }
     if (text !== null) {
@@ -152,7 +248,7 @@ function askClaudeJson(systemPrompt, userPrompt, maxTokens) {
  * max_tokensで応答が切れた場合、完成している要素だけを救出して返す。
  * 救出もできなければ askClaudeJson と同じくエラーを投げる。
  */
-function askClaudeJsonSalvageable(systemPrompt, userPrompt, maxTokens) {
+function askClaudeJsonSalvageable(systemPrompt, userPrompt, maxTokens, opts) {
   var lastErr = null;
   var budget = maxTokens || 2000;
   for (var attempt = 0; attempt < 2; attempt++) {
@@ -162,9 +258,9 @@ function askClaudeJsonSalvageable(systemPrompt, userPrompt, maxTokens) {
       logEvent('claude_retry', '出力枠を' + budget + 'に広げて再試行します');
     }
     try {
-      text = askClaude(systemPrompt, userPrompt + '\n\n出力はJSONのみ。前置きや説明は書かない。', budget);
+      text = askClaude(systemPrompt, userPrompt + '\n\n出力はJSONのみ。前置きや説明は書かない。', budget, opts);
     } catch (e) {
-      if (isFatalError(e)) throw e; // 残高切れ等は投げ直しても無駄
+      if (isFatalError(e) || isRefusalError(e)) throw e; // 残高切れ・拒否は投げ直しても無駄
       lastErr = e; // 空応答・一時的なAPIエラー。枠を広げてもう一度だけ投げ直す
       continue;
     }

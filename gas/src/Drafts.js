@@ -34,7 +34,7 @@ function generateDraftsFromInterview(sessionId) {
 
   // 6案しか出さないので3000で足りるが、回答が長いと前置きを書きたがることがある。
   // 途中で切れても書けた案だけは救出して先へ進める。
-  var drafts = askClaudeJsonSalvageable(system, user, 4000);
+  var drafts = askClaudeJsonSalvageable(system, user, 4000, { purpose: 'generate' });
   if (!Array.isArray(drafts)) throw new Error('下書き生成の出力が不正です');
 
   // 回答ごとの添付画像。下書きは元になった回答（qi）の画像を引き継ぐ

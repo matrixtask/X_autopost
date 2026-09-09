@@ -344,7 +344,11 @@ GASエディタで **`regenerateFailedInterviews`** を実行すると、
 | `SLOT_TIMES` | `08:00,12:30,19:30` | 1日の予約枠 |
 | `MAX_POSTS_PER_DAY` | `3` | 1日の最大投稿数 |
 | `INTERVIEW_QUESTIONS` | `4` | 毎朝の質問数 |
-| `CLAUDE_MODEL` | `claude-sonnet-5` | 生成・採点に使うモデル |
+| `CLAUDE_MODEL` | `claude-sonnet-5` | 質問生成・分析など、下の2つに当てはまらない呼び出しのモデル |
+| `CLAUDE_MODEL_GENERATE` | （`CLAUDE_MODEL`） | 下書き生成・リライトのモデル。文体の質が直接ポストに出るので、ここだけ `claude-fable-5-1` などの上位モデルにできる |
+| `CLAUDE_MODEL_SCORE` | （`CLAUDE_MODEL`） | 採点のモデル。途中で変えると過去のスコアと比較できなくなるので、変えるなら意図して変える |
+| `CLAUDE_EFFORT_GENERATE` | `medium` | 生成の思考の深さ（`low`/`medium`/`high`/`xhigh`/`max`）。Fable 5.1 は思考が常時オンなので、定型作業で深く考えすぎて出力枠を使い切るのを防ぐ |
+| `CLAUDE_FALLBACKS` | `auto` | 安全分類器に拒否されたとき別モデルへ自動で引き継ぐか。`auto` は Fable / Opus 5 系のときだけ付ける。`off` で止められる |
 | `BACKFILL_MAX_POSTS` | `1000` | `backfillManualPosts` が遡る件数 |
 | `BACKFILL_BATCH` | `15` | `backfillAxisScores` が1回のAPI呼び出しで採点する件数（失敗すると自動で半減する） |
 | `METRICS_SETTLE_DAYS` | `30` | 投稿から何日後の数字を「確定」とみなすか。これより早い時点の記録しか無い投稿は毎週取り直す |
