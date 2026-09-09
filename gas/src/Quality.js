@@ -155,7 +155,7 @@ function scoreAxesForRows(rows, opts) {
 
     var results = null;
     try {
-      results = askClaudeJsonSalvageable(system, user, maxTokens);
+      results = askClaudeJsonSalvageable(system, user, maxTokens, { purpose: 'score' });
     } catch (e) {
       logEvent('score_axes_error', String(e).slice(0, 300));
       if (isFatalError(e)) throw e;
@@ -464,7 +464,7 @@ function debugBackfillSample() {
 
   var out = ['system長=' + system.length + '文字 / user長=' + user.length + '文字'];
   try {
-    var text = askClaude(system, user, 8000);
+    var text = askClaude(system, user, 8000, { purpose: 'score' });
     out.push('--- 生の応答 ---', text);
     var parsed = salvageJson(text);
     out.push('--- パース結果 ---', parsed ? JSON.stringify(parsed) : 'パース不能');
@@ -697,7 +697,7 @@ function refineFailedDrafts(force) {
     'JSON配列で出力: [{"id": "...", "text": "...", "skip": false}]',
   ].join('\n');
 
-  var results = askClaudeJsonSalvageable(system, user, 6000);
+  var results = askClaudeJsonSalvageable(system, user, 6000, { purpose: 'generate' });
   if (!Array.isArray(results)) throw new Error('リライト結果の出力が不正です');
   var byId = {};
   results.forEach(function (r) { byId[String(r.id)] = r; });
