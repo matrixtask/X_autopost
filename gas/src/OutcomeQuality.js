@@ -46,11 +46,47 @@ function outcomeScoringPrompt() {
     '5軸は投稿本文だけを見て0〜4の整数で個別に評価。1と3は隣接する基準の中間。軸間の点差を無理につけない。',
     OUTCOME_AXES.map(function (a) { return a.key + '（' + a.label + '）: ' + a.anchor; }).join('\n'),
     '各軸のevidenceは本文中の連続した原文抜粋80字以内。非ゼロ点には必須。0点で根拠部分がなければ空文字。',
-    '別に編集条件を判定。sourceは本人の回答だけ。本文の具体的事実・感情・主張が回答を越えていればfidelity=confirm。資料なしもconfirm。質問の前提は資料に含めない。',
+    '別に編集条件を判定。sourceは本人の回答だけ。意味を保った要約・言い換え・省略はfidelity=supported。本人の感想や目標に外部証明を要求しない。「目指す」を達成済みと読まない。本文に回答にない事実・感情・主張を足した場合だけconfirm。資料なしもconfirm。質問の前提は資料に含めない。',
     '本人が非公開・投稿しない・訂正を求めた情報を含む、または判断不能ならprivacy=hold。それ以外はclear。',
     '主役が本人かテトラの経験・判断ならfocus=aligned。他者の評論や社名だけ後付けならoff_topic。',
-    'これは資料との整合チェックで、事実の外部検証ではない。review_noteに確認・修正箇所を100字以内で書く。問題がなければ空文字。',
+    'これは資料との整合チェックで、事実の外部検証ではない。要確認の各条件にはissuesを必ず返す。kindはfidelity/privacy/focus、quoteは投稿本文の連続した原文抜粋80字以内、reasonは回答と照合して何が問題か、actionは具体的な修正または確認方法。理由を捏造して保留にしない。問題がなければissues=[]、review_note=""。',
   ].join('\n');
+}
+
+/** 保留フラグだけの判定は受理しない。表示文は検証した個別指摘から組み立てる。 */
+function validateOutcomeIssues(review, value, input) {
+  var required = [];
+  if (review.fidelity === 'confirm') required.push('fidelity');
+  if (review.privacy === 'hold') required.push('privacy');
+  if (review.focus === 'off_topic') required.push('focus');
+  var issues = value && value.issues;
+  if (!required.length && (!issues || (Array.isArray(issues) && !issues.length))) {
+    review.issues = [];
+    review.review_note = '';
+    return true;
+  }
+  if (!Array.isArray(issues) || !issues.length || issues.length > 6) return false;
+  var clean = [];
+  for (var i = 0; i < issues.length; i++) {
+    var issue = issues[i];
+    if (!issue || required.indexOf(issue.kind) < 0 ||
+        typeof issue.quote !== 'string' || !issue.quote.trim() || issue.quote.length > 80 || input.text.indexOf(issue.quote) < 0 ||
+        typeof issue.reason !== 'string' || issue.reason.trim().length < 8 || issue.reason.length > 200 ||
+        typeof issue.action !== 'string' || issue.action.trim().length < 5 || issue.action.length > 150) return false;
+    clean.push({ kind: issue.kind, quote: issue.quote, reason: issue.reason.trim(), action: issue.action.trim() });
+  }
+  if (!required.every(function (kind) { return clean.some(function (issue) { return issue.kind === kind; }); })) return false;
+  review.issues = clean;
+  review.review_note = clean.map(function (issue) {
+    return '「' + issue.quote + '」: ' + issue.reason + ' 対応: ' + issue.action;
+  }).join('\n');
+  return true;
+}
+
+function outcomeReviewSchema() {
+  return '\nJSONのみ。idをキーにしたオブジェクト。axesはrelevance,clarity,decision,emotion,followの順で[点数,根拠引用]を5組。' +
+    '\n各値にaxes,fidelity(supported/confirm),privacy(clear/hold),focus(aligned/off_topic),review_note,issuesを含める。' +
+    '\nissuesの各要素: {"kind":"fidelityまたはprivacyまたはfocus","quote":"本文の該当箇所","reason":"具体的な照合結果","action":"具体的な対応"}。問題なしはissues=[]。';
 }
 
 /** 欠損やnullを0点に変換しない。根拠引用の捏造も保存しない。 */
@@ -100,9 +136,9 @@ function outcomeSourceForRow(row, interviews) {
 }
 
 /** 点数は参考。編集条件を満たす案は人の承認待ちへ。自動承認・点数リライトはしない。 */
-function runOutcomeQualityGate() {
+function runOutcomeQualityGate(repairRows) {
   ensureHeaders(SHEET.STOCK);
-  var drafts = readTable(SHEET.STOCK).filter(function (r) { return String(r.status) === STATUS.DRAFT; });
+  var drafts = Array.isArray(repairRows) ? repairRows : readTable(SHEET.STOCK).filter(function (r) { return String(r.status) === STATUS.DRAFT; });
   if (!drafts.length) return { scored: 0, passed: 0 };
   var interviews = readTable(SHEET.INTERVIEWS);
   var total = { scored: 0, passed: 0 };
@@ -114,23 +150,52 @@ function runOutcomeQualityGate() {
       // 切り捨てた資料で「整合」と判断させない。長い資料は人の確認へ。
       return { id: String(d.id), text: String(d.text || ''), source: source.length <= 12000 ? source : '' };
     });
-    var result = askClaudeJsonSalvageable(outcomeScoringPrompt(), JSON.stringify(input) +
-      '\nJSONのみ。idをキーにしたオブジェクト。axesはrelevance,clarity,decision,emotion,followの順で[点数,根拠引用]を5組。' +
-      '\n値: {"axes":[[0,""],[0,""],[0,""],[0,""],[0,""]],"fidelity":"supported|confirm","privacy":"clear|hold","focus":"aligned|off_topic","review_note":""}',
+    logEvent('outcome_sources', JSON.stringify(input.map(function (r, j) {
+      return { id: r.id, source_idx: batch[j].source_idx, source_chars: r.source.length };
+    })));
+    var result = askClaudeJsonSalvageable(outcomeScoringPrompt(), JSON.stringify(input) + outcomeReviewSchema(),
       6000, { purpose: 'score' });
+    var retry = input.filter(function (r) {
+      var value = result && result[r.id], review = validateOutcomeReview(value, r.text);
+      return review && !validateOutcomeIssues(review, value, r);
+    });
+    // JSON再試行とは別に、説明の欠損を一度だけ修復。本人には追加回答を求めない。
+    if (retry.length && Date.now() - started < 180000) {
+      logEvent('outcome_review_retry', retry.map(function (r) { return r.id; }).join(','));
+      var repaired = askClaudeJsonSalvageable(outcomeScoringPrompt(),
+        JSON.stringify(retry) + '\n前回は要確認フラグに具体的な指摘がなく不受理。回答と本文を再照合し、問題がなければsupported/clear/aligned、問題があれば該当箇所と理由と対応を返す。' + outcomeReviewSchema(),
+        6000, { purpose: 'score' });
+      retry.forEach(function (r) { result[r.id] = repaired && repaired[r.id]; });
+    }
     batch.forEach(function (d, j) {
+      // API待機中の本人編集・承認を、古い本文の評価で上書きしない。
+      var current = readTable(SHEET.STOCK).filter(function (r) { return String(r.id) === String(d.id); })[0];
+      if (!current || current.text !== d.text || current.status !== d.status || current.editorial_review !== d.editorial_review ||
+          current.source_idx !== d.source_idx || current.session_id !== d.session_id) {
+        logEvent('outcome_changed', String(d.id));
+        return;
+      }
       var text = String(d.text || '');
       var review = validateOutcomeReview(result && result[String(d.id)], text);
-      if (!review) {
+      if (!review || !validateOutcomeIssues(review, result[String(d.id)], input[j])) {
         // 再実行可能なdraftのまま。以前の本文の点数を表示しない。
         updateStockById(d.id, { score: '', score_reason: '評価形式が不正。再評価待ち', score_version: OUTCOME_SCORE_VERSION,
-          axes: '', outcome_axes: '', outcome_text: '', outcome_scored_at: '', outcome_metrics: '', editorial_review: '' });
+          axes: '', outcome_axes: '', outcome_text: '', outcome_scored_at: '', outcome_metrics: '', editorial_review: '', status: STATUS.DRAFT });
         logEvent('outcome_invalid', String(d.id));
         return;
       }
-      if (!input[j].source) review.fidelity = 'confirm';
+      // システム側で保留にする場合も、判定を上書きするだけで理由を空にしない。
+      if (!input[j].source) {
+        review.fidelity = 'confirm';
+        review.review_note += (review.review_note ? '\n' : '') + '保存回答を一意に取得できないか12000字を超えています（回答番号: ' + String(d.source_idx || '未保存') + '）。回答の紐づけを確認してください。追加回答は不要です。';
+      }
       review.scorer = 'claude/' + claudeModelFor('score') + '/' + claudeEffortFor('score');
-      if (isRetiredTopic(text + ' ' + d.theme)) review.focus = 'off_topic';
+      review.review_version = 'grounded-v2';
+      if (isRetiredTopic(text + ' ' + d.theme)) {
+        review.focus = 'off_topic';
+        review.review_note += (review.review_note ? '\n' : '') + '本文またはテーマに、取り上げない指定の堀江さんの話題が含まれています。本人・テトラの経験を中心に組み直してください。';
+      }
+      if (!fitsInTweet(text)) review.review_note += (review.review_note ? '\n' : '') + '本文がXの文字数上限を超えています。本文を短くしてください。';
       var pass = review.fidelity === 'supported' && review.privacy === 'clear' && review.focus === 'aligned' && !!text.trim() && fitsInTweet(text);
       var conditions = [];
       if (review.fidelity !== 'supported') conditions.push('本人の回答との照合が必要');
@@ -152,6 +217,24 @@ function runOutcomeQualityGate() {
   }
   logEvent('outcome_gate', '評価' + total.scored + '件 / 承認待ち' + total.passed + '件（点数による合否なし）');
   return total;
+}
+
+/** GAS: OutcomeQuality.gs。理由なしの既存保留だけ最大12件再評価。投稿・通知はしない。 */
+function repairOutcomeReviews() {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(1000)) throw new Error('別の処理が実行中です。完了後に再実行してください。');
+  try {
+    var rows = readTable(SHEET.STOCK).filter(function (r) {
+      if (r.status !== STATUS.STOCK || r.score_version !== OUTCOME_SCORE_VERSION || r.posted_at || r.tweet_id) return false;
+      var review;
+      try { review = JSON.parse(r.editorial_review); } catch (e) { return false; }
+      return review && !String(review.review_note || '').trim() &&
+        (review.fidelity === 'confirm' || review.privacy === 'hold' || review.focus === 'off_topic');
+    }).slice(0, 12);
+    var result = runOutcomeQualityGate(rows);
+    console.log(JSON.stringify(result));
+    return result;
+  } finally { lock.releaseLock(); }
 }
 
 /** 週次の既存取得に便乗。追加API呼び出しなし。48〜168hの最初の観測を固定。 */

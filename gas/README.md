@@ -6,6 +6,8 @@
 
 診断はGASエディタの **OutcomeQuality.gs** で `reportOutcomeValidation` を実行します（読み取りと実行ログ出力のみ）。実装は [`gas/src/OutcomeQuality.js`](src/OutcomeQuality.js)。テーマ定義は **Editorial.gs**（[`gas/src/Editorial.js`](src/Editorial.js)）。既存利用者は `git pull` 後の `./deploy.sh` で管理UIとSlackの両デプロイを更新してください。
 
+**2026-09-11 理由なしの保留の修正:** 新しい評価では、要確認の各条件に「本文の該当箇所・理由・対応」が必須です。欠損は一度再試行し、直らなければ未採点に戻します。既存の「評価側の説明不足」と表示される保留は、デプロイ後にGASエディタで **OutcomeQuality.gs** を開き、`repairOutcomeReviews` を選んで実行してください（[`gas/src/OutcomeQuality.js`](src/OutcomeQuality.js)）。理由が空の新尺度の保留だけ、1回最大12件を再評価します。本文を変更せず、通過した案は承認待ちへ戻します。投稿済み・承認済み・予約済みは対象外。未採点に戻った案は通常の評価処理で再試行します。実行ログに `scored` と `passed` が出ます。API料金が発生します。投稿とSlack通知は行いません。
+
 ## 0. 必要なもの
 
 | サービス | 用途 | 必須 |
