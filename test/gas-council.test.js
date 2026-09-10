@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
 function debate() {
-  return { opinions: ['rei', 'sebastian', 'scipio'].map((persona, i, people) => ({
+  return { opinions: ['rei', 'sebastian', 'hannibal'].map((persona, i, people) => ({
     persona, proposal: `提案${i}`, challenge_to: people[(i + 1) % 3], challenge: `異論${i}`, final_position: `確定${i}`,
   })), agreement: '本人の判断を残す', disagreement: '採用に毎回結びつける必要はない' };
 }
@@ -45,6 +45,8 @@ test('council: questions wait for distinct final positions and Mia reflection, t
   assert.equal(ctx.generateInterviewQuestions([{ theme: '試作', category: 'evergreen' }], [], 4).length, 1);
   assert.deepEqual(calls.map(c => c.kind), ['json', 'json', 'json']);
   assert.ok(calls.every(c => c.purpose === 'interview'));
+  assert.match(calls[0].system, /hannibal（ハンニバル）.*敗北.*内省.*方針転換条件/);
+  assert.equal(JSON.parse(logs[0][1]).brief.version, 'council-v2');
   assert.match(calls[1].input, /final_debate.*確定0.*確定1.*確定2/);
   assert.match(calls[2].input, /後付けの教訓は使わない/);
   assert.doesNotMatch(calls[2].system, /価値がゼロ/);
