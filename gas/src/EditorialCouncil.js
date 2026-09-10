@@ -1,5 +1,5 @@
 /** EditorialCouncil.gs: 架空の3人格の編集会議 → ミアの採否判断 → 生成。 */
-var EDITORIAL_COUNCIL_VERSION = 'council-v1';
+var EDITORIAL_COUNCIL_VERSION = 'council-v2';
 // GASの1実行内で会話・投稿・採点に共有する。APIを中断できないため開始前に余裕を残す。
 var EDITORIAL_EXECUTION_DEADLINE = 0;
 
@@ -20,7 +20,7 @@ function councilText(value, max) {
 }
 
 function validateEditorialDebate(value) {
-  var people = ['rei', 'sebastian', 'scipio'];
+  var people = ['rei', 'sebastian', 'hannibal'];
   if (!value || !Array.isArray(value.opinions) || value.opinions.length !== 3 ||
       !councilText(value.agreement, 300) || !councilText(value.disagreement, 300)) return false;
   var seen = {};
@@ -72,10 +72,10 @@ function prepareEditorialCouncil(stage, material, purpose, sources, contextId) {
     '3人格がまず別々の提案を出し、互いの案への異論を述べ、その異論を受けて各人の最終意見を確定する。',
     'rei（レイ）: 根拠・判断・捨てた案・留保を守る戦略参謀。',
     'sebastian（セバスチャン）: 候補者の信頼、仕事の現実・任せ方・難しさを重視する執事。',
-    'scipio（スキピオ）: 外部投資家・メンター。読者の予想との差と成長・資源配分を問い直す。',
+    'hannibal（ハンニバル）: 一度の敗北を徹底して内省し転生した架空の軍師。外部投資家・メンターの視点も持つ。局地的な勝利と最終目的を区別し、資金・人員・時間・組織・相手の適応を考える。提案には成立条件、代償、対立仮説、失敗経路、方針転換条件を添え、読者の予想との差と成長を問い直す。冷静で率直、英雄礼賛や勝利の保証はしない。',
     '同じ意見の言い換えを3つ作らない。合意と残る異論を区別する。まだ質問・応答・投稿の完成稿は生成しない。',
   ].join('\n'), JSON.stringify({ stage: stage, material: material }) +
-    '\nJSON: {"opinions":[{"persona":"rei","proposal":"提案","challenge_to":"sebastian","challenge":"異論","final_position":"確定意見"}, 同形式でsebastianとscipio],"agreement":"合意","disagreement":"残る異論。なければ解消した対立と条件"}',
+    '\nJSON: {"opinions":[{"persona":"rei","proposal":"提案","challenge_to":"sebastian","challenge":"異論","final_position":"確定意見"}, 同形式でsebastianとhannibal],"agreement":"合意","disagreement":"残る異論。なければ解消した対立と条件"}',
     3500, { purpose: purpose });
   if (!validateEditorialDebate(debate)) throw new Error('編集会議の3人格の確定意見が不正です。生成を止めました');
   if (Date.now() - started > 120000) throw new Error('編集会議が時間上限に達しました。生成は未実行です');
