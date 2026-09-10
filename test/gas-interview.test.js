@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
-const sources = ['Pure', 'Interview'].map((name) =>
+const sources = ['Pure', 'Editorial', 'OutcomeQuality', 'Interview'].map((name) =>
   readFileSync(new URL(`../gas/src/${name}.js`, import.meta.url), 'utf8'));
 const threadTs = '1789000000.123456';
 const sessionId = '2026-09-10_iv_test';

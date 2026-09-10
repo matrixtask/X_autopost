@@ -192,6 +192,7 @@ function api_listPosts(token) {
       category: String(r.category),
       text: String(r.text),
       score: r.score === '' ? null : Number(r.score),
+      score_version: String(r.score_version || ''),
       score_reason: String(r.score_reason || ''),
       status: String(r.status),
       scheduled_at: String(r.scheduled_at || ''),
@@ -237,7 +238,8 @@ function api_updateText(token, id, text) {
       var updated = readTable(SHEET.STOCK).filter(function (r) { return String(r.id) === String(id); })[0];
       if (updated && updated.score !== '') {
         var passed = [STATUS.READY, STATUS.APPROVED].indexOf(String(updated.status)) >= 0;
-        message = '再採点: ' + updated.score + '点（' + (passed ? '合格' : '保留') + '）' +
+        message = (updated.score_version === OUTCOME_SCORE_VERSION ? '新5軸・参考値: ' : '再採点: ') +
+          updated.score + '点（' + (passed ? '承認待ち' : '保留') + '）' +
           (updated.score_reason ? ' / ' + updated.score_reason : '');
       }
     } catch (e) {
@@ -359,7 +361,7 @@ function api_analytics(token) {
   }
 
   // 採点スコアと実測インプの相関（採点のある自動投稿のみ）
-  var scored = rows.filter(function (r) { return r.score !== ''; });
+  var scored = rows.filter(function (r) { return r.score !== '' && r.score_version !== OUTCOME_SCORE_VERSION; });
   var scatter = scored.map(function (r) {
     return { score: Number(r.score), imp: Number(r.impressions || 0), text: String(r.text).slice(0, 40) };
   });

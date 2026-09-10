@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
-const sources = ['Interview', 'Drafts', 'Quality'].map((name) => ({
+const sources = ['Editorial', 'OutcomeQuality', 'Interview', 'Drafts', 'Quality'].map((name) => ({
   name,
   code: readFileSync(new URL(`../gas/src/${name}.js`, import.meta.url), 'utf8'),
 }));
@@ -40,7 +40,7 @@ function harness(interviews, response = []) {
     syncStockRowToNotion: () => {},
     logEvent: (type, message) => state.logs.push({ type, message }),
     ensureHeaders: () => {},
-    getProp: (_key, fallback) => fallback,
+    getProp: (key, fallback) => key === 'QUALITY_MODE' ? 'legacy' : fallback,
     parseAxes: () => null,
     updateStockById: (draftId, updates) => state.updates.push({ draftId, updates }),
   };
@@ -87,6 +87,14 @@ test('drafts: 材料不足の空配列は正常終了しストックを増やさ
   const { context, state } = harness([answer({ answer: 'わからない' })], []);
   assert.equal(context.generateDraftsFromInterview('session-1').length, 0);
   assert.equal(state.stock.length, 0);
+});
+
+test('drafts: retired-topic-only output is no-material and preserves the original answer', () => {
+  const original = answer({ answer: '堀江さんが来た', theme: '堀江さんの話' });
+  const { context, state } = harness([original], [{ qi: 1, text: '堀江さんが来た' }]);
+  assert.equal(context.generateDraftsFromInterview('session-1').length, 0);
+  assert.equal(state.stock.length, 0);
+  assert.equal(state.interviews[0].answer, '堀江さんが来た');
 });
 
 test('drafts: 不正案しかない出力は材料不足と区別してエラーにする', () => {

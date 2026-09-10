@@ -263,6 +263,7 @@ function measureScoringReliability(sampleSize) {
 }
 
 function runQualityGate() {
+  if (useOutcomeQuality()) return runOutcomeQualityGate();
   var drafts = readTable(SHEET.STOCK).filter(function (r) {
     return String(r.status) === STATUS.DRAFT;
   });
@@ -291,6 +292,7 @@ function runQualityGate() {
     updateStockById(d.id, {
       score: score,
       score_reason: weakAxisSummary(axes),
+      score_version: '', outcome_axes: '', outcome_text: '', outcome_scored_at: '', outcome_metrics: '', editorial_review: '',
       axes: JSON.stringify(axes),
       status: newStatus,
     });
@@ -360,7 +362,7 @@ function backfillAxisScoresLocked() {
   var batchSize = Number(getProp('BACKFILL_BATCH', '15'));
 
   var pendingAll = readTable(SHEET.STOCK).filter(function (r) {
-    return String(r.status) === STATUS.POSTED && String(r.text).trim() && !parseAxes(r.axes);
+    return r.score_version !== OUTCOME_SCORE_VERSION && String(r.status) === STATUS.POSTED && String(r.text).trim() && !parseAxes(r.axes);
   });
   if (!pendingAll.length) {
     clearBackfillTrigger();
@@ -542,6 +544,7 @@ function axisScoringSystemPrompt(samples) {
  */
 function runQualityGateWithRefinement() {
   var total = runQualityGate();
+  if (useOutcomeQuality()) return total;
   var rounds = Number(getProp('REFINE_ROUNDS', '2'));
   for (var r = 0; r < rounds; r++) {
     var refined = refineFailedDrafts();
@@ -567,6 +570,8 @@ function runQualityGateWithRefinement() {
  * @returns {Array} [{id, text, missing, example}]
  */
 function missingInfoHints(rows) {
+  // 新尺度では「点数不足」を「本人の説明不足」に言い換えない。具体的な編集指摘を表示する。
+  if (useOutcomeQuality()) return [];
   var targets = (rows || []).filter(function (r) { return String(r.text || '').trim(); }).slice(0, 6);
   if (!targets.length) return [];
 
@@ -629,6 +634,7 @@ function missingInfoHints(rows) {
  * @param {boolean} force 上限(REFINE_ROUNDS)到達分も対象にする（手動リライト用）
  */
 function refineFailedDrafts(force) {
+  if (useOutcomeQuality()) return 0;
   ensureHeaders(SHEET.STOCK);
   var maxRefines = Number(getProp('REFINE_ROUNDS', '2'));
   var targets = readTable(SHEET.STOCK).filter(function (r) {
@@ -753,7 +759,7 @@ function nightlyGateAndSchedule() {
   });
   lines.push('');
   lines.push('ストック状況: 承認待ち ' + (counts[STATUS.READY] || 0) + ' / 予約済み ' + (counts[STATUS.SCHEDULED] || 0) + ' / 保留ストック ' + (counts[STATUS.STOCK] || 0));
-  if ((counts[STATUS.READY] || 0) > 0 && !isAutoApprove()) {
+  if ((counts[STATUS.READY] || 0) > 0 && (!isAutoApprove() || useOutcomeQuality())) {
     var url = getProp('WEBAPP_URL');
     lines.push(url ? '承認はこちら: ' + url + '?token=' + getProp('ADMIN_TOKEN') : '承認はWebアプリから（WEBAPP_URL未設定）');
   }

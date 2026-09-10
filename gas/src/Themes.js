@@ -28,20 +28,18 @@ function seedThemesIfEmpty() {
 }
 
 /**
- * 今日のテーマを選ぶ。時事1 + それ以外1 の計2テーマ。
- *
- * 時事枠は必ず1つ入れる。トレンドは鮮度が命で、翌週には語る意味が
- * 無くなるため、重み抽選に任せて出ない日が続くのを避ける。
- * 選定対象はスタメン（roster が入っている行）に限る。スタメンが
- * まだ無い場合は全テーマから選ぶ（初回や rotateThemeRoster 未実行時）。
+ * 本人・テトラ中心のテーマから、読者との接点が異なる2つを選ぶ。
+ * 1つ目は本人の経験、2つ目は別の入口。時事は必須にしない。
+ * 旧テーマを復活させず、focus_version付きの候補だけを使う。
  * 直近3日で使ったテーマは重みを下げる。
  */
 function pickThemesForToday() {
-  var all = readTable(SHEET.THEMES);
+  ensureFocusedThemes();
+  var all = readTable(SHEET.THEMES).filter(isFocusedTheme);
   if (!all.length) throw new Error('Themesシートが空です。setupSpreadsheet() を実行してください');
 
   var starters = all.filter(function (t) { return String(t.roster || '').trim(); });
-  var pool0 = starters.length ? starters : all;
+  var pool0 = starters.some(function (t) { return Number(t.weight) > 0 && t.category !== 'news'; }) ? starters : all;
 
   var now = nowJst();
   function effectiveWeight(t) {
@@ -73,27 +71,26 @@ function pickThemesForToday() {
   }
 
   var picked = [];
-  // 1. 時事枠を確保する。今週の trend 枠 → 無ければ news カテゴリ。
-  //    直近で使ったものを除いて選び、全部使い切っていたら制限を外す
-  var trend =
-    pickFrom(function (t) { return String(t.roster) === 'trend' && !usedRecently(t); }) ||
-    pickFrom(function (t) { return String(t.category) === 'news' && !usedRecently(t); }) ||
-    pickFrom(function (t) { return String(t.roster) === 'trend'; }) ||
-    pickFrom(function (t) { return String(t.category) === 'news'; });
-  if (trend) picked.push(trend);
+  // 1. 本人の経験を主枠にする。
+  var first = pickFrom(function (t) { return t.category !== 'news' && !usedRecently(t); }) ||
+    pickFrom(function (t) { return t.category !== 'news'; });
+  if (first) picked.push(first);
 
-  // 2. もう1つは時事以外から
+  // 2. 読者との接点を変える。時事は直近の再利用を避ける。
   var exclude = picked.map(function (t) { return t.theme; });
   var second = pickFrom(function (t) {
-    return String(t.roster) !== 'trend' && String(t.category) !== 'news';
-  }, exclude) || pickFrom(function () { return true; }, exclude);
+    return (!first || t.reader_bridge !== first.reader_bridge) && !usedRecently(t);
+  }, exclude) || pickFrom(function (t) {
+    return t.category !== 'news' && (!first || t.reader_bridge !== first.reader_bridge);
+  }, exclude) || pickFrom(function (t) { return !usedRecently(t); }, exclude) ||
+    pickFrom(function (t) { return t.category !== 'news'; }, exclude);
   if (second) picked.push(second);
 
   picked.forEach(function (t) {
     updateRowsWhere(SHEET.THEMES, 'theme', t.theme, { last_used: fmtDate(now) });
   });
   return picked.map(function (t) {
-    return { theme: String(t.theme), category: String(t.category), notes: String(t.notes || '') };
+    return { theme: String(t.theme), category: String(t.category), notes: String(t.notes || ''), reader_bridge: String(t.reader_bridge || '') };
   });
 }
 
@@ -288,16 +285,10 @@ function clearInferTrigger() {
  * 実測がある投稿だけを使い、無いテーマは据え置く（重みを動かさない）。
  */
 function themePerformance() {
-  var rows = readTable(SHEET.STOCK).filter(function (r) {
-    if (String(r.promoted) === 'yes' && r.paid_impressions === '') return false;
-    return String(r.theme).trim();
-  });
-
-  var measured = rows.filter(function (r) {
-    return String(r.status) === STATUS.POSTED && Number(r.impressions || 0) > 0 && r.posted_at;
-  });
-  var pct = percentileWithinWindow(measured.map(function (r) {
-    return { t: new Date(String(r.posted_at).replace(' ', 'T') + ':00+09:00').getTime(), v: Number(r.impressions) };
+  var samples = themeOutcomeSamples();
+  var measured = samples.map(function (x) { return x.row; });
+  var pct = percentileWithinWindow(samples.map(function (x) {
+    return { t: x.t, v: x.rate };
   }), 30);
 
   // 表記ゆれで実測が分断されないよう、正規化したキーで集計する
@@ -346,7 +337,7 @@ function updateThemeWeights() {
 
   rows.forEach(function (t) {
     var name = String(t.theme);
-    if (Number(t.weight) === 0) return; // 統合済み・停止テーマは触らない
+    if (!isFocusedTheme(t) || Number(t.weight) === 0) return; // 方針外・停止テーマは触らない
     // 初回は現在の重みを base_weight として固定する
     var base = Number(t.base_weight);
     if (!isFinite(base) || base <= 0) {
@@ -465,12 +456,13 @@ function reportDuplicateThemes() {
  * 消えることも、根拠なく上位に居座ることもないようにするため。
  */
 function rotateThemeRoster() {
+  ensureFocusedThemes();
   ensureHeaders(SHEET.THEMES);
   var sizes = {
     core: Number(getProp('ROSTER_CORE', '50')),
     adjacent: Number(getProp('ROSTER_ADJACENT', '10')),
     random: Number(getProp('ROSTER_RANDOM', '20')),
-    trend: Number(getProp('ROSTER_TREND', '20')),
+    trend: Number(getProp('ROSTER_TREND', '5')),
   };
   var K = Number(getProp('THEME_SHRINKAGE_K', '10'));
   var today = fmtDate(nowJst());
@@ -479,7 +471,7 @@ function rotateThemeRoster() {
 
   // 時事枠は鮮度が命なので、実績に関係なく毎週ベンチへ落とす
   var candidates = rows.filter(function (t) {
-    return Number(t.weight) !== 0 && String(t.roster) !== 'trend';
+    return isFocusedTheme(t) && Number(t.weight) !== 0 && String(t.roster) !== 'trend';
   });
 
   function score(t) {
@@ -521,7 +513,7 @@ function rotateThemeRoster() {
 
   // B. 無作為。まずベンチに眠っているテーマから引き、足りなければ新規に作る
   var bench = rows.filter(function (t) {
-    return !String(t.roster) && Number(t.weight) !== 0 && !coreNames[normalizeThemeKey(t.theme)];
+    return isFocusedTheme(t) && !String(t.roster) && Number(t.weight) !== 0 && !coreNames[normalizeThemeKey(t.theme)];
   });
   shuffleInPlace(bench);
   var revived = bench.slice(0, sizes.random);
@@ -560,15 +552,12 @@ function rotateThemeRoster() {
 
 /** 実測で上位だった投稿の本文を拾う（隣接テーマ生成の材料） */
 function topPostSamples(limit) {
-  var rows = readTable(SHEET.STOCK).filter(function (r) {
-    return String(r.text).trim() && r.posted_at && Number(r.impressions || 0) > 0 &&
-      !(String(r.promoted) === 'yes' && r.paid_impressions === '');
-  });
-  if (rows.length < 5) return [];
-  var pct = percentileWithinWindow(rows.map(function (r) {
-    return { t: new Date(String(r.posted_at).replace(' ', 'T') + ':00+09:00').getTime(), v: Number(r.impressions) };
+  var samples = themeOutcomeSamples();
+  if (samples.length < 5) return [];
+  var pct = percentileWithinWindow(samples.map(function (x) {
+    return { t: x.t, v: x.rate };
   }), 30);
-  return rows.map(function (r, i) { return { text: String(r.text), p: pct[i] }; })
+  return samples.map(function (x, i) { return { text: String(x.row.text), p: pct[i] }; })
     .sort(function (a, b) { return b.p - a.p; })
     .slice(0, limit || 12)
     .map(function (x) { return x.text.replace(/\n/g, ' ').slice(0, 140); });
@@ -591,7 +580,7 @@ function draftThemes(kind, count, ctx, taken, today) {
   if (count <= 0) return [];
   var prompts = {
     adjacent: [
-      '以下は、この人が実際に投稿して**よく読まれた**ポストです。',
+      '以下は、プロフィールクリック率が同時期に高かった参考例です。因果・再現性は未検証です。',
       (ctx.samples || []).map(function (s) { return '- ' + s; }).join('\n'),
       '',
       (ctx.questions && ctx.questions.length
@@ -612,13 +601,13 @@ function draftThemes(kind, count, ctx, taken, today) {
       '',
       '**面白くする方向**',
       '- 説明ではなく、事件・揉め事・勘違い・思わぬ副作用を聞くテーマにする',
-      '- 立場が出るもの、意見が割れるものを優先する。誰も反論しない話は伸びない',
-      '- 舞台裏（意思決定の内側・断った話・迷った話）は実測でいちばん効いている',
+      '- 本人が選んだことと、その選択が読者の仕事や暮らしにどうつながるかを聞く',
+      '- 対立や失敗があったとは決めつけない。成果との関係は未検証',
     ].join('\n'),
     random: [
       'テーマを' + count + '件、**実績や過去の傾向とは無関係に**作ってください。',
       '- 話し手は空飛ぶクルマ（eVTOL）を開発するスタートアップの経営者',
-      '- 事業の話に寄せすぎない。日常・趣味・歴史・技術・人間関係・失敗・食など幅広く',
+      '- 主役は本人かテトラ。移動、時間、お金、判断、チーム、日常の入口を変えて探索する',
       '- まだ試していない切り口を狙う。当たるかどうかは考えなくてよい',
     ].join('\n'),
     trend: [
@@ -640,11 +629,8 @@ function draftThemes(kind, count, ctx, taken, today) {
         'できるだけ多くの領域からまんべんなく選ぶ',
       '- **AI関連は' + Math.max(1, Math.round(count * 0.2)) + '件まで**。' +
         'AIの話ばかりだと読み飽きられる',
-      '- **空飛ぶクルマ/eVTOL は' + Math.max(1, Math.round(count * 0.15)) + '件まで**。' +
-        '自社領域の話ばかりだと、時事枠が事業紹介の言い換えになってしまう',
-      '- エンタメ・スポーツ・音楽・ゲーム・映画・世の中の流行も**必ず混ぜる**。' +
-        '技術の話しかしない人だと思われると、読者が広がらない。' +
-        'この人の人となりが出るポストは、むしろこちら側から生まれる',
+      '- 本人・テトラとの自然な接点を説明できるニュースだけ。無関係な領域を数合わせで混ぜない',
+      '- 接点を作れないときは件数を減らす。0件でもよい',
       '- 見出しに無い一般論（「AIの未来について」等）は作らない。特定の出来事に紐づける',
       '- 自治体の広報・キャンペーン告知・定例発表・株価の値動きは飛ばす。' +
         '読んだ人が「知らなかった」と思う出来事を選ぶ',
@@ -658,6 +644,7 @@ function draftThemes(kind, count, ctx, taken, today) {
 
   var system = [
     'あなたはXアカウントの運用担当で、毎朝のインタビューのテーマ案を作ります。',
+    editorialFocusPrompt(),
     '話し手は空飛ぶクルマ（eVTOL）を開発するスタートアップの経営者です。',
     '',
     'テーマの条件:',
@@ -667,11 +654,13 @@ function draftThemes(kind, count, ctx, taken, today) {
     '- その場で思い出して話せる粒度にする。調べないと答えられないテーマは不可',
   ].join('\n');
 
-  var user = prompts[kind] + '\n\nJSON配列で出力: [{"theme":"...","category":"evergreen|news|neta","notes":"..."}]';
+  var user = prompts[kind] + '\nテーマ名に本人の経験またはテトラでの判断が見えるようにする。' +
+    '\nreader_bridge は専門外の読者の関心との接点を短く記す。protagonist は本人かテトラのみ。' +
+    '\nJSON配列で出力: [{"theme":"...","category":"evergreen|news|neta","notes":"...","reader_bridge":"...","protagonist":"本人|テトラ"}]';
 
   var results = null;
   try {
-    results = askClaudeJsonSalvageable(system, user, 4000);
+    results = askClaudeJsonSalvageable(system, user, 4000, { purpose: 'interview' });
   } catch (e) {
     logEvent('roster_error', kind + ': ' + String(e).slice(0, 300));
     return [];
@@ -683,7 +672,8 @@ function draftThemes(kind, count, ctx, taken, today) {
     if (added.length >= count) return;
     var name = String(r && r.theme || '').trim();
     var key = normalizeThemeKey(name);
-    if (!name || !key || taken[key]) return;
+    if (!name || !key || taken[key] || typeof r.theme !== 'string' || isRetiredTopic(name + ' ' + String(r.notes || '')) ||
+        ['本人', 'テトラ'].indexOf(r.protagonist) < 0 || typeof r.reader_bridge !== 'string' || !r.reader_bridge.trim()) return;
     taken[key] = true;
     appendRowObj(SHEET.THEMES, {
       theme: name,
@@ -693,6 +683,7 @@ function draftThemes(kind, count, ctx, taken, today) {
         : (['evergreen', 'news', 'neta'].indexOf(String(r.category)) >= 0 ? String(r.category) : 'evergreen'),
       weight: 2, last_used: '', notes: String(r.notes || '').slice(0, 120),
       base_weight: 2, perf: '', perf_n: '', roster: kind, drafted_at: today,
+      focus_version: EDITORIAL_FOCUS_VERSION, reader_bridge: String(r.reader_bridge).slice(0, 80),
     });
     added.push(name);
   });
@@ -735,7 +726,7 @@ function reportThemeRoster() {
   r.core.slice(0, 10).forEach(function (t, i) { lines.push((i + 1) + '. ' + t); });
   if (r.added.trend.length) {
     lines.push('');
-    lines.push('*今週の時事枠*（毎朝のインタビューに必ず1問入ります）');
+    lines.push('*本人・テトラにつながる時事候補*（毎朝の必須枠ではありません）');
     r.added.trend.slice(0, 8).forEach(function (t) { lines.push('- ' + t); });
   }
   if (r.added.adjacent.length) {
@@ -762,7 +753,7 @@ function refreshThemeNotes(minSamples) {
   var min = Number(minSamples || getProp('NOTES_MIN_SAMPLES', '5'));
   var perf = themePerformance();
   var themes = readTable(SHEET.THEMES).filter(function (t) {
-    if (Number(t.weight) === 0) return false;
+    if (Number(t.weight) === 0 || !isFocusedTheme(t)) return false;
     var p = perf.byTheme[normalizeThemeKey(t.theme)];
     return p && p.n >= min;
   });
@@ -774,6 +765,7 @@ function refreshThemeNotes(minSamples) {
 
   var system = [
     'あなたはXアカウントの運用担当です。テーマごとの「メモ」を書き直します。',
+    editorialFocusPrompt(),
     'メモは翌朝のインタビューの質問を作るときに、そのまま参考として渡されます。',
     '',
     '書き方のルール:',
@@ -790,7 +782,7 @@ function refreshThemeNotes(minSamples) {
     var chunk = themes.slice(i, i + 12);
     var user = [
       '以下のテーマのメモを書き直してください。',
-      'perfは「そのテーマの投稿が、同時期の投稿の中で上位何%に入ったか」の平均です。50が平均。',
+      'perfは投稿48〜168時間後のプロフィールクリック率の同時期内順位の平均。50が中位。因果・再現性は未検証。',
       '',
       chunk.map(function (t, j) {
         var p = perf.byTheme[normalizeThemeKey(t.theme)];
@@ -819,7 +811,7 @@ function refreshThemeNotes(minSamples) {
     results.forEach(function (r) {
       var t = chunk[Number(r.i)];
       var note = String(r.notes || '').trim();
-      if (!t || !note) return;
+      if (!t || !note || isRetiredTopic(note)) return;
       updateRowsWhere(SHEET.THEMES, 'theme', String(t.theme), { notes: note });
       updated.push({ theme: String(t.theme), before: String(t.notes || ''), after: note });
     });
@@ -831,12 +823,10 @@ function refreshThemeNotes(minSamples) {
 
 /** テーマごとに、実測がいちばん高い投稿と低い投稿の本文を拾う */
 function themeSamples() {
-  var rows = readTable(SHEET.STOCK).filter(function (r) {
-    return String(r.theme).trim() && r.posted_at && Number(r.impressions || 0) > 0 &&
-      !(String(r.promoted) === 'yes' && r.paid_impressions === '');
-  });
-  var pct = percentileWithinWindow(rows.map(function (r) {
-    return { t: new Date(String(r.posted_at).replace(' ', 'T') + ':00+09:00').getTime(), v: Number(r.impressions) };
+  var samples = themeOutcomeSamples();
+  var rows = samples.map(function (x) { return x.row; });
+  var pct = percentileWithinWindow(samples.map(function (x) {
+    return { t: x.t, v: x.rate };
   }), 30);
   var out = {};
   rows.forEach(function (r, i) {
@@ -877,7 +867,7 @@ function reportThemeWeights() {
   var lines = [':dart: *テーマ重みを実績で更新しました*（実測のあるテーマ' + r.measured + '件）', ''];
   r.changes.sort(function (a, b) { return b.to - a.to; }).forEach(function (c) {
     lines.push((c.to > c.from ? ':arrow_up:' : ':arrow_down:') + ' ' + c.theme +
-      ': ' + c.from + ' → ' + c.to + '（窓内順位の平均' + c.perf + '点 / n=' + c.n + '）');
+      ': ' + c.from + ' → ' + c.to + '（プロフィールクリック率の窓内順位' + c.perf + '点 / n=' + c.n + '）');
   });
   lines.push('');
   lines.push('重みが上がったテーマほど、翌朝のインタビューで選ばれやすくなります。');
