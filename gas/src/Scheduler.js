@@ -7,7 +7,8 @@ function scheduleApprovedPosts() {
   var approved = stock
     .filter(function (r) { return String(r.status) === STATUS.APPROVED; })
     .sort(function (a, b) {
-      // スコアが高い順に良い枠（早い枠）を割り当てる
+      // 未検証スコアで早い枠を独占させず、承認済み案を作成順に出す。
+      if (useOutcomeQuality()) return String(a.created_at || '').localeCompare(String(b.created_at || '')) || String(a.id).localeCompare(String(b.id));
       return Number(b.score || 0) - Number(a.score || 0);
     });
   if (!approved.length) return [];

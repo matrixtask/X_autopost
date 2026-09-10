@@ -2,6 +2,10 @@
 
 所要時間の目安: 30〜45分。上から順に進めてください。
 
+**2026-09-10 採点とテーマの改訂:** [新しい編集・成果検証の仕様](../docs/outcome-editorial-quality.md)。既定 `QUALITY_MODE=outcome` は5軸の参考評価と資料照合を行い、承認待ちに送ります。`AUTO_APPROVE=true` でも新尺度では人の承認が必要です。旧75点による自動リライトは停止。テーマは本人・テトラ中心の20の入口から始め、時事必須枠と堀江さんの話の再利用を止めます。列とテーマは次回処理時に自動追加します。
+
+診断はGASエディタの **OutcomeQuality.gs** で `reportOutcomeValidation` を実行します（読み取りと実行ログ出力のみ）。実装は [`gas/src/OutcomeQuality.js`](src/OutcomeQuality.js)。テーマ定義は **Editorial.gs**（[`gas/src/Editorial.js`](src/Editorial.js)）。既存利用者は `git pull` 後の `./deploy.sh` で管理UIとSlackの両デプロイを更新してください。
+
 ## 0. 必要なもの
 
 | サービス | 用途 | 必須 |
@@ -146,9 +150,11 @@ GASエディタで `installTriggers` を実行すると以下が登録されま�
 3. `postTick` を手動実行 → `[DRY RUN]` 通知で内容を確認
 4. 問題なければ:
    - `DRY_RUN` を `false` に（実投稿が始まる）
-   - 品質ゲートを信用できるようになったら `AUTO_APPROVE` を `true` に（承認タップも不要になる）
+   - 新5軸は検証中の参考値なので人の承認が必要。`AUTO_APPROVE` は `QUALITY_MODE=legacy` の旧ゲートだけに適用されます。
 
 ## 9. 採点軸の学習（標本を一気に増やす）
+
+この節の17軸・遡及採点・学習は旧尺度の説明です。新5軸の検証は [新仕様](../docs/outcome-editorial-quality.md) と `OutcomeQuality.gs` の `reportOutcomeValidation` を使用してください。新モードの週次処理は旧軸の重みを更新しません。
 
 全体スコアは「17軸の採点 × 各軸の成果相関」の内積です。相関は実測から学習するので、
 標本が少ないうちは既定重みのままです。過去のポストを遡って標本にするには、
@@ -285,7 +291,7 @@ weight = anchor * (1 + s * (perf - 50) / span)
 
 実測が無いテーマは順位付けの中央（50点）に置きます。試されないまま消えることも、根拠なく上位に居座ることもないようにするためです。`random` 枠はまずベンチに眠っているテーマから引き、足りなければ新しく作ります。
 
-**毎朝のインタビューには時事枠が必ず1つ入ります。** トレンドは翌週には語る意味が無くなるため、重み抽選に任せて出ない日が続くのを避けています。
+**現行は時事必須枠を廃止しました。** 本人・テトラ中心の候補から読者との接点が異なる2テーマを選びます。上の100件構成は旧設計で、現在の時事生成の既定は5件です。旧テーマは保存されますが、新方針のタグがないものは日次選定に入りません。
 
 入れ替えは `weeklyThemeMaintenance`（毎週月曜10時台）が実行します。手動なら **`reportThemeRoster`** です。`weeklyMetricsReport` とは別トリガーにしてあります。どちらもLLMを何度も呼ぶので、まとめると6分の実行上限に当たるためです。
 
@@ -366,7 +372,8 @@ GASエディタで **`regenerateFailedInterviews`** を実行すると、
 
 | プロパティ | 既定値 | 意味 |
 | --- | --- | --- |
-| `QUALITY_THRESHOLD` | `75` | 品質ゲートの合格点（上げるほど厳選） |
+| `QUALITY_MODE` | `outcome` | 新5軸は参考値・人の承認。`legacy` で旧17軸へ戻す |
+| `QUALITY_THRESHOLD` | `75` | `legacy` 時だけの合格点 |
 | `SLOT_TIMES` | `08:00,12:30,19:30` | 1日の予約枠 |
 | `MAX_POSTS_PER_DAY` | `3` | 1日の最大投稿数 |
 | `INTERVIEW_QUESTIONS` | `4` | 毎朝の質問数 |
@@ -446,4 +453,4 @@ cd X_autopost && git pull && cd gas && ./deploy.sh
 - **Slackに質問が来ない**: Logシートと GASの「実行数」画面でエラーを確認。`SLACK_BOT_TOKEN` / `SLACK_CHANNEL_ID` とボットのチャンネル招待を確認
 - **スレッドに返信しても反応がない**: Event SubscriptionsのRequest URLがVerifiedか、`message.channels` を購読しているか、Webアプリのデプロイが最新かを確認
 - **投稿が401/403で失敗**: Xのアクセストークンを Read and Write 権限にしてから再生成したか確認
-- **文体がAIっぽい**: Voiceシートのサンプルを増やす。`QUALITY_THRESHOLD` を上げるのも有効
+- **文体がAIっぽい**: 本人の原文と生成文を比較し、Voiceシートのサンプルや書き方を見直す。点数閾値を上げることは文体改善の検証にはなりません。

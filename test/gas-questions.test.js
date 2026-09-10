@@ -5,7 +5,7 @@ import vm from 'node:vm';
 
 function setup() {
   const ctx = vm.createContext({});
-  for (const file of ['Pure.js', 'Interview.js']) {
+  for (const file of ['Pure.js', 'Editorial.js', 'Interview.js']) {
     vm.runInContext(readFileSync(new URL('../gas/src/' + file, import.meta.url), 'utf8'), ctx);
   }
   ctx.SHEET = { INTERVIEWS: 'Interviews', STOCK: 'Stock' };

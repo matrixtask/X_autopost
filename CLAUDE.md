@@ -47,6 +47,9 @@ GASエディタの関数プルダウンは、開いているファイルの関�
 
 ## 実装上の注意
 
+- **2026-09-10 採点・テーマ改訂:** 現行方針は `docs/outcome-editorial-quality.md`。`QUALITY_MODE=outcome` が既定。新5軸は参考値、資料照合を通った案も人の承認が必要。点数による自動リライトは停止。旧17軸・アンカーは legacy 経路に保存。新旧の尺度を混ぜない。
+- `Editorial.js` は本人・テトラ中心のテーマと禁止された話題の除外、`OutcomeQuality.js` は新採点・資料照合・投稿前採点の成果検証。新テーマは20件を自動追加し、古いテーマや停止行は消さない。堀江さんの話を日次・週次で復活させない。
+
 - 質問・受け答えの方針と回帰条件は `docs/interview-quality.md`。補足は1セッション1回まで、短答を低品質扱いしない。下書きとリライトの一次資料は `interviewAnswerText` を共有する。`no_material` は生成失敗ではない
 
 - **`updateStockById` は1件ごとにシート全体を読み直す。** 数十件を超える一括更新では使わず、`readTable` が返す `_row` と `setColumnByRows` で直接書く

@@ -31,8 +31,9 @@
  *   CLAUDE_FALLBACKS    拒否時に別モデルへ自動で引き継ぐか auto/on/off（既定 auto =
  *                       Fable/Opus 5 系のときだけ付ける）
  *   DRY_RUN             "false" にするまでXへは投稿しない（既定: true）
- *   AUTO_APPROVE        "true" で品質ゲート通過分を承認なしで予約（既定: false）
- *   QUALITY_THRESHOLD   品質ゲートの合格点 0-100（既定: 75）
+ *   QUALITY_MODE        outcome（既定、新5軸は参考値・必ず人の承認）/ legacy（旧17軸）
+ *   AUTO_APPROVE        legacy時だけ "true" で品質ゲート通過分を承認なしで予約（既定: false）
+ *   QUALITY_THRESHOLD   legacy時の合格点 0-100（既定: 75）
  *   SLOT_TIMES          予約枠 "08:00,12:30,19:30"（既定）
  *   MAX_POSTS_PER_DAY   1日の最大投稿数（既定: 3）
  *   INTERVIEW_QUESTIONS 1回のインタビューの質問数（既定: 4）

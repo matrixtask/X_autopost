@@ -150,6 +150,8 @@ function fetchTweetMetrics() {
         if (typeof npm.user_profile_clicks === 'number') updates.profile_clicks = npm.user_profile_clicks;
         if (typeof npm.url_link_clicks === 'number') updates.link_clicks = npm.url_link_clicks;
       }
+      var outcomeSnapshot = captureOutcomeMetrics(row, updates);
+      if (outcomeSnapshot) updates.outcome_metrics = outcomeSnapshot;
       // 手動で promoted=yes を付けた行は上書きで消さない（organic取得不可時の逃げ道）
       updateStockById(row.id, updates);
       updated++;
@@ -478,6 +480,7 @@ function metricsAgeHours(r) {
 function analyzableRows() {
   var minAge = Number(getProp('METRICS_MIN_AGE_H', '48'));
   return readTable(SHEET.STOCK).filter(function (r) {
+    if (r.score_version === OUTCOME_SCORE_VERSION) return false;
     if (String(r.status) !== STATUS.POSTED || !r.metrics_at) return false;
     if (String(r.promoted) === 'yes' && r.paid_impressions === '') return false;
     if (parseAxes(r.axes) === null) return false;
@@ -939,7 +942,9 @@ function reportAxisAnalysis() {
  * 手動実行可。週次メトリクス収集後にデータが8件以上あれば自動実行される。
  */
 function evaluateScoring() {
+  if (useOutcomeQuality()) return reportOutcomeValidation();
   var rows = readTable(SHEET.STOCK).filter(function (r) {
+    if (r.score_version === OUTCOME_SCORE_VERSION) return false;
     if (String(r.status) !== STATUS.POSTED || !r.metrics_at || r.score === '') return false;
     // 広告インプを分離できていないプロモ投稿は学習を歪めるため除外
     if (String(r.promoted) === 'yes' && r.paid_impressions === '') return false;
@@ -1050,6 +1055,7 @@ function evaluateScoring() {
  * @param {boolean} skipReliability 再現性の測定を飛ばす（APIを節約したいとき）
  */
 function diagnoseScoring(skipReliability) {
+  if (useOutcomeQuality()) return reportOutcomeValidation();
   var out = [':stethoscope: *採点の健康診断*', ''];
 
   out.push('── 0. 見ている数字はいつのものか ──');
@@ -1204,20 +1210,21 @@ function weeklyMetricsReport() {
   }
   // データが溜まっていれば採点基準の妥当性検証と学習も回す
   try {
-    if (rows.length >= 8) evaluateScoring();
+    if (useOutcomeQuality()) notifySlack(outcomeValidationText(reportOutcomeValidation()));
+    else if (rows.length >= 8) evaluateScoring();
   } catch (e) {
     logEvent('scoring_eval_error', String(e));
   }
   // 軸別の効き方分析と重み更新
   try {
-    reportAxisAnalysis();
+    if (!useOutcomeQuality()) reportAxisAnalysis();
   } catch (e) {
     logEvent('axis_analysis_error', String(e));
   }
   // 採点が実際に当たっているかを、学習に使っていない投稿で測る。
   // 手元への当てはまりは重みをいじれば上がるが、この数字だけは上がらない
   try {
-    evaluateScoringAccuracy();
+    if (!useOutcomeQuality()) evaluateScoringAccuracy();
   } catch (e) {
     logEvent('scoring_accuracy_error', String(e));
   }

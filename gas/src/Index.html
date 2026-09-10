@@ -264,7 +264,12 @@
     if (key === 'scheduled') {
       arr.sort(function (a, b) { return String(a.scheduled_at || '9999').localeCompare(String(b.scheduled_at || '9999')); });
     } else if (key === 'ready' || key === 'approved' || key === 'stock') {
-      arr.sort(function (a, b) { return (Number(b.score) || 0) - (Number(a.score) || 0); });
+      // 新旧の尺度を混ぜて順位付けしない。新尺度を含む一覧は作成順。
+      if (arr.some(function (p) { return p.score_version === 'outcome-v1'; })) {
+        arr.sort(function (a, b) { return String(a.created_at || '').localeCompare(String(b.created_at || '')); });
+      } else {
+        arr.sort(function (a, b) { return (Number(b.score) || 0) - (Number(a.score) || 0); });
+      }
     } else if (key === 'posted') {
       arr.sort(function (a, b) { return String(b.posted_at || '').localeCompare(String(a.posted_at || '')); });
     }
@@ -279,7 +284,7 @@
       var meta = [
         '<span class="badge b-' + p.status + '">' + (STATUS_LABEL[p.status] || p.status) + '</span>',
         p.category ? '<span>' + (CATEGORY_LABEL[p.category] || esc(p.category)) + '</span>' : '',
-        p.score !== null ? '<span>スコア ' + p.score + '</span>' : '',
+        p.score !== null ? '<span>' + (p.score_version === 'outcome-v1' ? '新5軸・参考値 ' : '旧スコア ') + p.score + '</span>' : '',
         p.scheduled_at ? '<span>予約 ' + esc(p.scheduled_at) + '</span>' : '',
         p.posted_at ? '<span>投稿 ' + esc(p.posted_at) + '</span>' : '',
       ].filter(Boolean).join('');

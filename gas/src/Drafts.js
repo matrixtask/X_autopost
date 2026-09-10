@@ -3,6 +3,7 @@
  */
 
 function generateDraftsFromInterview(sessionId) {
+  ensureHeaders(SHEET.STOCK);
   var qa = readTable(SHEET.INTERVIEWS).filter(function (r) {
     return String(r.session_id) === sessionId && String(r.answered_at) !== 'skipped' && interviewAnswerText(r);
   });
@@ -46,10 +47,12 @@ function generateDraftsFromInterview(sessionId) {
   });
 
   var saved = [];
+  var retired = 0;
   drafts.forEach(function (d) {
     var text = String(d && d.text || '').trim();
     var source = d && Object.prototype.hasOwnProperty.call(sourceByIdx, String(d.qi))
       ? sourceByIdx[String(d.qi)] : null;
+    if (source && isRetiredTopic(text + ' ' + source.theme)) { retired++; return; }
     if (!text || !source) {
       logEvent('draft_source_invalid', sessionId + ': 回答済みの qi または本文がありません');
       return;
@@ -65,6 +68,7 @@ function generateDraftsFromInterview(sessionId) {
       theme: String(source.theme || ''),
       category: String(source.category || ''),
       session_id: sessionId,
+      source_idx: String(source.idx),
       text: text,
       score: '',
       score_reason: '',
@@ -84,7 +88,7 @@ function generateDraftsFromInterview(sessionId) {
     }
   });
   // 材料不足の [] と、不正な案しか返らなかった生成失敗を分ける。
-  if (drafts.length && !saved.length) throw new Error('回答に対応する有効な下書きがありません: ' + sessionId);
+  if (drafts.length && !saved.length && retired !== drafts.length) throw new Error('回答に対応する有効な下書きがありません: ' + sessionId);
   logEvent('drafts_created', sessionId + ' -> ' + saved.length + '件');
   return saved;
 }

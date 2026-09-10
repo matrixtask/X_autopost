@@ -200,6 +200,7 @@ function labelForCategory(cat) {
  * していたら点は伸びない。何を聞くかの段階で相関を効かせる。
  */
 function axisGuidanceForQuestions() {
+  if (useOutcomeQuality()) return outcomeWritingGuidance();
   var b = axisWeightBreakdown();
   var c = b.weights;
   var ranked = AXES.map(function (a) {
@@ -260,8 +261,13 @@ function wellAnsweredQuestions(limit) {
  * 実施していない質問なので、有効性を測った教師データにはしない。
  */
 function highPerformingQuestions(limit) {
+  // 推定質問と過去のインプレッションの関係を、新方針の教師信号にしない。
+  return [];
+}
+
+function legacyHighPerformingQuestions(limit) {
   var rows = readTable(SHEET.STOCK).filter(function (r) {
-    return String(r.inferred_question || '').trim() && r.posted_at &&
+    return !isRetiredTopic(r.text + ' ' + r.inferred_question) && String(r.inferred_question || '').trim() && r.posted_at &&
       Number(r.impressions || 0) > 0 &&
       !(String(r.promoted) === 'yes' && r.paid_impressions === '');
   });
@@ -293,6 +299,7 @@ function generateInterviewQuestions(themes, headlines, count) {
     '- ニュースは与えられた見出しの範囲だけを使う。テーマ名・メモを最新ニュースの根拠にしない。裏付けのない金額・因果を足さない',
     '- ニュースが本人の経験につながらなければ評論や他社批判を求めず、本人が答えられる身近な切り口にする',
     '',
+    editorialFocusPrompt(),
     axisGuidanceForQuestions(),
     buildInterviewMemoryPrompt(),
   ].join('\n');
@@ -363,7 +370,7 @@ function buildInterviewMemoryPrompt() {
 
 function validInterviewQuestion(q) {
   return typeof q === 'string' && !!q.trim() && q.length <= 140 &&
-    !/[\r\n]/.test(q) && (q.match(/[?？]/g) || []).length <= 1;
+    !isRetiredTopic(q) && !/[\r\n]/.test(q) && (q.match(/[?？]/g) || []).length <= 1;
 }
 
 function hasPendingFollowup(row) {
@@ -384,6 +391,7 @@ function interviewAnswerText(row) {
 function planInterviewTurn(rows, current, text, next, canFollowup, clarify) {
   var system = [
     '本人のX投稿の材料を聞く編集者。相手の負担を最小にし、事実を作らない。',
+    editorialFocusPrompt(),
     'quoteは今回の回答中の連続した原文抜粋を40字以内で1つ。評価・称賛・解釈を加えない。不要なら空文字。',
     'followupは、回答に出た判断・出来事について投稿に必要な不足1点だけ、1問80字以内。十分なら空文字。短いことだけを理由に聞かない。',
     '不明、知らない、経験なし、非公開、答えたくないという意思には追問しない。ネタのオチを無理に深掘りしない。',
@@ -655,7 +663,8 @@ function finishInterview(sessionId, threadTs) {
     var lines = rows.map(function (r) {
       var ok = passStatuses.indexOf(String(r.status)) >= 0;
       var refines = Number(r.refines || 0);
-      var head = (ok ? ':white_check_mark:' : ':no_entry_sign:') + ' *' + (r.score === '' ? '-' : r.score) + '点* ' +
+      var head = (ok ? ':white_check_mark:' : ':no_entry_sign:') +
+        (r.score_version === OUTCOME_SCORE_VERSION ? ' 参考値 ' : ' ') + ' *' + (r.score === '' ? '-' : r.score) + '点* ' +
         (refines > 0 ? '(リライト' + refines + '回) ' : '');
       var reason = String(r.score_reason || '');
       return head + String(r.text) + (reason ? '\n　└ ' + reason : '');
@@ -663,8 +672,9 @@ function finishInterview(sessionId, threadTs) {
 
     var footer;
     if (!passed.length) {
-      footer = ':arrows_counterclockwise: 合格なし。チャンネルに「インタビュー」と書けば、すぐ次のインタビューを始めます。';
-    } else if (isAutoApprove()) {
+      footer = useOutcomeQuality() ? ':memo: 確認事項があります。下書きの指摘を確認してください。追加回答は必要な場合だけで大丈夫です。' :
+        ':arrows_counterclockwise: 合格なし。チャンネルに「インタビュー」と書けば、すぐ次のインタビューを始めます。';
+    } else if (isAutoApprove() && !useOutcomeQuality()) {
       var scheduled = scheduleApprovedPosts();
       footer = ':calendar: 合格' + passed.length + '件のうち' + scheduled.length + '件を予約しました。';
     } else {
@@ -690,7 +700,9 @@ function finishInterview(sessionId, threadTs) {
     }
 
     sendSlack(
-      ':inbox_tray: ' + drafts.length + '件をストックし、採点しました（合格 ' + passed.length + '/' + rows.length + '、閾値' + qualityThreshold() + '点）\n\n' +
+      ':inbox_tray: ' + drafts.length + '件をストックし、採点しました' +
+      (useOutcomeQuality() ? '（新5軸は参考値・承認待ち ' + passed.length + '/' + rows.length + '）'
+        : '（合格 ' + passed.length + '/' + rows.length + '、閾値' + qualityThreshold() + '点）') + '\n\n' +
       lines.join('\n\n') + hintBlock + '\n\n' + footer,
       threadTs
     );
