@@ -62,12 +62,92 @@ test('outcome: missing source, privacy and retired topic cannot be compensated b
   const texts = ['自分で確認した', '自分で確認した非公開の件', '堀江さんと自分で確認した'];
   db.Stock.push(...texts.map((text, i) => ({ id: String(i), theme: '試作', session_id: 's', source_idx: i ? '1' : '99', text, status: 'draft' })));
   db.Interviews.push({ session_id: 's', idx: 1, theme: '試作', answer: texts.join('。'), answered_at: 'now' });
-  ctx.askClaudeJsonSalvageable = () => ({ 0: review(ctx, 4), 1: review(ctx, 4, { privacy: 'hold' }), 2: review(ctx, 4) });
+  ctx.askClaudeJsonSalvageable = () => ({ 0: review(ctx, 4), 1: review(ctx, 4, { privacy: 'hold', issues: [
+    { kind: 'privacy', quote: '非公開の件', reason: '本人が非公開と指定した情報を含むため。', action: '非公開の箇所を削除する。' }
+  ] }), 2: review(ctx, 4) });
   assert.equal(ctx.runQualityGate().passed, 0);
   assert.ok(db.Stock.every(r => r.status === 'stock'));
   assert.match(db.Stock[0].score_reason, /照合が必要/);
   assert.match(db.Stock[1].score_reason, /公開してよい/);
   assert.match(db.Stock[2].score_reason, /中心のテーマ/);
+  assert.ok(db.Stock.every(r => JSON.parse(r.editorial_review).review_note.length > 0));
+});
+
+test('outcome: unexplained holds are retried and a supported answer is released for human approval', () => {
+  const { ctx, db, logs } = setup();
+  db.Stock.push({ id: 'd', session_id: 's', source_idx: '1', text: '自分で確認した', status: 'draft' });
+  db.Interviews.push({ session_id: 's', idx: 1, answer: '自分で確認した' });
+  let calls = 0;
+  ctx.askClaudeJsonSalvageable = (_system, input) => {
+    calls++;
+    if (calls === 2) assert.match(input, /前回は要確認フラグ/);
+    return { d: review(ctx, 2, { fidelity: calls === 1 ? 'confirm' : 'supported' }) };
+  };
+  assert.equal(ctx.runOutcomeQualityGate().passed, 1);
+  assert.equal(calls, 2);
+  assert.equal(db.Stock[0].status, 'ready');
+  assert.equal(JSON.parse(db.Stock[0].editorial_review).review_note, '');
+  assert.ok(logs.some(([kind, detail]) => kind === 'outcome_sources' && detail.includes('source_chars')));
+});
+
+test('outcome: repeated missing explanations stay unscored, not a completed user-facing hold', () => {
+  const { ctx, db } = setup();
+  db.Stock.push({ id: 'd', text: '自分で確認した', status: 'draft' });
+  let calls = 0;
+  ctx.askClaudeJsonSalvageable = () => { calls++; return { d: review(ctx, 2, { fidelity: 'confirm' }) }; };
+  assert.equal(ctx.runOutcomeQualityGate().scored, 0);
+  assert.equal(calls, 2);
+  assert.equal(db.Stock[0].status, 'draft');
+  assert.equal(db.Stock[0].editorial_review, '');
+});
+
+test('outcome: every hold needs a real quoted passage, reason and action', () => {
+  const { ctx } = setup();
+  const input = { text: '自分で確認した' };
+  const good = { issues: [{ kind: 'fidelity', quote: '確認した', reason: '回答ではまだ確認予定のため、実施済みとは言えません。', action: '確認する予定に戻す。' }] };
+  const value = review(ctx, 2, { fidelity: 'confirm' });
+  assert.equal(ctx.validateOutcomeIssues(value, good, input), true);
+  assert.match(value.review_note, /「確認した」.*実施済み.*対応: 確認する予定/);
+  const invented = structuredClone(good); invented.issues[0].quote = '存在しない語句';
+  assert.equal(ctx.validateOutcomeIssues(value, invented, input), false);
+  assert.equal(ctx.validateOutcomeIssues({ ...value, privacy: 'hold' }, good, input), false);
+  const vague = structuredClone(good); vague.issues[0].action = '';
+  assert.equal(ctx.validateOutcomeIssues(value, vague, input), false);
+  assert.equal(ctx.validateOutcomeIssues(review(ctx), good, input), false);
+});
+
+test('outcome: repair only reevaluates unexplained unposted holds and is idempotent', () => {
+  const { ctx, db } = setup();
+  let released = 0;
+  ctx.LockService = { getScriptLock: () => ({ tryLock: () => true, releaseLock: () => released++ }) };
+  ctx.console = { log() {} };
+  const old = { id: 'd', session_id: 's', source_idx: '1', text: '自分で確認した', status: 'stock',
+    score_version: 'outcome-v1', editorial_review: JSON.stringify(review(ctx, 2, { fidelity: 'confirm' })) };
+  db.Stock.push(old, ...['ready', 'approved', 'scheduled', 'posted'].map(status => ({ ...old, id: status, status })),
+    { ...old, id: 'has-tweet', tweet_id: '123' }, { ...old, id: 'legacy', score_version: '' },
+    { ...old, id: 'explained', editorial_review: JSON.stringify(review(ctx, 2, { fidelity: 'confirm', review_note: '既存の具体的な指摘' })) });
+  const protectedRows = JSON.stringify(db.Stock.slice(1));
+  db.Interviews.push({ session_id: 's', idx: 1, answer: '自分で確認した' });
+  let calls = 0;
+  ctx.askClaudeJsonSalvageable = (_sys, input) => { calls++; assert.doesNotMatch(input, /has-tweet|explained|scheduled/); return { d: review(ctx) }; };
+  assert.equal(ctx.repairOutcomeReviews().passed, 1);
+  assert.equal(db.Stock[0].status, 'ready');
+  assert.equal(db.Stock[0].text, old.text);
+  assert.equal(JSON.stringify(db.Stock.slice(1)), protectedRows);
+  assert.equal(ctx.repairOutcomeReviews().scored, 0);
+  assert.equal(calls, 1);
+  assert.equal(released, 2);
+});
+
+test('outcome: approval or text edits during scoring are not overwritten', () => {
+  for (const update of [{ status: 'approved' }, { text: '本人が編集した本文' }]) {
+    const { ctx, db } = setup();
+    db.Stock.push({ id: 'd', text: '自分で確認した', status: 'draft' });
+    ctx.askClaudeJsonSalvageable = () => { Object.assign(db.Stock[0], update); return { d: review(ctx) }; };
+    assert.equal(ctx.runOutcomeQualityGate().scored, 0);
+    assert.equal(db.Stock[0][Object.keys(update)[0]], Object.values(update)[0]);
+    assert.equal(db.Stock[0].editorial_review, undefined);
+  }
 });
 
 test('outcome: malformed scores and invented citations stay draft and clear stale evaluation', () => {
