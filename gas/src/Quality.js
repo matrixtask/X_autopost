@@ -644,10 +644,11 @@ function refineFailedDrafts(force) {
   var MAX_QA_CHARS = 2000;
   var qaBySession = {};
   readTable(SHEET.INTERVIEWS).forEach(function (r) {
-    if (!String(r.answer || '').trim()) return;
+    var answer = interviewAnswerText(r);
+    if (String(r.answered_at) === 'skipped' || !answer) return;
     var sid = String(r.session_id);
     if (!qaBySession[sid]) qaBySession[sid] = [];
-    qaBySession[sid].push('Q: ' + r.question + ' / A: ' + r.answer);
+    qaBySession[sid].push('Q（事実の根拠ではない）: ' + r.question + '\nA: ' + answer);
   });
 
   var usedSessions = {};
@@ -690,6 +691,8 @@ function refineFailedDrafts(force) {
     '- 「質問に答えた文」を「ふと思いついた独り言のつぶやき」に変換する。前置きなしで1行目から本題',
     '- 指摘された弱点（抽象的・評論調・説教臭い・文脈依存など）を具体的に直す',
     '- 【最重要】事実の追加は「一次情報」にあるものだけ。数字・固有名詞・エピソードの捏造は絶対にしない。足せる事実がなければ、盛らずに削って研ぐ',
+    '- 一次情報のうち事実の根拠は本人の回答原文（追加回答を含む）だけ。質問・追問の前提、文体見本、採点コメントや聞き手の解釈を本人の事実として使わない。別セッションの事実を混ぜない',
+    '- 本人の訂正・非公開の意思を優先する。投稿に使える材料が足りない場合は、質問の前提や下書きの未確認の事実で補わず "skip": true を返す',
     '- 教訓やまとめで締めない。本音・オチ・言い切りで終わる',
     '- 元の内容の事実を変えない。全角換算140字以内',
     '- どう直しても良くならないものは "skip": true を返す',

@@ -46,6 +46,8 @@ GASエディタの関数プルダウンは、開いているファイルの関�
 
 ## 実装上の注意
 
+- 質問・受け答えの方針と回帰条件は `docs/interview-quality.md`。補足は1セッション1回まで、短答を低品質扱いしない。下書きとリライトの一次資料は `interviewAnswerText` を共有する。`no_material` は生成失敗ではない
+
 - **`updateStockById` は1件ごとにシート全体を読み直す。** 数十件を超える一括更新では使わず、`readTable` が返す `_row` と `setColumnByRows` で直接書く
 - **`appendRow` は1行あたり100ms前後かかる。** 数百行なら `appendRowsObj`（`setValues` で一括）
 - **GASの実行時間上限は6分。** 長い処理は4分で打ち切り、`after()` のワンショットトリガーで自分を再実行する。二重実行は `LockService` で弾く
