@@ -324,3 +324,11 @@ draft（生成直後）→ 採点 → ready（合格・承認待ち）→ approv
 - 検証: `npm test` 84件合格。新16件で低得点の承認待ち、高得点でも出典・公開範囲で保留、引用/欠損/配列順検証、初回実測の固定、新旧/モデル別集計、旧テーマの週次復活防止、禁止テーマしかない場合のno_materialを確認。
 - `OutcomeQuality.gs` の `reportOutcomeValidation` は読み取りだけ。モデル・effortの異なる採点は別集計。投稿後採点や本文変更後の古い点数、同一セッションの複数案を除外。
 - 反映: Ubuntuで `git pull origin main` → `gas/./deploy.sh`、AとB両方のデプロイを更新。APIキー・本番プロパティの変更はしていない。新尺度の実モデルでの品質・成果改善は未検証。詳細と今後の検証手順は `docs/outcome-editorial-quality.md`。
+
+### 2026-09-11 — Codex（下書きの確認案内）
+
+- ユーザーから「下書きの指摘ってどれ？」。Stockの924〜928行を確認すると5件ともfidelity=confirm、review_noteは空欄だった。追加回答の不足とは判断できない。保存済みの本人回答は存在する。
+- 採点・保留判定・本文は変えず、Slackの各案に下書き番号、状態、確認項目、具体的な確認箇所を分けて表示。理由の詳細が空の場合はAIの説明不足と明記し、追加回答を求めない。全件保留でも管理画面のリンクと「保留」等の場所を案内。
+- 管理UIも同じ説明を表示。既存行の書き換え・再採点・Slackへの再送はしていない。原因説明の不足を直す変更であり、confirm判定自体の正しさは未検証のまま。
+- 追加した表示用内部関数は `Interview.gs`（`formatInterviewDraftReview`, `interviewDraftReviewLocation`）と `OutcomeQuality.gs`（`outcomeReviewFeedback`）。手動実行は不要。
+- 反映はUbuntuの `./deploy.sh` でA・B両方を更新。過去のSlackメッセージは変わらないが、管理画面は再読込で新表示になる。
