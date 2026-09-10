@@ -10,7 +10,7 @@
 ## 0. 最初の30分でやること
 
 1. `CLAUDE.md` を読む。ファイル名に Claude とあるが、**中身はこのリポジトリの運用ルールで、担当がどのAIでも適用される**
-2. `git clone` して `npm test`（Node 20 以上）。56件通れば環境は正常
+2. `git clone` して `npm test`（Node 20 以上）。68件通れば環境は正常
 3. この資料の §3（用語）と §5（設計判断）を読む。ここを飛ばしてコードを触ると、過去に落ちた穴にもう一度落ちる
 4. ユーザーに次を頼む。自分の手元では取れないものがある:
    - GitHub リポジトリ `matrixtask/X_autopost` へのアクセス（PR を作ってマージするため）
@@ -180,6 +180,9 @@ draft（生成直後）→ 採点 → ready（合格・承認待ち）→ approv
 
 ### 5.6 LLM は用途で分ける
 
+**2026-09-10追記:** 質問・会話・画像説明・下書き・リライトは既定OpenAIへ移行済み。
+設定・実装・未検証事項は `docs/openai-responses.md`。下記はClaude経路の設定と移行前の設計経緯。
+
 生成（下書き・リライト）と採点でモデルを分けられる（PR #49）。
 
 - 生成 = `CLAUDE_MODEL_GENERATE`。文体の質が直接ポストに出るので上位モデルにする価値がある。現在 `claude-fable-5-1` を設定する運用
@@ -298,3 +301,12 @@ draft（生成直後）→ 採点 → ready（合格・承認待ち）→ approv
 - 検証: `npm test` 56件合格（既存27+新規29）。状態遷移・出典・失敗復帰をNode/VMで確認。実GAS/Slackの動作、Claude生成の会話品質、フォロワー増への効果は未確認。
 - 反映: Ubuntuで既定の `./deploy.sh`、B（Slack）更新、`Sheets.gs` の `setupSpreadsheet`。新規内部関数はすべて `Interview.gs`。追加依存・モデル変更なし。
 - 注意: 「訂正: …」の過去回答自動訂正は未実装。曖昧な訂正を次問へ保存しないところまで。追問は `INTERVIEW_FOLLOWUP_ENABLED=false` で停止可能。
+
+### 2026-09-10 — Codex（OpenAI応答モデル）
+
+- ユーザーの追加依頼: 「応答モデルにChatGPTを使うようにして」。OpenAI Responses APIで実装。
+- 質問・会話・画像説明・補足ヒントを `purpose: interview`、下書き・リライトを既存の `generate` としてOpenAIへ送る。採点と裏方分析はClaudeを維持。
+- `OpenAI.gs` / `gas/src/OpenAI.js` を追加。既定 `gpt-6-astra`、会話effort low、生成medium。`RESPONSE_PROVIDER=claude` で旧経路へ切り戻せる。新規依存なし。
+- `OPENAI_API_KEY` をGASスクリプトプロパティへ設定し、Ubuntuで `./deploy.sh`（Slack Bも更新）。`OpenAI.gs` の `testOpenAIConnection` で実通信確認。詳細は `docs/openai-responses.md`。
+- 検証: `npm test` 68件合格。新規12件でルーティング、画像変換、認証/利用枠/拒否時の再試行停止、JSON再試行/部分救出を確認。
+- 未確認: 開発環境にAPIキーとGAS接続設定がないため、実通信・本番反映・生成品質/費用/速度。キー未設定でもClaudeへ黙って戻す挙動にはしていない。

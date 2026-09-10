@@ -607,7 +607,7 @@ function missingInfoHints(rows) {
   ].join('\n');
 
   try {
-    var res = askClaudeJsonSalvageable(system, user, 4000);
+    var res = askClaudeJsonSalvageable(system, user, 4000, { purpose: 'interview' });
     if (!Array.isArray(res)) return [];
     return res.map(function (r) {
       var d = targets[Number(r.i)];
