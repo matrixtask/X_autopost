@@ -1,5 +1,7 @@
 # セットアップガイド（Google Apps Script版）
 
+**2026-09-11 生成前の編集会議:** [仕様](../docs/editorial-council.md)。初回質問・会話応答・回答からの投稿生成を「3人格の確定意見→ミアの内省→生成」の3段階に変更しました。本文に回答原文の核を残し、機械的な末尾切断を止めます。新規 **EditorialCouncil.gs**（[`gas/src/EditorialCouncil.js`](src/EditorialCouncil.js)）は内部処理で手動実行不要。`./deploy.sh` でA・B両デプロイを更新すると次の生成から適用。会議記録は既存Logの `editorial_council`。API料金と待ち時間が増え、時間不足時は採点を夜へ回します。
+
 所要時間の目安: 30〜45分。上から順に進めてください。
 
 **2026-09-10 採点とテーマの改訂:** [新しい編集・成果検証の仕様](../docs/outcome-editorial-quality.md)。既定 `QUALITY_MODE=outcome` は5軸の参考評価と資料照合を行い、承認待ちに送ります。`AUTO_APPROVE=true` でも新尺度では人の承認が必要です。旧75点による自動リライトは停止。テーマは本人・テトラ中心の20の入口から始め、時事必須枠と堀江さんの話の再利用を止めます。列とテーマは次回処理時に自動追加します。

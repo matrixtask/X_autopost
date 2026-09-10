@@ -84,3 +84,20 @@ test('review display: management API shows the same missing-explanation message 
   assert.match(response[0].score_reason, /評価側の説明不足/);
   assert.equal(original.score_reason, '本人の回答との照合が必要');
 });
+
+test('review display: exhausted editorial time saves drafts and explicitly defers scoring', () => {
+  const ctx = setup();
+  const stock = [row({ status: 'draft' })], messages = [];
+  ctx.readTable = name => name === 'Stock' ? stock : [{ session_id: 's', answer: '本人の回答' }];
+  ctx.updateRowsWhere = () => {};
+  ctx.generateDraftsFromInterview = () => stock;
+  ctx.editorialHasTime = () => false;
+  ctx.runQualityGateWithRefinement = () => { throw new Error('must defer scoring'); };
+  ctx.missingInfoHints = () => [];
+  ctx.logEvent = () => {};
+  ctx.sendSlack = text => messages.push(text);
+  ctx.finishInterview('s', 'thread');
+  assert.match(messages.at(-1), /採点は今夜の品質ゲート/);
+  assert.doesNotMatch(messages.at(-1), /採点しました/);
+  assert.equal(stock[0].status, 'draft');
+});

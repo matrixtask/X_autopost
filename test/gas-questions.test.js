@@ -12,6 +12,8 @@ function setup() {
   ctx.getMemoryNotes = () => ['似た答えになる問いは減らして', 'スキップ', 'https://example.com/?token=private'];
   ctx.axisGuidanceForQuestions = () => '';
   ctx.logEvent = () => {};
+  ctx.prepareEditorialCouncil = () => ({});
+  ctx.editorialCouncilInstructions = () => '';
   ctx.readTable = (name) => name === 'Interviews' ? [
     { question: '試作の変更点は？', answer: '3kg軽量化', answered_at: '2026-09-10' },
     { question: '抽象的な質問？', answer: '', answered_at: 'skipped' },
@@ -68,6 +70,6 @@ test('turn plan survives malformed output and unavailable memory without extra A
   let calls = 0;
   ctx.getMemoryNotes = () => { throw new Error('memory unavailable'); };
   ctx.askClaude = () => { calls++; return '{broken'; };
-  assert.equal(Object.keys(ctx.planInterviewTurn([current], current, current.answer, null, true, false)).length, 0);
+  assert.equal(ctx.planInterviewTurn([current], current, current.answer, null, true, false).editorial_unavailable, true);
   assert.equal(calls, 1);
 });

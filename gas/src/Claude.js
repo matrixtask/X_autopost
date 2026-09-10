@@ -101,6 +101,7 @@ function claudeUsesFallbacks(model) {
 }
 
 function askClaude(systemPrompt, userPrompt, maxTokens, opts) {
+  if (typeof assertEditorialExecutionBudget === 'function') assertEditorialExecutionBudget();
   if (responseProviderFor(opts && opts.purpose) === 'openai') {
     return openAIMessage(systemPrompt, userPrompt, maxTokens, opts);
   }
@@ -231,7 +232,7 @@ function askClaudeJson(systemPrompt, userPrompt, maxTokens, opts) {
     try {
       text = askClaude(systemPrompt, userPrompt + '\n\n出力はJSONのみ。前置きや説明は書かない。', budget, opts);
     } catch (e) {
-      if (isFatalError(e) || isRefusalError(e)) throw e; // 残高切れ・拒否は投げ直しても無駄
+      if (isFatalError(e) || isRefusalError(e) || (e && e.llmNoRetry)) throw e; // 時間不足も同じ実行内では再試行しない
       lastErr = e;
     }
     if (text !== null) {
@@ -266,7 +267,7 @@ function askClaudeJsonSalvageable(systemPrompt, userPrompt, maxTokens, opts) {
     try {
       text = askClaude(systemPrompt, userPrompt + '\n\n出力はJSONのみ。前置きや説明は書かない。', budget, opts);
     } catch (e) {
-      if (isFatalError(e) || isRefusalError(e)) throw e; // 残高切れ・拒否は投げ直しても無駄
+      if (isFatalError(e) || isRefusalError(e) || (e && e.llmNoRetry)) throw e; // 時間不足も同じ実行内では再試行しない
       lastErr = e; // 空応答・一時的なAPIエラー。枠を広げてもう一度だけ投げ直す
       continue;
     }

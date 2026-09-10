@@ -9,7 +9,17 @@ function generateDraftsFromInterview(sessionId) {
   });
   if (!qa.length) throw new Error('回答がありません: ' + sessionId);
 
-  var system = buildStylePrompt();
+  var councilSources = qa.map(function (r) {
+    return { qi: r.idx, answer: String(r.answer || '') +
+      (r.followup_answer && String(r.followup_answered_at) !== 'skipped' ? '\n' + r.followup_answer : '') };
+  });
+  var brief = prepareEditorialCouncil('drafts', { answers: councilSources }, 'generate', councilSources, sessionId);
+  if (brief.reflection.no_material) {
+    logEvent('drafts_created', sessionId + ' -> 0件（会議で投稿の核なし）');
+    return [];
+  }
+
+  var system = buildStylePrompt() + editorialCouncilInstructions(brief);
   var user = [
     '以下は本人へのインタビューの記録です。回答の言葉づかいをできるだけ活かして、',
     'X（Twitter）のポスト下書きを作ってください。',
@@ -25,14 +35,16 @@ function generateDraftsFromInterview(sessionId) {
     '- 【最重要】事実の根拠は本人の回答原文（追加回答を含む）だけ。質問や追問の前提、ニュース見出し、文体見本、聞き手の解釈を本人の経験・事実として使わない。数字・固有名詞・結果を補わない',
     '- 「わからない」「特にない」だけの回答から話を作らない。非公開・投稿しないでという意思や訂正を尊重する。短い回答でも具体があれば使える',
     '- 「Q&Aの回答」をそのまま文にしない。質問の存在を消して、自分から言い出した独り言のつぶやきに変換する',
-    '- 本人の回答にある具体的な言い回しを優先して残す（要約しすぎない）',
+    '- 内省で選んだanchorsのqiとquoteを使う。各案のcore_quoteにそのquoteを完全一致で入れ、本文にも同じ引用をそのまま残す。核のない別の回答から案を作らない',
+    '- 驚きは回答にある判断・比喩・意外な差を残して伝える。他社にも言える教訓に置換しない。「普通は」「実は」だけで意外さを演出しない',
+    '- 原文にある条件・留保・選択の代償を削らない。仕事の難しさや判断文化は原文にある場合に伝える。募集職務や裁量を創作せず、採用CTAを足さない',
     '- 全角換算140字（半角280字重み）以内。短くてもいい',
     '- カテゴリ neta はオチやゆるさを残す。無理に学びに落とさない',
     '- カテゴリ news は見出しの受け売りでなく本人の視点を軸にする',
     '',
     '- qi には、この記録に実在する回答済み質問の番号（[Q1] の数字）を必ず入れる。別の回答の事実を混ぜない',
     '',
-    'JSON配列で出力: [{"qi": 1, "theme": "...", "category": "...", "text": "..."}]',
+    'JSON配列で出力: [{"qi": 1, "core_quote":"内省で選んだ回答原文の核", "theme": "...", "category": "...", "text": "..."}]',
   ].join('\n');
 
   // 6案しか出さないので3000で足りるが、回答が長いと前置きを書きたがることがある。
@@ -57,9 +69,17 @@ function generateDraftsFromInterview(sessionId) {
       logEvent('draft_source_invalid', sessionId + ': 回答済みの qi または本文がありません');
       return;
     }
+    var anchor = brief.reflection.anchors.some(function (a) {
+      return String(a.qi) === String(d.qi) && a.quote === d.core_quote && text.indexOf(a.quote) >= 0;
+    });
+    if (!anchor) {
+      logEvent('draft_core_missing', sessionId + ': Q' + d.qi + 'の核が本文に残っていません');
+      return;
+    }
     if (saved.length >= 6) return;
     if (!fitsInTweet(text)) {
-      text = truncateForTweet(text);
+      logEvent('draft_too_long', sessionId + ': Q' + d.qi + 'を棄却（留保・オチの機械切断を防止）');
+      return;
     }
     var id = newId('p');
     appendRowObj(SHEET.STOCK, {

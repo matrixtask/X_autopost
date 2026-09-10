@@ -25,9 +25,13 @@ function harness(interviews, response = []) {
     STATUS: { DRAFT: 'draft', STOCK: 'stock' },
     readTable: (sheet) => sheet === 'Interviews' ? state.interviews : state.stock,
     buildStylePrompt: () => '',
+    // このファイルは保存・出典処理を検証。会議の実行と引用検証はgas-council.test.jsで検証する。
+    prepareEditorialCouncil: () => ({ reflection: { no_material: false,
+      anchors: Array.isArray(state.response) ? state.response.filter(d => d && d.text).map(d => ({ qi: d.qi, quote: d.text })) : [] } }),
+    editorialCouncilInstructions: () => '',
     askClaudeJsonSalvageable: (system, user) => {
       state.prompts.push({ system, user });
-      return state.response;
+      return Array.isArray(state.response) ? state.response.map(d => d && { ...d, core_quote: d.text }) : state.response;
     },
     fitsInTweet: () => true,
     newId: () => `draft-${++id}`,
