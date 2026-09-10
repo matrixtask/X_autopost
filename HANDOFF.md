@@ -304,6 +304,7 @@ draft（生成直後）→ 採点 → ready（合格・承認待ち）→ approv
 
 ### 2026-09-10 — Codex（OpenAI応答モデル）
 
+- PR #53: https://github.com/matrixtask/X_autopost/pull/53
 - ユーザーの追加依頼: 「応答モデルにChatGPTを使うようにして」。OpenAI Responses APIで実装。
 - 質問・会話・画像説明・補足ヒントを `purpose: interview`、下書き・リライトを既存の `generate` としてOpenAIへ送る。採点と裏方分析はClaudeを維持。
 - `OpenAI.gs` / `gas/src/OpenAI.js` を追加。既定 `gpt-6-astra`、会話effort low、生成medium。`RESPONSE_PROVIDER=claude` で旧経路へ切り戻せる。新規依存なし。
