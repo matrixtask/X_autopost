@@ -632,6 +632,26 @@ function updateInterviewRow(sessionId, idx, updates) {
   });
 }
 
+/** Slackに表示する番号は、この通知内で本文を特定するための番号。 */
+function formatInterviewDraftReview(row, index) {
+  var labels = { draft: 'AIの評価待ち', stock: '保留', ready: '承認待ち', approved: '承認済み', scheduled: '予約済み', posted: '投稿済み' };
+  var text = '*下書き' + (index + 1) + '｜' + (labels[String(row.status)] || String(row.status)) + '*\n' + String(row.text || '');
+  if (row.score_version === OUTCOME_SCORE_VERSION) {
+    text += '\n\n' + outcomeReviewFeedback(row);
+    if (row.score !== '' && row.score !== undefined) text += '\n参考評価: ' + row.score + '点（合否の基準ではありません）';
+  } else {
+    if (row.score !== '' && row.score !== undefined) text += '\n採点: ' + row.score + '点';
+    if (row.score_reason) text += '\n採点コメント: ' + row.score_reason;
+  }
+  return text;
+}
+
+function interviewDraftReviewLocation() {
+  var url = getProp('WEBAPP_URL');
+  return (url ? '確認・編集: ' + url + '?token=' + getProp('ADMIN_TOKEN') : '確認・編集は、普段お使いの管理画面から行えます。') +
+    '\n管理画面の「保留」または「承認待ち」で、上に表示した本文を探してください。未完了の評価は「未採点」にあります。';
+}
+
 function finishInterview(sessionId, threadTs) {
   updateRowsWhere(SHEET.INTERVIEWS, 'session_id', sessionId, { status: INTERVIEW_STATUS.DONE });
   var answered = readTable(SHEET.INTERVIEWS).filter(function (r) {
@@ -660,20 +680,15 @@ function finishInterview(sessionId, threadTs) {
     var passStatuses = [STATUS.READY, STATUS.APPROVED, STATUS.SCHEDULED];
     var passed = rows.filter(function (r) { return passStatuses.indexOf(String(r.status)) >= 0; });
 
-    var lines = rows.map(function (r) {
-      var ok = passStatuses.indexOf(String(r.status)) >= 0;
-      var refines = Number(r.refines || 0);
-      var head = (ok ? ':white_check_mark:' : ':no_entry_sign:') +
-        (r.score_version === OUTCOME_SCORE_VERSION ? ' 参考値 ' : ' ') + ' *' + (r.score === '' ? '-' : r.score) + '点* ' +
-        (refines > 0 ? '(リライト' + refines + '回) ' : '');
-      var reason = String(r.score_reason || '');
-      return head + String(r.text) + (reason ? '\n　└ ' + reason : '');
-    });
+    var lines = rows.map(formatInterviewDraftReview);
 
     var footer;
-    if (!passed.length) {
-      footer = useOutcomeQuality() ? ':memo: 確認事項があります。下書きの指摘を確認してください。追加回答は必要な場合だけで大丈夫です。' :
-        ':arrows_counterclockwise: 合格なし。チャンネルに「インタビュー」と書けば、すぐ次のインタビューを始めます。';
+    if (useOutcomeQuality()) {
+      footer = ':memo: 上の「下書き1」などに、各案の状態と確認内容を表示しています。\n' +
+        '確認箇所が書かれている場合だけ、その部分を見直してください。理由の詳細がない案に追加で答える必要はありません。\n' +
+        interviewDraftReviewLocation();
+    } else if (!passed.length) {
+      footer = ':arrows_counterclockwise: 合格なし。チャンネルに「インタビュー」と書けば、すぐ次のインタビューを始めます。';
     } else if (isAutoApprove() && !useOutcomeQuality()) {
       var scheduled = scheduleApprovedPosts();
       footer = ':calendar: 合格' + passed.length + '件のうち' + scheduled.length + '件を予約しました。';

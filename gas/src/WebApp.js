@@ -193,7 +193,7 @@ function api_listPosts(token) {
       text: String(r.text),
       score: r.score === '' ? null : Number(r.score),
       score_version: String(r.score_version || ''),
-      score_reason: String(r.score_reason || ''),
+      score_reason: r.score_version === OUTCOME_SCORE_VERSION ? outcomeReviewFeedback(r) : String(r.score_reason || ''),
       status: String(r.status),
       scheduled_at: String(r.scheduled_at || ''),
       posted_at: String(r.posted_at || ''),
