@@ -39,6 +39,8 @@ function fixture(count = 2, options = {}) {
     logEvent: (type, message) => logs.push({ type, message }),
     getProp: (key, fallback) => options.props?.[key] ?? fallback,
     getMemoryNotes: () => [],
+    prepareEditorialCouncil: () => ({}),
+    editorialCouncilInstructions: () => '',
     addMemory: (text, source) => memories.push({ text, source }),
     nowJst: () => new Date('2026-09-10T03:00:00Z'),
     fmtDateTime: () => '2026-09-10 12:00',
