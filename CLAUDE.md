@@ -36,7 +36,8 @@ GASエディタの関数プルダウンは、開いているファイルの関�
 | `Config.js` | 定数、スクリプトプロパティ、採点軸(AXES)、相関ベクトルと内積スコア |
 | `Pure.js` | GAS非依存の純粋関数。`test/gas-pure.test.js` が vm で読み込んで検証する |
 | `Sheets.js` | スプレッドシート操作。`SHEET_HEADERS` が列定義の正 |
-| `Claude.js` | Claude API クライアント |
+| `Claude.js` | 共通の互換呼び出し口、Claude API、JSON再試行 |
+| `OpenAI.js` | 用途別ルーティングとOpenAI Responses API。質問・会話・生成は既定OpenAI、採点はClaude |
 | `Interview.js` | 朝のインタビュー、質問生成、Slack返信の処理 |
 | `Drafts.js` | 回答からポスト下書きを生成 |
 | `Quality.js` | 品質ゲート、自己批判リライト、遡及採点 |

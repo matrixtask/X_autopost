@@ -161,12 +161,12 @@ function describeSlackImages(files, contextText) {
   try {
     // 説明自体は200字だが、思考ブロックに枠を食われて本文が0文字になることが
     // あるため広めに取る（朝のインタビューが飛んだのと同じ原因）
-    var desc = askClaudeWithImages(system, user, images, 4000);
+    var desc = askClaudeWithImages(system, user, images, 4000, { purpose: 'interview' });
     logEvent('image_read', images.length + '枚を読みました: ' + String(desc).slice(0, 120));
     return { description: String(desc).trim(), problem: '' };
   } catch (e) {
     logEvent('image_error', String(e).slice(0, 300));
-    return { description: '', problem: 'Claudeが画像を読めませんでした: ' + String(e).slice(0, 150) };
+    return { description: '', problem: '画像説明モデルが画像を読めませんでした: ' + String(e).slice(0, 150) };
   }
 }
 
@@ -331,7 +331,7 @@ function generateInterviewQuestions(themes, headlines, count) {
   // 質問4問なら本文は500トークンもあれば足りるが、モデルが思考ブロックに
   // 枠を使うため、それを見込んで広めに取る（1500だと思考だけで枠を使い切り、
   // 本文が0文字になって朝のインタビューが飛んだ）
-  var questions = askClaudeJson(system, user, 6000);
+  var questions = askClaudeJson(system, user, 6000, { purpose: 'interview' });
   if (!Array.isArray(questions)) throw new Error('質問生成に失敗しました');
   var seen = {};
   questions = questions.filter(function (q) {
@@ -380,7 +380,7 @@ function interviewAnswerText(row) {
   return answer;
 }
 
-/** 1応答につき1 API呼び出し。失敗しても保存済み回答と予定質問で進める */
+/** 1応答につき1 API呼び出し。既定OpenAI。失敗しても保存済み回答と予定質問で進める */
 function planInterviewTurn(rows, current, text, next, canFollowup, clarify) {
   var system = [
     '本人のX投稿の材料を聞く編集者。相手の負担を最小にし、事実を作らない。',
@@ -400,7 +400,7 @@ function planInterviewTurn(rows, current, text, next, canFollowup, clarify) {
   };
   try {
     var result = parseJsonLoose(askClaude(system, JSON.stringify(input) +
-      '\nJSONのみ: {"quote":"", "followup":"", "next_question":"", "clarification":""}', 4000));
+      '\nJSONのみ: {"quote":"", "followup":"", "next_question":"", "clarification":""}', 4000, { purpose: 'interview' }));
     if (!result || typeof result !== 'object' || Array.isArray(result)) return {};
     var quote = typeof result.quote === 'string' ? result.quote.trim() : '';
     var followup = canFollowup && validInterviewQuestion(result.followup) && result.followup.length <= 80 ? result.followup.trim() : '';

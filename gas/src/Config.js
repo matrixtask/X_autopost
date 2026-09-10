@@ -4,6 +4,7 @@
  * 必須プロパティ（GASエディタ > プロジェクトの設定 > スクリプト プロパティ）:
  *   SPREADSHEET_ID      データ管理用スプレッドシートのID
  *   ANTHROPIC_API_KEY   Claude APIキー
+ *   OPENAI_API_KEY      OpenAI APIキー（既定の質問・会話・下書き生成に使用）
  *   SLACK_BOT_TOKEN     Slackボットトークン (xoxb-...)
  *   SLACK_CHANNEL_ID    インタビュー・通知先チャンネルID
  *   ADMIN_TOKEN         Webアプリ閲覧用の長いランダム文字列
@@ -13,6 +14,10 @@
  *     （X Developer PortalのOAuth 1.0a User Context、Read and Write権限）
  *
  * 任意:
+ *   RESPONSE_PROVIDER   openai（既定）/ claude。質問・会話・画像説明・下書き・リライト用
+ *   OPENAI_MODEL        gpt-6-astra（既定）。質問・会話用
+ *   OPENAI_MODEL_GENERATE 下書き・リライト用。未設定なら OPENAI_MODEL
+ *   OPENAI_EFFORT_INTERVIEW low（既定）。OPENAI_EFFORT_GENERATE medium（既定）
  *   NOTION_TOKEN        Notionインテグレーションのシークレット
  *   NOTION_DATABASE_ID  ストック同期先NotionデータベースID
  *   NOTION_THEMES_DATABASE_ID  テーマ管理DB（トークテーマ（運用中）_X）のID。

@@ -18,6 +18,7 @@ var CLAUDE_FATAL = 'Claude API 停止中';
 var CLAUDE_TRUNCATED = '[出力枠が足りません]';
 
 function isTruncatedError(e) {
+  if (e && e.llmTruncated) return true;
   return String(e && e.message ? e.message : e).indexOf(CLAUDE_TRUNCATED) >= 0;
 }
 
@@ -35,6 +36,7 @@ function extractClaudeMessage(body) {
 }
 
 function isFatalError(e) {
+  if (e && e.llmFatal) return true;
   return String(e && e.message ? e.message : e).indexOf(CLAUDE_FATAL) >= 0;
 }
 
@@ -47,6 +49,7 @@ function isFatalError(e) {
 var CLAUDE_REFUSED = '[Claudeが応答を拒否]';
 
 function isRefusalError(e) {
+  if (e && e.llmRefusal) return true;
   return String(e && e.message ? e.message : e).indexOf(CLAUDE_REFUSED) >= 0;
 }
 
@@ -98,6 +101,9 @@ function claudeUsesFallbacks(model) {
 }
 
 function askClaude(systemPrompt, userPrompt, maxTokens, opts) {
+  if (responseProviderFor(opts && opts.purpose) === 'openai') {
+    return openAIMessage(systemPrompt, userPrompt, maxTokens, opts);
+  }
   return claudeMessage(systemPrompt, userPrompt, maxTokens, opts);
 }
 
@@ -110,7 +116,7 @@ function askClaudeWithImages(systemPrompt, userPrompt, images, maxTokens, opts) 
     return { type: 'image', source: { type: 'base64', media_type: im.mimeType, data: im.base64 } };
   });
   content.push({ type: 'text', text: userPrompt });
-  return claudeMessage(systemPrompt, content, maxTokens, opts);
+  return askClaude(systemPrompt, content, maxTokens, opts);
 }
 
 /**

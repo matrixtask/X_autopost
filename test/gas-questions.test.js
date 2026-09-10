@@ -32,7 +32,8 @@ test('initial question schema rejects unknown sources, duplicates and malformed 
   const ctx = setup();
   const themes = [{ theme: '試作', category: 'evergreen' }];
   const q = (question, more = {}) => ({ theme: '試作', category: 'evergreen', question, ...more });
-  ctx.askClaudeJson = (system, user) => {
+  ctx.askClaudeJson = (system, user, _tokens, opts) => {
+    assert.equal(opts.purpose, 'interview');
     assert.match(system, /似た答え/);
     assert.match(user, /3kg軽量化/);
     return [null, q('最近の工夫は？'), q('最近の工夫は?'), q('どこ？なぜ？'),
@@ -47,7 +48,10 @@ test('turn plan rejects invented acknowledgements and respects followup budget',
   const ctx = setup();
   const current = { question: '最近の工夫は？', answer: '3kg軽量化した' };
   const next = { question: '苦労した点は？', theme: '試作' };
-  ctx.askClaude = () => JSON.stringify({ quote: '5kg軽量化した', followup: '何を変えた？', next_question: '何を？なぜ？' });
+  ctx.askClaude = (_system, _user, _tokens, opts) => {
+    assert.equal(opts.purpose, 'interview');
+    return JSON.stringify({ quote: '5kg軽量化した', followup: '何を変えた？', next_question: '何を？なぜ？' });
+  };
   const result = ctx.planInterviewTurn([current, next], current, current.answer, next, false, false);
   assert.equal(result.quote, '');
   assert.equal(result.followup, '');
