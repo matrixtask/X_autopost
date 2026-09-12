@@ -1,5 +1,5 @@
 /** EditorialCouncil.gs: 架空の3人格の編集会議 → ミアの採否判断 → 生成。 */
-var EDITORIAL_COUNCIL_VERSION = 'council-v3';
+var EDITORIAL_COUNCIL_VERSION = 'council-v4';
 // GASの1実行内で会話・投稿・採点に共有する。APIを中断できないため開始前に余裕を残す。
 var EDITORIAL_EXECUTION_DEADLINE = 0;
 
@@ -35,22 +35,44 @@ function validateEditorialDebate(value) {
 
 /** 本人の原文だけを核の根拠にする。質問・文体サンプルを原文として採らない。 */
 function validateEditorialReflection(value, sources) {
-  if (!value || !councilText(value.adopt, 400) || !councilText(value.reject, 400) ||
-      !councilText(value.direction, 600) || !councilText(value.question_focus, 300) ||
-      typeof value.no_material !== 'boolean' || !Array.isArray(value.anchors) || value.anchors.length > 6) return false;
-  if (!sources) return value.anchors.length === 0 && !value.no_material;
-  if (value.no_material) return value.anchors.length === 0;
-  if (!value.anchors.length) return false;
-  var seen = {};
-  return value.anchors.every(function (a) {
-    var source = a && sources.filter(function (s) { return String(s.qi) === String(a.qi); })[0];
-    if (!source || !councilText(a.quote, 80) || source.answer.indexOf(a.quote) < 0 ||
-        !councilText(a.reason, 250) || !councilText(a.hiring_signal, 250)) return false;
-    var key = String(a.qi) + ':' + a.quote;
-    if (seen[key]) return false;
-    seen[key] = true;
-    return true;
+  return editorialReflectionErrors(value, sources).length === 0;
+}
+
+/** 診断には項目と制約のみを残す。回答本文・モデルの生応答はログへ複製しない。 */
+function editorialReflectionErrors(value, sources) {
+  var errors = [];
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return ['reflection.object'];
+  var limits = { adopt: 400, reject: 400, direction: 600, question_focus: 300 };
+  Object.keys(limits).forEach(function (key) {
+    if (!councilText(value[key], limits[key])) errors.push(key + '.required_max_' + limits[key]);
   });
+  if (typeof value.no_material !== 'boolean') errors.push('no_material.boolean');
+  if (!Array.isArray(value.anchors)) return errors.concat(['anchors.array']);
+  if (value.anchors.length > 6) errors.push('anchors.max_6');
+  if (!sources) {
+    if (value.anchors.length || value.no_material !== false) errors.push('questions_or_turn.empty_anchors');
+    return errors;
+  }
+  if (value.no_material) {
+    if (value.anchors.length) errors.push('no_material.empty_anchors');
+    return errors;
+  }
+  if (!value.anchors.length) errors.push('anchors.required');
+  var seen = {};
+  value.anchors.forEach(function (a, i) {
+    var at = 'anchors[' + i + ']';
+    var source = a && sources.filter(function (s) { return String(s.qi) === String(a.qi); })[0];
+    if (!a || typeof a !== 'object') { errors.push(at + '.object'); return; }
+    if (!source) errors.push(at + '.qi.unknown');
+    if (!councilText(a.quote, 80)) errors.push(at + '.quote.required_max_80');
+    else if (source && source.answer.indexOf(a.quote) < 0) errors.push(at + '.quote.not_in_answer');
+    if (!councilText(a.reason, 250)) errors.push(at + '.reason.required_max_250');
+    if (!councilText(a.hiring_signal, 250)) errors.push(at + '.hiring_signal.required_max_250');
+    var key = String(a.qi) + ':' + a.quote;
+    if (seen[key]) errors.push(at + '.duplicate');
+    seen[key] = true;
+  });
+  return errors;
 }
 
 /** 3人は同一モデル内の架空視点。逐語的思考ではなく短い提案・異論・確定見解を返す。 */
@@ -81,17 +103,34 @@ function prepareEditorialCouncil(stage, material, purpose, sources, contextId) {
   if (!validateEditorialDebate(debate)) throw new Error('編集会議の3人格の確定意見が不正です。生成を止めました');
   if (Date.now() - started > 120000) throw new Error('編集会議が時間上限に達しました。生成は未実行です');
   assertEditorialExecutionBudget();
-  var reflection = askClaudeJson(shared + '\n' + [
+  var reflectionSystem = shared + '\n' + [
     'あなたはミア。イーロンの広報担当をモデルにした架空の若手女性の編集責任者。実在の所属や本人の代弁ではない。',
     '確定済みの3人の意見を受けて、自分の編集が話を当たり前に薄めていないか見直す。採用案・退ける案と理由、編集方向を短く確定する。完成稿はまだ生成しない。',
     'questions/turnでは次に聞くべき不足1点を決め、anchors=[]、no_material=false。',
     'draftsでは本人回答のどの表現を消すと面白さが失われるか選ぶ。各anchorsはqiと回答に完全一致する80字以内の核の引用、選択理由、採用候補者への手掛かり。手掛かりがない趣味は「人間味、採用接点なし」でよい。',
     '核の引用には必要な留保（予定・目指す・かもしれない）や、意外な比喩・判断の違いを含める。一般的な単語だけを核にしない。核は投稿にそのまま残せる短さにする。長い回答の独立した発見は複数anchorsで残し、directionで分割と長文それぞれの得失をリナへ伝える。',
     '一般論しかない回答は0案、全体で素材がなければno_material=true、anchors=[]。単に短いという理由で落とさない。',
-  ].join('\n'), JSON.stringify({ stage: stage, material: material, final_debate: debate, sources: sources || [] }) +
-    '\nJSON: {"adopt":"採用と理由","reject":"不採用と理由","direction":"編集方針","question_focus":"聞く一点または十分な理由","no_material":false,"anchors":[{"qi":1,"quote":"回答原文の核","reason":"何が意外・固有か","hiring_signal":"候補者に何が見えるか"}]}',
-    3000, { purpose: purpose });
-  if (!validateEditorialReflection(reflection, sources)) throw new Error('広報内省の形式または回答引用が不正です。生成を止めました');
+    '厳密な形式制約: adoptは1〜400字、rejectは1〜400字、directionは1〜600字、question_focusは1〜300字。no_materialはboolean。',
+    'anchorsは全体で最大6件。回答が10問以上でも各問から必ず選ばず、最も固有な核を選ぶ。各quoteは1〜80字の連続した回答原文を完全にコピーする。句読点・改行・語尾を変えず、省略記号や言い換えを挟まない。reason/hiring_signalは各1〜250字。qiとquoteの重複は禁止。',
+  ].join('\n');
+  var reflectionInput = JSON.stringify({ stage: stage, material: material, final_debate: debate, sources: sources || [] });
+  var reflectionSchema = '\nJSON: {"adopt":"採用と理由","reject":"不採用と理由","direction":"編集方針","question_focus":"聞く一点または十分な理由","no_material":false,"anchors":[{"qi":1,"quote":"回答原文の核","reason":"何が意外・固有か","hiring_signal":"候補者に何が見えるか"}]}';
+  var reflection = askClaudeJson(reflectionSystem, reflectionInput + reflectionSchema, 3000, { purpose: purpose });
+  var problems = editorialReflectionErrors(reflection, sources);
+  if (problems.length) {
+    logEvent('editorial_reflection_invalid', JSON.stringify({ context_id: contextId || '', stage: stage, attempt: 1, errors: problems }));
+    // 修復と本文生成の時間を確保できるときだけ、同じ一次資料で一度修復する。
+    if (editorialHasTime(120000)) {
+      reflection = askClaudeJson(reflectionSystem, reflectionInput + '\n前回の検証結果: ' + JSON.stringify(problems) +
+        '\n前回の内省（事実の根拠ではない）: ' + JSON.stringify(reflection) +
+        '\n不正項目を直して内省全体を返す。原文を編集して引用へ合わせない。件数超過は重要な核を最大6件に選び直す。' + reflectionSchema,
+        3000, { purpose: purpose });
+      problems = editorialReflectionErrors(reflection, sources);
+      if (problems.length) logEvent('editorial_reflection_invalid', JSON.stringify({ context_id: contextId || '', stage: stage, attempt: 2, errors: problems }));
+    }
+    if (problems.length) throw new Error('広報内省の検証に失敗しました（' + problems.join(', ') + '）。' +
+      (sources ? '回答は保存済み、本文生成は未実行です' : '質問・応答の生成は未実行です'));
+  }
   if (Date.now() - started > 180000) throw new Error('編集内省が時間上限に達しました。生成は未実行です');
   var brief = { version: EDITORIAL_COUNCIL_VERSION, stage: stage, debate: debate, reflection: reflection };
   logEvent('editorial_council', JSON.stringify({ context_id: contextId || '', brief: brief }));

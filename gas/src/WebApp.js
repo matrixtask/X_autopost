@@ -210,19 +210,21 @@ function api_listPosts(token) {
   return JSON.stringify(rows);
 }
 
-function api_setStatus(token, id, status) {
+function api_setStatus(token, id, status, reason) {
   assertAccess(token);
   var allowed = [STATUS.APPROVED, STATUS.REJECTED, STATUS.READY, STATUS.STOCK];
   if (allowed.indexOf(status) < 0) throw new Error('不正なステータス: ' + status);
   var updates = { status: status };
   if (status !== STATUS.SCHEDULED) updates.scheduled_at = '';
+  if (typeof archiveWebStock === 'function') archiveWebStock(id, 'unknown', 'before_user_status');
   updateStockById(id, updates);
+  if (typeof archiveWebStock === 'function') archiveWebStock(id, 'user', 'status_changed', reason);
   logEvent('webapp_status', id + ' -> ' + status);
   try { syncStockRowToNotion(id); } catch (e) { logEvent('notion_error', id + ': ' + e); }
   return 'ok';
 }
 
-function api_updateText(token, id, text) {
+function api_updateText(token, id, text, reason) {
   assertAccess(token);
   var t = String(text || '').trim();
   if (!t) throw new Error('本文が空です');
@@ -234,11 +236,13 @@ function api_updateText(token, id, text) {
   var shouldRescore = rescoreTargets.indexOf(String(row.status)) >= 0 ||
     (row.edit_meta && [STATUS.APPROVED, STATUS.SCHEDULED, STATUS.FAILED].indexOf(String(row.status)) >= 0);
 
+  if (typeof tryArchiveEditorialRows === 'function') tryArchiveEditorialRows([row], 'unknown', 'before_user_edit');
   updateStockById(id, shouldRescore
     ? { text: t, status: STATUS.DRAFT, score: '', score_reason: '', scheduled_at: '',
       outcome_axes: '', outcome_text: '', outcome_scored_at: '', outcome_metrics: '', editorial_review: '', edit_review: '' }
     : { text: t });
   logEvent('webapp_edit', id);
+  if (typeof archiveWebStock === 'function') archiveWebStock(id, 'user', 'text_edited', reason);
 
   var message = '保存しました';
   if (shouldRescore) {
@@ -450,9 +454,13 @@ function api_forceApproveStock(token) {
   if (!rows.length) return '対象がありません（保留ストック・承認待ちが0件）';
 
   // updateStockById は1件ごとに全行を読み直すので、行番号直指定で一括更新する
+  if (typeof tryArchiveEditorialRows === 'function') tryArchiveEditorialRows(rows, 'unknown', 'before_user_status');
   setColumnByRows(SHEET.STOCK, 'status', rows.map(function (r) {
     return { row: r._row, value: STATUS.APPROVED };
   }));
+  if (typeof tryArchiveEditorialRows === 'function') tryArchiveEditorialRows(rows.map(function (r) {
+    return Object.assign({}, r, { status: STATUS.APPROVED });
+  }), 'user', 'force_approved');
   rows.forEach(function (r) {
     try { syncStockRowToNotion(r.id); } catch (e) { logEvent('notion_error', r.id + ': ' + e); }
   });
@@ -471,10 +479,14 @@ function api_approveAll(token) {
     return String(r.status) === STATUS.READY;
   });
   if (!readyRows.length) return '承認待ちが0件です';
+  if (typeof tryArchiveEditorialRows === 'function') tryArchiveEditorialRows(readyRows, 'unknown', 'before_user_status');
   readyRows.forEach(function (r) {
     updateStockById(r.id, { status: STATUS.APPROVED });
     try { syncStockRowToNotion(r.id); } catch (e) { logEvent('notion_error', r.id + ': ' + e); }
   });
+  if (typeof tryArchiveEditorialRows === 'function') tryArchiveEditorialRows(readyRows.map(function (r) {
+    return Object.assign({}, r, { status: STATUS.APPROVED });
+  }), 'user', 'approved');
   logEvent('webapp_approve_all', readyRows.length + '件を一括承認');
   return readyRows.length + '件を承認しました。「予約実行」で枠に割り当てられます';
 }

@@ -65,6 +65,7 @@ function generateEditedDrafts(sessionId, qa, brief) {
     g.parts.forEach(function (part, i) {
       rows.push({ id: newId('p'), created_at: fmtDateTime(nowJst()), theme: String(g.source.theme || ''),
         category: String(g.source.category || ''), session_id: sessionId, source_idx: String(g.source.idx),
+        source_revision_ids: g.source.article_source_revision_ids || '[]',
         text: part.text, status: STATUS.DRAFT, score: '', score_reason: '',
         post_format: g.format, edit_group: groupId, part_index: String(i + 1), part_count: String(g.parts.length),
         edit_reason: g.reason + '\n他の形式との比較: ' + g.tradeoff + (g.omitted ? '\n省いた材料: ' + g.omitted : ''),
@@ -77,6 +78,7 @@ function generateEditedDrafts(sessionId, qa, brief) {
   var existing = readTable(SHEET.STOCK).filter(function (r) { return String(r.session_id) === sessionId && r.edit_meta; });
   if (existing.length) return existing.map(function (r) { return { id: String(r.id), text: String(r.text) }; });
   if (rows.length) appendRowsObj(SHEET.STOCK, rows);
+  if (typeof tryArchiveEditorialRows === 'function') tryArchiveEditorialRows(rows, 'model', 'generated');
   rows.forEach(function (r) {
     try { syncStockRowToNotion(r.id); } catch (e) { logEvent('notion_error', r.id + ': ' + e); }
   });

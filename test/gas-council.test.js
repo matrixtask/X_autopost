@@ -46,7 +46,7 @@ test('council: questions wait for distinct final positions and Mia reflection, t
   assert.deepEqual(calls.map(c => c.kind), ['json', 'json', 'json']);
   assert.ok(calls.every(c => c.purpose === 'interview'));
   assert.match(calls[0].system, /hannibal（ハンニバル）.*敗北.*内省.*方針転換条件/);
-  assert.equal(JSON.parse(logs[0][1]).brief.version, 'council-v3');
+  assert.equal(JSON.parse(logs[0][1]).brief.version, 'council-v4');
   assert.match(calls[1].input, /final_debate.*確定0.*確定1.*確定2/);
   assert.match(calls[2].input, /後付けの教訓は使わない/);
   assert.doesNotMatch(calls[2].system, /価値がゼロ/);
@@ -61,9 +61,48 @@ test('council: duplicate personas, missing objections and ungrounded quotes stop
     if (invalid === 'duplicate') d.opinions[1].persona = 'rei';
     if (invalid === 'missing') d.opinions[1].challenge = '';
     responses.push(d, reflection([{ qi: 1, quote: '創作した事実', reason: '面白い', hiring_signal: '仕事の実像' }]));
-    assert.throws(() => ctx.prepareEditorialCouncil('drafts', {}, 'generate', [{ qi: 1, answer: '本人の回答' }]), /生成を止めました/);
-    assert.equal(calls.length, invalid === 'quote' ? 2 : 1);
+    responses.push(reflection([{ qi: 1, quote: '創作した事実', reason: '面白い', hiring_signal: '仕事の実像' }]));
+    assert.throws(() => ctx.prepareEditorialCouncil('drafts', {}, 'generate', [{ qi: 1, answer: '本人の回答' }]), /生成を止めました|quote.not_in_answer/);
+    assert.equal(calls.length, invalid === 'quote' ? 3 : 1);
   }
+});
+
+test('council: ten answers with ten valid quotes repair to at most six, without altering sources', () => {
+  const { ctx, calls, logs, responses } = setup();
+  const sources = Array.from({ length: 10 }, (_, i) => ({ qi: i + 1, answer: `試験${i}はまだ予定です。` }));
+  const anchors = sources.map(s => ({ qi: s.qi, quote: s.answer, reason: '未実施の留保', hiring_signal: '判断条件' }));
+  responses.push(debate(), reflection(anchors), reflection(anchors.slice(0, 6)));
+  const brief = ctx.prepareEditorialCouncil('drafts', {}, 'generate', sources, 's');
+  assert.equal(brief.reflection.anchors.length, 6);
+  assert.equal(calls.length, 3);
+  assert.match(calls[1].system, /全体で最大6件/);
+  assert.match(calls[2].input, /anchors.max_6/);
+  assert.deepEqual(JSON.parse(logs[0][1]).errors, ['anchors.max_6']);
+  assert.doesNotMatch(logs[0][1], /試験0/);
+  assert.equal(sources[0].answer, '試験0はまだ予定です。');
+});
+
+test('council: semantic repair is skipped when insufficient shared time remains', () => {
+  const { ctx, calls, responses } = setup();
+  ctx.EDITORIAL_EXECUTION_DEADLINE = Date.now() + 110000;
+  responses.push(debate(), reflection([{ qi: 1, quote: '完了', reason: '判断', hiring_signal: '仕事' }]));
+  assert.throws(() => ctx.prepareEditorialCouncil('drafts', {}, 'generate', [{ qi: 1, answer: 'まだ予定' }]), /quote.not_in_answer/);
+  assert.equal(calls.length, 2);
+});
+
+test('council: diagnostics distinguish metadata, wrong source, fabricated and duplicate quotes', () => {
+  const { ctx } = setup();
+  const anchor = { qi: 1, quote: 'まだ予定', reason: '判断', hiring_signal: '仕事' };
+  const value = { ...reflection([anchor, anchor, { ...anchor, qi: 99 }, { ...anchor, quote: '実施済み' }]), direction: 'あ'.repeat(601) };
+  const errors = Array.from(ctx.editorialReflectionErrors(value, [{ qi: 1, answer: 'まだ予定です' }]));
+  assert.deepEqual(errors, ['direction.required_max_600', 'anchors[1].duplicate', 'anchors[2].qi.unknown', 'anchors[3].quote.not_in_answer']);
+});
+
+test('council: the reflection transport error is not handled as a semantic repair', () => {
+  const { ctx, calls, responses } = setup();
+  responses.push(debate(), new Error('API unavailable'));
+  assert.throws(() => ctx.prepareEditorialCouncil('questions', {}, 'interview'), /API unavailable/);
+  assert.equal(calls.length, 2);
 });
 
 test('council: draft core must survive verbatim, with its uncertainty and correct source', () => {
