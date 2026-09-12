@@ -284,6 +284,8 @@
       var meta = [
         '<span class="badge b-' + p.status + '">' + (STATUS_LABEL[p.status] || p.status) + '</span>',
         p.category ? '<span>' + (CATEGORY_LABEL[p.category] || esc(p.category)) + '</span>' : '',
+        p.format_label ? '<span>' + esc(p.format_label) + '</span>' : '',
+        p.edit_group ? '<span>' + esc(p.created_at.slice(0, 10) + ' 回答Q' + p.source_idx + '・' + p.theme) + '</span>' : '',
         p.score !== null ? '<span>' + (p.score_version === 'outcome-v1' ? '新5軸・参考値 ' : '旧スコア ') + p.score + '</span>' : '',
         p.scheduled_at ? '<span>予約 ' + esc(p.scheduled_at) + '</span>' : '',
         p.posted_at ? '<span>投稿 ' + esc(p.posted_at) + '</span>' : '',
@@ -302,6 +304,8 @@
       return (
         '<div class="card" id="card-' + p.id + '">' +
         '<div class="meta">' + meta + '</div>' +
+        (p.edit_reason ? '<div class="reason">編集判断: ' + esc(p.edit_reason) + '</div>' : '') +
+        (p.publish_note ? '<div class="reason">予約前の確認: ' + esc(p.publish_note) + '</div>' : '') +
         '<div class="body-text" id="text-' + p.id + '">' + esc(p.text) +
         (p.has_media ? ' <span title="投稿時に画像が添付されます">🖼</span>' : '') + '</div>' +
         '<div id="editor-' + p.id + '" style="display:none">' +

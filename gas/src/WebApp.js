@@ -191,6 +191,12 @@ function api_listPosts(token) {
       theme: String(r.theme),
       category: String(r.category),
       text: String(r.text),
+      post_format: String(r.post_format || 'single'),
+      format_label: stockFormatLabel(r),
+      edit_group: String(r.edit_group || ''),
+      source_idx: String(r.source_idx || ''),
+      edit_reason: String(r.edit_reason || ''),
+      publish_note: stockPublishingProblem(r),
       score: r.score === '' ? null : Number(r.score),
       score_version: String(r.score_version || ''),
       score_reason: r.score_version === OUTCOME_SCORE_VERSION ? outcomeReviewFeedback(r) : String(r.score_reason || ''),
@@ -220,14 +226,17 @@ function api_updateText(token, id, text) {
   assertAccess(token);
   var t = String(text || '').trim();
   if (!t) throw new Error('本文が空です');
-  if (!fitsInTweet(t)) throw new Error('長すぎます（280重み超過）。現在: ' + weightedTweetLength(t));
-
   var row = readTable(SHEET.STOCK).filter(function (r) { return String(r.id) === String(id); })[0];
+  if (!row) throw new Error('下書きが見つかりません');
+  if (!fitsStockText(row, t)) throw new Error('長すぎます（' + (row.post_format === 'long' ? '長文は4000文字以内' : '短文は280重み以内') + '）');
   var rescoreTargets = [STATUS.DRAFT, STATUS.STOCK, STATUS.READY];
-  var shouldRescore = row && rescoreTargets.indexOf(String(row.status)) >= 0;
+  // 編集済み案は承認・予約後の本文変更でも承認を解除し、全文審査をやり直す。
+  var shouldRescore = rescoreTargets.indexOf(String(row.status)) >= 0 ||
+    (row.edit_meta && [STATUS.APPROVED, STATUS.SCHEDULED, STATUS.FAILED].indexOf(String(row.status)) >= 0);
 
   updateStockById(id, shouldRescore
-    ? { text: t, status: STATUS.DRAFT, score: '', score_reason: '' } // 編集分は再採点にかける
+    ? { text: t, status: STATUS.DRAFT, score: '', score_reason: '', scheduled_at: '',
+      outcome_axes: '', outcome_text: '', outcome_scored_at: '', outcome_metrics: '', editorial_review: '', edit_review: '' }
     : { text: t });
   logEvent('webapp_edit', id);
 

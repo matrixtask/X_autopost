@@ -26,7 +26,7 @@ function outcomeReviewFeedback(row) {
   if (review.fidelity === 'confirm') reasons.push('本人の回答との照合');
   if (review.privacy === 'hold') reasons.push('公開してよい情報か');
   if (review.focus === 'off_topic') reasons.push('本人・テトラ中心の話になっているか');
-  if (!fitsInTweet(String(row.text || ''))) reasons.push('文字数');
+  if (!fitsStockText(row)) reasons.push('文字数');
   var note = String(review.review_note || '').trim();
   if (reasons.length && !note) {
     return 'AIの判定: ' + reasons.join('・') + '\n' +
@@ -138,31 +138,44 @@ function outcomeSourceForRow(row, interviews) {
 /** 点数は参考。編集条件を満たす案は人の承認待ちへ。自動承認・点数リライトはしない。 */
 function runOutcomeQualityGate(repairRows) {
   ensureHeaders(SHEET.STOCK);
-  var drafts = Array.isArray(repairRows) ? repairRows : readTable(SHEET.STOCK).filter(function (r) { return String(r.status) === STATUS.DRAFT; });
+  var stock = readTable(SHEET.STOCK);
+  var drafts = Array.isArray(repairRows) ? repairRows : stock.filter(function (r) { return String(r.status) === STATUS.DRAFT; });
   if (!drafts.length) return { scored: 0, passed: 0 };
   var interviews = readTable(SHEET.INTERVIEWS);
   var total = { scored: 0, passed: 0 };
   var started = Date.now();
-  for (var i = 0; i < drafts.length && Date.now() - started < 240000; i += 4) {
-    var batch = drafts.slice(i, i + 4);
+  for (var i = 0; i < drafts.length && Date.now() - started < 240000;) {
+    // 全文と分割兄弟を読む新編集案は1件ずつ。旧案は従来どおり4件まで。
+    var size = drafts[i].edit_meta ? 1 : 4;
+    var batch = drafts.slice(i, i + size);
+    var firstEdited = batch.findIndex(function (r) { return !!r.edit_meta; });
+    if (firstEdited > 0) batch = batch.slice(0, firstEdited);
+    i += batch.length;
     var input = batch.map(function (d) {
       var source = outcomeSourceForRow(d, interviews);
       // 切り捨てた資料で「整合」と判断させない。長い資料は人の確認へ。
-      return { id: String(d.id), text: String(d.text || ''), source: source.length <= 12000 ? source : '' };
+      var input = { id: String(d.id), text: String(d.text || ''), source: source.length <= 12000 ? source : '' };
+      if (d.edit_meta) {
+        input.edit = { format: d.post_format, reason: d.edit_reason, part_index: d.part_index, part_count: d.part_count };
+        input.siblings = stock.filter(function (r) { return r.edit_group && r.edit_group === d.edit_group; })
+          .map(function (r) { return { id: String(r.id), text: String(r.text), part_index: r.part_index }; });
+      }
+      return input;
     });
     logEvent('outcome_sources', JSON.stringify(input.map(function (r, j) {
       return { id: r.id, source_idx: batch[j].source_idx, source_chars: r.source.length };
     })));
-    var result = askClaudeJsonSalvageable(outcomeScoringPrompt(), JSON.stringify(input) + outcomeReviewSchema(),
+    var compositionPrompt = batch[0].edit_meta ? compositionReviewPrompt() : '';
+    var result = askClaudeJsonSalvageable(outcomeScoringPrompt() + compositionPrompt, JSON.stringify(input) + outcomeReviewSchema(),
       6000, { purpose: 'score' });
     var retry = input.filter(function (r) {
       var value = result && result[r.id], review = validateOutcomeReview(value, r.text);
-      return review && !validateOutcomeIssues(review, value, r);
+      return review && (!validateOutcomeIssues(review, value, r) || (r.edit && !validateCompositionReview(value.composition, r.text)));
     });
     // JSON再試行とは別に、説明の欠損を一度だけ修復。本人には追加回答を求めない。
     if (retry.length && Date.now() - started < 180000) {
       logEvent('outcome_review_retry', retry.map(function (r) { return r.id; }).join(','));
-      var repaired = askClaudeJsonSalvageable(outcomeScoringPrompt(),
+      var repaired = askClaudeJsonSalvageable(outcomeScoringPrompt() + compositionPrompt,
         JSON.stringify(retry) + '\n前回は要確認フラグに具体的な指摘がなく不受理。回答と本文を再照合し、問題がなければsupported/clear/aligned、問題があれば該当箇所と理由と対応を返す。' + outcomeReviewSchema(),
         6000, { purpose: 'score' });
       retry.forEach(function (r) { result[r.id] = repaired && repaired[r.id]; });
@@ -171,16 +184,26 @@ function runOutcomeQualityGate(repairRows) {
       // API待機中の本人編集・承認を、古い本文の評価で上書きしない。
       var current = readTable(SHEET.STOCK).filter(function (r) { return String(r.id) === String(d.id); })[0];
       if (!current || current.text !== d.text || current.status !== d.status || current.editorial_review !== d.editorial_review ||
-          current.source_idx !== d.source_idx || current.session_id !== d.session_id) {
+          current.source_idx !== d.source_idx || current.session_id !== d.session_id || current.edit_meta !== d.edit_meta ||
+          current.post_format !== d.post_format || current.edit_review !== d.edit_review) {
         logEvent('outcome_changed', String(d.id));
         return;
       }
+      if (input[j].siblings) {
+        var currentSiblings = readTable(SHEET.STOCK).filter(function (r) { return r.edit_group && r.edit_group === d.edit_group; })
+          .map(function (r) { return { id: String(r.id), text: String(r.text), part_index: r.part_index }; });
+        if (JSON.stringify(currentSiblings) !== JSON.stringify(input[j].siblings)) {
+          logEvent('outcome_changed', String(d.id) + ': 分割案が審査中に変更されました');
+          return;
+        }
+      }
       var text = String(d.text || '');
       var review = validateOutcomeReview(result && result[String(d.id)], text);
-      if (!review || !validateOutcomeIssues(review, result[String(d.id)], input[j])) {
+      var composition = d.edit_meta ? validateCompositionReview(result && result[String(d.id)] && result[String(d.id)].composition, text) : null;
+      if (!review || !validateOutcomeIssues(review, result[String(d.id)], input[j]) || (d.edit_meta && !composition)) {
         // 再実行可能なdraftのまま。以前の本文の点数を表示しない。
         updateStockById(d.id, { score: '', score_reason: '評価形式が不正。再評価待ち', score_version: OUTCOME_SCORE_VERSION,
-          axes: '', outcome_axes: '', outcome_text: '', outcome_scored_at: '', outcome_metrics: '', editorial_review: '', status: STATUS.DRAFT });
+          axes: '', outcome_axes: '', outcome_text: '', outcome_scored_at: '', outcome_metrics: '', editorial_review: '', edit_review: '', status: STATUS.DRAFT });
         logEvent('outcome_invalid', String(d.id));
         return;
       }
@@ -195,13 +218,15 @@ function runOutcomeQualityGate(repairRows) {
         review.focus = 'off_topic';
         review.review_note += (review.review_note ? '\n' : '') + '本文またはテーマに、取り上げない指定の堀江さんの話題が含まれています。本人・テトラの経験を中心に組み直してください。';
       }
-      if (!fitsInTweet(text)) review.review_note += (review.review_note ? '\n' : '') + '本文がXの文字数上限を超えています。本文を短くしてください。';
-      var pass = review.fidelity === 'supported' && review.privacy === 'clear' && review.focus === 'aligned' && !!text.trim() && fitsInTweet(text);
+      if (!fitsStockText(d)) review.review_note += (review.review_note ? '\n' : '') + '選択した投稿形式の文字数上限を超えています。留保を切らずに構成を見直してください。';
+      if (composition && !composition.passed) review.review_note += (review.review_note ? '\n' : '') + composition.feedback;
+      var pass = review.fidelity === 'supported' && review.privacy === 'clear' && review.focus === 'aligned' && fitsStockText(d) && (!composition || composition.passed);
       var conditions = [];
       if (review.fidelity !== 'supported') conditions.push('本人の回答との照合が必要');
       if (review.privacy !== 'clear') conditions.push('公開してよい情報か確認');
       if (review.focus !== 'aligned') conditions.push('本人・テトラ中心のテーマへ見直す');
-      if (!fitsInTweet(text)) conditions.push('文字数の確認');
+      if (!fitsStockText(d)) conditions.push('文字数の確認');
+      if (composition && !composition.passed) conditions.push('構成・全文の編集審査で見直し');
       var reason = '新5軸・参考値（成果は未検証） / ' +
         OUTCOME_AXES.map(function (a) { return a.label + review.axes[a.key].score + '/4'; }).join('・') +
         ' / ' + (pass ? '資料照合済み・本人の承認待ち' : conditions.join('・')) +
@@ -209,7 +234,8 @@ function runOutcomeQualityGate(repairRows) {
       updateStockById(d.id, { score: outcomeReferenceScore(review.axes), score_reason: reason,
         score_version: OUTCOME_SCORE_VERSION, outcome_axes: JSON.stringify(review.axes),
         outcome_text: text, outcome_scored_at: fmtDateTime(nowJst()), outcome_metrics: '',
-        editorial_review: JSON.stringify(review), axes: '', status: pass ? STATUS.READY : STATUS.STOCK });
+        editorial_review: JSON.stringify(review), edit_review: composition ? JSON.stringify(composition.review) : '',
+        axes: '', status: pass ? STATUS.READY : STATUS.STOCK });
       total.scored++;
       if (pass) total.passed++;
       try { syncStockRowToNotion(d.id); } catch (e) { logEvent('notion_error', String(d.id)); }

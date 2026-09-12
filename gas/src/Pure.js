@@ -34,6 +34,20 @@ function fitsInTweet(text) {
   return weightedTweetLength(text) <= 280;
 }
 
+/** 長文の編集上限は4000コードポイント。Xの上限とは別に費用・読みやすさを制御する。 */
+function fitsStockText(row, text) {
+  var t = String(text === undefined ? row.text || '' : text);
+  var format = String(row.post_format || 'single');
+  if (['single', 'split', 'long'].indexOf(format) < 0 || !t.trim()) return false;
+  return format === 'long' ? Array.from(t).length <= 4000 : fitsInTweet(t);
+}
+
+function stockFormatLabel(row) {
+  if (row.post_format === 'long') return '長文1本';
+  if (row.post_format === 'split') return '独立した分割ポスト ' + row.part_index + '/' + row.part_count;
+  return '短文1本';
+}
+
 /**
  * LLMの返答からJSONを寛容に取り出す。```json フェンスや前後の文を無視する。
  */

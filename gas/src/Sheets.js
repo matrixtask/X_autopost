@@ -4,7 +4,7 @@
 
 var SHEET_HEADERS = {
   // inferred_question: 手動投稿から逆算した「この投稿を引き出せたであろう質問」
-  Stock: ['id', 'created_at', 'theme', 'category', 'session_id', 'text', 'score', 'score_reason', 'status', 'scheduled_at', 'posted_at', 'tweet_id', 'notion_page_id', 'impressions', 'likes', 'retweets', 'replies', 'metrics_at', 'refines', 'promoted', 'paid_impressions', 'profile_clicks', 'link_clicks', 'axes', 'inferred_question', 'media_url', 'media_type', 'metrics_age_h', 'source_idx', 'score_version', 'outcome_axes', 'outcome_text', 'outcome_scored_at', 'outcome_metrics', 'editorial_review'],
+  Stock: ['id', 'created_at', 'theme', 'category', 'session_id', 'text', 'score', 'score_reason', 'status', 'scheduled_at', 'posted_at', 'tweet_id', 'notion_page_id', 'impressions', 'likes', 'retweets', 'replies', 'metrics_at', 'refines', 'promoted', 'paid_impressions', 'profile_clicks', 'link_clicks', 'axes', 'inferred_question', 'media_url', 'media_type', 'metrics_age_h', 'source_idx', 'score_version', 'outcome_axes', 'outcome_text', 'outcome_scored_at', 'outcome_metrics', 'editorial_review', 'post_format', 'edit_group', 'part_index', 'part_count', 'edit_reason', 'edit_meta', 'edit_review'],
   // media_url / media_type: 回答に添付された画像。下書き経由で投稿時にXへ添付する
   Interviews: ['session_id', 'thread_ts', 'idx', 'theme', 'category', 'question', 'answer', 'answered_at', 'status', 'media_url', 'media_type', 'followup_question', 'followup_answer', 'followup_answered_at'],
   // weight は実績から自動更新される。base_weight は手で決めた初期値で、

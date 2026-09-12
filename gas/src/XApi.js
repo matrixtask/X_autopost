@@ -125,6 +125,12 @@ function postTick() {
 
   due.forEach(function (post) {
     var text = String(post.text);
+    var problem = stockPublishingProblem(post);
+    if (problem) {
+      updateStockById(post.id, { status: STATUS.APPROVED, scheduled_at: '' });
+      logEvent('post_blocked', post.id + ': ' + problem);
+      return;
+    }
     var hasMedia = String(post.media_url || '').trim() !== '';
     if (isDryRun()) {
       updateStockById(post.id, { status: STATUS.POSTED, posted_at: now, tweet_id: 'dry-run' });
