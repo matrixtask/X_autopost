@@ -19,6 +19,11 @@ function generateDraftsFromInterview(sessionId) {
     return [];
   }
 
+  // 長い回答は短文2案の枠へ押し込まず、独立した分割か一続きの長文かを編集する。
+  if (councilSources.some(function (s) { return !fitsInTweet(s.answer); })) {
+    return generateEditedDrafts(sessionId, qa, brief);
+  }
+
   var system = buildStylePrompt() + editorialCouncilInstructions(brief);
   var user = [
     '以下は本人へのインタビューの記録です。回答の言葉づかいをできるだけ活かして、',

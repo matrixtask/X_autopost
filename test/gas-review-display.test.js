@@ -5,7 +5,7 @@ import vm from 'node:vm';
 
 function setup() {
   const ctx = vm.createContext({});
-  for (const file of ['Pure', 'OutcomeQuality', 'Interview', 'WebApp']) {
+  for (const file of ['Pure', 'PostComposition', 'OutcomeQuality', 'Interview', 'WebApp']) {
     vm.runInContext(readFileSync(new URL(`../gas/src/${file}.js`, import.meta.url), 'utf8'), ctx);
   }
   ctx.STATUS = { DRAFT: 'draft', STOCK: 'stock', READY: 'ready', APPROVED: 'approved', SCHEDULED: 'scheduled' };

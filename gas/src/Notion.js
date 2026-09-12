@@ -34,7 +34,7 @@ function buildNotionProperties(row) {
   var properties = {
     Name: { title: [{ text: { content: text.slice(0, 60) || '(本文なし)' } }] },
     Status: { select: { name: String(row.status || 'draft') } },
-    Body: { rich_text: [{ text: { content: text.slice(0, 1900) } }] },
+    Body: { rich_text: notionTextChunks(text) },
   };
   if (row.category) properties.Category = { select: { name: String(row.category) } };
   if (row.score !== '' && row.score !== null && row.score !== undefined) {
@@ -43,6 +43,17 @@ function buildNotionProperties(row) {
   if (row.scheduled_at) properties.Scheduled = { date: { start: toIsoJst(String(row.scheduled_at)) } };
   if (row.posted_at) properties.Posted = { date: { start: toIsoJst(String(row.posted_at)) } };
   return properties;
+}
+
+/** rich_text一要素の上限を守り、サロゲートペアを切らずに全文を保持する。 */
+function notionTextChunks(text) {
+  var chunks = [], current = '';
+  Array.from(String(text)).forEach(function (char) {
+    if (current.length + char.length > 1900) { chunks.push({ text: { content: current } }); current = ''; }
+    current += char;
+  });
+  if (current || !chunks.length) chunks.push({ text: { content: current } });
+  return chunks;
 }
 
 function toIsoJst(ymdhm) {

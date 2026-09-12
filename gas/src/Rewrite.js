@@ -14,7 +14,8 @@ function rewriteUnpostedDrafts(includeApproved) {
   if (includeApproved) targetStatuses.push(STATUS.APPROVED, STATUS.SCHEDULED);
 
   var targets = readTable(SHEET.STOCK).filter(function (r) {
-    return targetStatuses.indexOf(String(r.status)) >= 0 && String(r.text).trim();
+    // リナの編集構成を短文専用リライトで破壊しない。管理画面の編集は全文で再審査する。
+    return !r.edit_meta && r.post_format !== 'long' && targetStatuses.indexOf(String(r.status)) >= 0 && String(r.text).trim();
   });
   if (!targets.length) return '対象がありません（未投稿の draft / stock / ready が0件）';
 

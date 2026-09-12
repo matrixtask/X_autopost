@@ -264,12 +264,15 @@ function measureScoringReliability(sampleSize) {
 
 function runQualityGate() {
   if (useOutcomeQuality()) return runOutcomeQualityGate();
+  // 新編集案にはlegacyの自動承認・短文評価を適用しない。
+  var edited = readTable(SHEET.STOCK).filter(function (r) { return String(r.status) === STATUS.DRAFT && r.edit_meta; });
+  var editedResult = edited.length ? runOutcomeQualityGate(edited) : { scored: 0, passed: 0 };
   var drafts = readTable(SHEET.STOCK).filter(function (r) {
-    return String(r.status) === STATUS.DRAFT;
+    return String(r.status) === STATUS.DRAFT && !r.edit_meta;
   });
   if (!drafts.length) {
     logEvent('quality_gate', '採点対象なし');
-    return { scored: 0, passed: 0 };
+    return editedResult;
   }
 
   ensureHeaders(SHEET.STOCK);
@@ -304,7 +307,7 @@ function runQualityGate() {
   });
 
   logEvent('quality_gate', '採点' + drafts.length + '件 / 合格' + passed + '件（閾値' + threshold + '）');
-  return { scored: drafts.length, passed: passed };
+  return { scored: drafts.length + editedResult.scored, passed: passed + editedResult.passed };
 }
 
 /**
@@ -638,7 +641,7 @@ function refineFailedDrafts(force) {
   ensureHeaders(SHEET.STOCK);
   var maxRefines = Number(getProp('REFINE_ROUNDS', '2'));
   var targets = readTable(SHEET.STOCK).filter(function (r) {
-    if (String(r.status) !== STATUS.STOCK) return false;
+    if (String(r.status) !== STATUS.STOCK || r.edit_meta || r.post_format === 'long') return false;
     return force || Number(r.refines || 0) < maxRefines;
   }).slice(0, 10);
   if (!targets.length) return 0;

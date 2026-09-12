@@ -1,5 +1,7 @@
 # セットアップガイド（Google Apps Script版）
 
+**2026-09-12 長文回答の編集:** [仕様](../docs/long-answer-editing.md)。リナが独立した分割・長文1本・短文1本を選び、全文を保存します。生成前の3者＋ミアに加え、編集後の構成も審査し、人の承認を待ちます。新規 **PostComposition.gs** は内部処理で手動実行不要。`./deploy.sh` でA/B両方を更新すると次の生成から適用。新列は自動追加。長文利用可能はユーザー確認済みで、`X_LONG_POSTS_ENABLED` は既定trueです。
+
 **2026-09-11 生成前の編集会議:** [仕様](../docs/editorial-council.md)。初回質問・会話応答・回答からの投稿生成を「3人格の確定意見→ミアの内省→生成」の3段階に変更しました。本文に回答原文の核を残し、機械的な末尾切断を止めます。新規 **EditorialCouncil.gs**（[`gas/src/EditorialCouncil.js`](src/EditorialCouncil.js)）は内部処理で手動実行不要。`./deploy.sh` でA・B両デプロイを更新すると次の生成から適用。会議記録は既存Logの `editorial_council`。API料金と待ち時間が増え、時間不足時は採点を夜へ回します。
 
 所要時間の目安: 30〜45分。上から順に進めてください。

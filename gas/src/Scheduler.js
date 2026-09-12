@@ -5,7 +5,7 @@
 function scheduleApprovedPosts() {
   var stock = readTable(SHEET.STOCK);
   var approved = stock
-    .filter(function (r) { return String(r.status) === STATUS.APPROVED; })
+    .filter(function (r) { return String(r.status) === STATUS.APPROVED && !stockPublishingProblem(r); })
     .sort(function (a, b) {
       // 未検証スコアで早い枠を独占させず、承認済み案を作成順に出す。
       if (useOutcomeQuality()) return String(a.created_at || '').localeCompare(String(b.created_at || '')) || String(a.id).localeCompare(String(b.id));

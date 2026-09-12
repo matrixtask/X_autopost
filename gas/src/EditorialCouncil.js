@@ -1,5 +1,5 @@
 /** EditorialCouncil.gs: 架空の3人格の編集会議 → ミアの採否判断 → 生成。 */
-var EDITORIAL_COUNCIL_VERSION = 'council-v2';
+var EDITORIAL_COUNCIL_VERSION = 'council-v3';
 // GASの1実行内で会話・投稿・採点に共有する。APIを中断できないため開始前に余裕を残す。
 var EDITORIAL_EXECUTION_DEADLINE = 0;
 
@@ -66,6 +66,7 @@ function prepareEditorialCouncil(stage, material, purpose, sources, contextId) {
     '読者の予想は仮説。普通はこうだという一般論・逆張り・煽りを創作しない。本人の判断・捨てた案・代償・意外な比喩・未解決を探す。',
     '趣味や笑いはそのまま残し、経営の教訓や採用CTAを足さない。回答にない職務・裁量・会社文化を作らない。',
     '質問は1問1論点。短答を失敗扱いせず、非公開や拒否を深掘りしない。資料不足は生成で補わず取材に戻す。',
+    'draftsで回答が長い場合は、別々に読める複数の発見か、一緒に読むべき背景・転換・結論かを議論する。長さだけで分割せず、独立性・文脈の損失・冒頭と結末の対応を見る。',
     editorialFocusPrompt(),
   ].join('\n');
   var debate = askClaudeJson(shared + '\n' + [
@@ -85,7 +86,7 @@ function prepareEditorialCouncil(stage, material, purpose, sources, contextId) {
     '確定済みの3人の意見を受けて、自分の編集が話を当たり前に薄めていないか見直す。採用案・退ける案と理由、編集方向を短く確定する。完成稿はまだ生成しない。',
     'questions/turnでは次に聞くべき不足1点を決め、anchors=[]、no_material=false。',
     'draftsでは本人回答のどの表現を消すと面白さが失われるか選ぶ。各anchorsはqiと回答に完全一致する80字以内の核の引用、選択理由、採用候補者への手掛かり。手掛かりがない趣味は「人間味、採用接点なし」でよい。',
-    '核の引用には必要な留保（予定・目指す・かもしれない）や、意外な比喩・判断の違いを含める。一般的な単語だけを核にしない。核は投稿にそのまま残せる短さにする。',
+    '核の引用には必要な留保（予定・目指す・かもしれない）や、意外な比喩・判断の違いを含める。一般的な単語だけを核にしない。核は投稿にそのまま残せる短さにする。長い回答の独立した発見は複数anchorsで残し、directionで分割と長文それぞれの得失をリナへ伝える。',
     '一般論しかない回答は0案、全体で素材がなければno_material=true、anchors=[]。単に短いという理由で落とさない。',
   ].join('\n'), JSON.stringify({ stage: stage, material: material, final_debate: debate, sources: sources || [] }) +
     '\nJSON: {"adopt":"採用と理由","reject":"不採用と理由","direction":"編集方針","question_focus":"聞く一点または十分な理由","no_material":false,"anchors":[{"qi":1,"quote":"回答原文の核","reason":"何が意外・固有か","hiring_signal":"候補者に何が見えるか"}]}',

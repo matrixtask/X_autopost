@@ -641,7 +641,11 @@ function updateInterviewRow(sessionId, idx, updates) {
 /** Slackに表示する番号は、この通知内で本文を特定するための番号。 */
 function formatInterviewDraftReview(row, index) {
   var labels = { draft: 'AIの評価待ち', stock: '保留', ready: '承認待ち', approved: '承認済み', scheduled: '予約済み', posted: '投稿済み' };
-  var text = '*下書き' + (index + 1) + '｜' + (labels[String(row.status)] || String(row.status)) + '*\n' + String(row.text || '');
+  var body = String(row.text || '');
+  // 通知の上限で後半を失わないよう、長文はプレビューであることを明記。管理画面は全文。
+  var preview = body.length > 700 ? Array.from(body).slice(0, 500).join('') + '\n［プレビュー。全文は管理画面で確認できます］' : body;
+  var text = '*下書き' + (index + 1) + '｜' + (labels[String(row.status)] || String(row.status)) + '*\n' + preview;
+  if (row.post_format) text += '\n形式: ' + stockFormatLabel(row) + (row.edit_reason ? '\n編集判断: ' + row.edit_reason : '');
   if (row.score_version === OUTCOME_SCORE_VERSION) {
     text += '\n\n' + outcomeReviewFeedback(row);
     if (row.score !== '' && row.score !== undefined) text += '\n参考評価: ' + row.score + '点（合否の基準ではありません）';
@@ -656,6 +660,20 @@ function interviewDraftReviewLocation() {
   var url = getProp('WEBAPP_URL');
   return (url ? '確認・編集: ' + url + '?token=' + getProp('ADMIN_TOKEN') : '確認・編集は、普段お使いの管理画面から行えます。') +
     '\n管理画面の「保留」または「承認待ち」で、上に表示した本文を探してください。未完了の評価は「未採点」にあります。';
+}
+
+/** 本文・審査コメントが増えても通知上限で後続案を落とさない。案の境界で分ける。 */
+function sendInterviewDraftMessages(header, lines, footer, threadTs) {
+  var message = header;
+  lines.concat([footer]).forEach(function (line) {
+    if (message.length + line.length + 2 > 10000 && message) { sendSlack(message, threadTs); message = ''; }
+    // 異常に長い既存コメントにも対応し、サロゲートペアは分断しない。
+    Array.from((message ? '\n\n' : '') + line).forEach(function (char) {
+      if (message.length + char.length > 10000) { sendSlack(message, threadTs); message = ''; }
+      message += char;
+    });
+  });
+  if (message) sendSlack(message, threadTs);
 }
 
 function finishInterview(sessionId, threadTs) {
@@ -721,11 +739,11 @@ function finishInterview(sessionId, threadTs) {
       logEvent('hint_error', String(e).slice(0, 200));
     }
 
-    sendSlack(
+    sendInterviewDraftMessages(
       ':inbox_tray: ' + drafts.length + (scoredNow ? '件をストックし、採点しました' : '件をストックしました。時間予算のため採点は今夜の品質ゲートで行います') +
       (useOutcomeQuality() ? '（新5軸は参考値・承認待ち ' + passed.length + '/' + rows.length + '）'
-        : '（合格 ' + passed.length + '/' + rows.length + '、閾値' + qualityThreshold() + '点）') + '\n\n' +
-      lines.join('\n\n') + hintBlock + '\n\n' + footer,
+        : '（合格 ' + passed.length + '/' + rows.length + '、閾値' + qualityThreshold() + '点）'),
+      lines, hintBlock + '\n\n' + footer,
       threadTs
     );
   } catch (e) {
