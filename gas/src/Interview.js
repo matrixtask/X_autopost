@@ -631,10 +631,12 @@ function updateInterviewRow(sessionId, idx, updates) {
   var sheet = getSheet(SHEET.INTERVIEWS);
   readTable(SHEET.INTERVIEWS).forEach(function (r) {
     if (String(r.session_id) !== sessionId || Number(r.idx) !== idx) return;
+    if (typeof tryArchiveInterviewSources === 'function') tryArchiveInterviewSources([r], 'before_reply_update');
     Object.keys(updates).forEach(function (col) {
       var colIdx = headers.indexOf(col);
       if (colIdx >= 0) sheet.getRange(r._row, colIdx + 1).setValue(updates[col]);
     });
+    if (typeof tryArchiveInterviewSources === 'function') tryArchiveInterviewSources([Object.assign({}, r, updates)], 'reply_saved');
   });
 }
 
@@ -748,8 +750,17 @@ function finishInterview(sessionId, threadTs) {
     );
   } catch (e) {
     logEvent('draft_error', sessionId + ': ' + e);
-    sendSlack(':warning: 下書き生成/採点でエラー: ' + e + '\n下書きが残っていれば今夜の品質ゲートで再処理されます。', threadTs);
+    sendSlack(':warning: 下書き生成/採点でエラー: ' + e + '\n' + interviewFailureRecoveryMessage(sessionId), threadTs);
   }
+}
+
+function interviewFailureRecoveryMessage(sessionId) {
+  var saved;
+  try { saved = readTable(SHEET.STOCK).filter(function (r) { return String(r.session_id) === sessionId; }); }
+  catch (e) { return '回答し直す必要はありません。下書きの保存件数を確認できませんでした。復旧後にStockと実行ログを確認してください。'; }
+  return '回答は保存済みです。回答し直す必要はありません。\n' + (saved.length
+    ? '下書きは' + saved.length + '件保存されています。未完了の採点は今夜の品質ゲートで処理します。'
+    : '下書きはまだ保存されていません。夜の品質ゲートだけでは生成されません。修正反映後、GASのInterview.gsを開いてregenerateFailedInterviewsを実行すると、保存済み回答から再生成できます。');
 }
 
 /**

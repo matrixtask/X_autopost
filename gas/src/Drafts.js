@@ -8,6 +8,9 @@ function generateDraftsFromInterview(sessionId) {
     return String(r.session_id) === sessionId && String(r.answered_at) !== 'skipped' && interviewAnswerText(r);
   });
   if (!qa.length) throw new Error('回答がありません: ' + sessionId);
+  // 一次資料はモデル呼び出し前に版を固定。保存失敗時は出典IDを推測して付けない。
+  var sourceRefs = typeof tryArchiveInterviewSources === 'function' ? tryArchiveInterviewSources(qa, 'generation_input') : {};
+  qa.forEach(function (r) { r.article_source_revision_ids = JSON.stringify(sourceRefs[sessionId + ':Q' + r.idx] || []); });
 
   var councilSources = qa.map(function (r) {
     return { qi: r.idx, answer: String(r.answer || '') +
@@ -94,6 +97,7 @@ function generateDraftsFromInterview(sessionId) {
       category: String(source.category || ''),
       session_id: sessionId,
       source_idx: String(source.idx),
+      source_revision_ids: source.article_source_revision_ids,
       text: text,
       score: '',
       score_reason: '',
@@ -115,6 +119,9 @@ function generateDraftsFromInterview(sessionId) {
   // 材料不足の [] と、不正な案しか返らなかった生成失敗を分ける。
   if (drafts.length && !saved.length && retired !== drafts.length) throw new Error('回答に対応する有効な下書きがありません: ' + sessionId);
   logEvent('drafts_created', sessionId + ' -> ' + saved.length + '件');
+  if (typeof tryArchiveEditorialRows === 'function') tryArchiveEditorialRows(readTable(SHEET.STOCK).filter(function (r) {
+    return saved.some(function (d) { return String(d.id) === String(r.id); });
+  }), 'model', 'generated');
   return saved;
 }
 

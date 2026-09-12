@@ -743,6 +743,9 @@ function refineFailedDrafts(force) {
  * 夜のトリガー本体: 採点(+リライトループ) → 予約 → Slack通知
  */
 function nightlyGateAndSchedule() {
+  if (typeof captureArticleArchive === 'function') {
+    try { captureArticleArchive(); } catch (e) { logEvent('article_archive_error', String(e).slice(0, 250)); }
+  }
   var gate = runQualityGateWithRefinement();
   var scheduled = scheduleApprovedPosts();
 

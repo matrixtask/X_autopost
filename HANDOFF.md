@@ -361,3 +361,12 @@ draft（生成直後）→ 採点 → ready（合格・承認待ち）→ approv
 - 編集上限は長文4000文字、全体8本/6000文字。原文照合は既存12000字上限。折り畳み位置や採用効果は保証しない。会議版council-v3、編集版composition-v1。
 - 検証: `npm test` 119件成功。16件の新テストで保存・出典・原文引用・形式・審査・変更競合・通知・全文同期・予約/送信を確認。実モデルの編集品質/待ち時間、GAS本番、実際のX投稿は未検証。
 - 反映: Ubuntuで `cd ~/X_autopost && git pull origin main && cd gas && ./deploy.sh`、A/B両方を更新。新規内部関数の手動実行は不要。`X_LONG_POSTS_ENABLED` 既定true、falseで長文の予約/送信のみ停止。詳細は `docs/long-answer-editing.md`。
+
+### 2026-09-12 — Codex（内省の検証修復・記事用の原文と編集履歴）
+
+- 報告された内省エラーでは、回答10問と補足がInterviewsに保存済みで、本文生成前に失敗したことを本番のLogで確認。旧ログには不正な項目や生応答がなく、今回の直接原因は断定できない。最大6引用の制限がモデルへ明示されていない不整合を修正した。
+- `EditorialCouncil.js` をcouncil-v4へ。違反項目だけを `editorial_reflection_invalid` に記録し、残120秒超なら同じ資料で1回だけ修復。原文の完全一致・最大件数は維持し、再失敗では本文生成を停止。`Interview.js` の通知は下書き0件と保存済みを区別。0件は夜の採点では生成されないため、反映後に **Interview.gs** の `regenerateFailedInterviews` で復旧する（既定最新1件、API利用・Slack結果通知あり）。
+- **ArticleArchive.gs**（`gas/src/ArticleArchive.js`）を追加。`setupArticleArchive` でSourceRevisions / EditorialHistory / ArticleDrafts / ArticleSourcesの4表、Stockの `source_revision_ids`、専用onEditトリガーを追加する。既存定期トリガーや元データを削除しない。回答保存前後・生成前・管理UI編集/承認・夜の回収を接続。新しい短文/分割/長文は生成時の原文版に紐付く。初回取り込みはバッチで行い、版IDはUUID。
+- 本人原文とモデル草稿は分離し、本人による編集・承認を明示的な操作として記録する。既存データは導入時点の観測版で、失われた過去の文や全中間版を復元したとは扱わない。公開可は版ごとに確認、非公開は訂正後も継承。記事の生成・note公開・人格の自動更新は今回未実装。詳細 `docs/article-source-archive.md`。
+- 検証: `npm test` 132件成功。10引用の修復、再び不正な引用の停止、時間予算、失敗通知、取り込みの反復、訂正/補足/削除、公開区分、本人とAIの区別、生成失敗時の原文保持、短文/長文の出典版固定、ロック所有権を確認。GAS本番での新処理・実モデルの再生成は未実行。
+- 反映: Ubuntuで `cd ~/X_autopost && git pull origin main && cd gas && ./deploy.sh`、A/B両方を更新。その後 **ArticleArchive.gs** で `setupArticleArchive`、続いて **Interview.gs** で `regenerateFailedInterviews`。必要な再回収は **ArticleArchive.gs** の `captureArticleArchive`（AI/Slack/X呼び出しなし）。

@@ -95,6 +95,21 @@ test('interview: save the original answer before calling Claude and advance with
   assert.equal(f.releases, 1);
 });
 
+test('interview: failed generation explains that the nightly scoring gate cannot create missing drafts', () => {
+  const f = fixture(1, { realFinish: true });
+  f.rows[0].answer = '本人の回答は残る';
+  f.context.generateDraftsFromInterview = () => { throw new Error('quote.not_in_answer'); };
+  f.context.finishInterview(sessionId, threadTs);
+  assert.equal(f.rows[0].answer, '本人の回答は残る');
+  assert.match(f.messages.at(-1).text, /夜の品質ゲートだけでは生成されません/);
+  assert.match(f.messages.at(-1).text, /Interview.gs.*regenerateFailedInterviews/);
+  f.context.readTable = () => [{ session_id: sessionId, id: 'p' }];
+  assert.match(f.context.interviewFailureRecoveryMessage(sessionId), /下書きは1件保存/);
+  assert.doesNotMatch(f.context.interviewFailureRecoveryMessage(sessionId), /まだ保存されていません/);
+  f.context.readTable = () => { throw new Error('Sheets unavailable'); };
+  assert.match(f.context.interviewFailureRecoveryMessage(sessionId), /保存件数を確認できませんでした/);
+});
+
 test('interview: clarification retains the current question and does not save an answer', () => {
   const f = fixture();
   const originalQuestion = f.rows[0].question;
