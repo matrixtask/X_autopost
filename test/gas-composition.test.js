@@ -46,6 +46,170 @@ function generate(h, format = 'long') {
   return h.ctx.generateDraftsFromInterview('s');
 }
 
+function contextFixture() {
+  const h = setup();
+  const quote = '条件が揃うまで待ちます。';
+  const question = '試験を実施するか迷ったとき、どう判断しますか？';
+  h.db.Interviews = [{ ...answer(), question, answer: quote }];
+  const g = { qi: 1, source_qis: [1], format: 'single', reason: '質問から試験という対象を補えば判断が伝わる', tradeoff: '回答だけでは何を待つか分からない', omitted: '',
+    parts: [{ text: '試験を実施するか迷ったら、' + quote, core_quote: quote, evidence: [{ qi: 1, quote }],
+      question_context: [{ qi: 1, field: 'question', quote: '試験を実施するか', answer_quote: quote, text: '試験を実施するか', use: 'topic', reason: '本人が答えている問いの対象を明示する' }] }] };
+  const r = reflection(); r.anchors[0].quote = quote;
+  return { h, g, r, quote, question };
+}
+
+function mergeFixture() {
+  const h = setup();
+  const first = '条件が揃うまで待ちます。' + '予定を優先して条件を曖昧にすると、試験した意味がなくなる。'.repeat(3);
+  const second = '記録がない試験は次に使えません。' + '条件と結果を残して、次に何を変えるか判断できるようにしたい。'.repeat(3);
+  h.db.Interviews = [{ ...answer(), answer: first, question: '試験する条件は？' },
+    { ...answer(), idx: 2, answer: second, question: '試験結果をどう使う？' }];
+  const quote = '条件が揃うまで待ちます。';
+  const g = { qi: 1, source_qis: [1, 2], format: 'long', reason: '試験の開始条件と結果を次へ生かす理由は同じ判断として読める', tradeoff: '別々だと待つ理由が見えない', omitted: '',
+    parts: [{ text: first + '\n\n' + second, core_quote: quote,
+      evidence: [{ qi: 1, quote }, { qi: 2, quote: '記録がない試験は次に使えません。' }], question_context: [] }] };
+  const r = reflection(); r.anchors[0].quote = quote;
+  return { h, g, r, first, second };
+}
+
+test('short answers receive question context before being skipped, and the context reaches all reviewers', () => {
+  const { h, g, r, quote, question } = contextFixture();
+  h.requests.push(debate(), r, [g]);
+  h.ctx.generateDraftsFromInterview('s');
+  assert.equal(h.db.Stock[0].text, g.parts[0].text);
+  assert.equal(h.db.Stock[0].post_format, 'single');
+  assert.equal(JSON.parse(h.calls[2].input.split('\nJSON')[0]).answers[0].question, question);
+  assert.match(h.calls[1].system, /文脈不足だけで見送らない/);
+  const meta = JSON.parse(h.db.Stock[0].edit_meta);
+  assert.equal(meta.question_context[0].answer_quote, quote);
+  h.ctx.askClaudeJsonSalvageable = (system, input) => {
+    const [data] = JSON.parse(input.split('\nJSON')[0]);
+    assert.equal(data.question_contexts[0].question, question);
+    assert.ok(data.source.includes(quote));
+    assert.ok(!data.source.includes(question));
+    assert.match(system, /質問だけにある成果・数字/);
+    return { [data.id]: review(data.text) };
+  };
+  assert.equal(h.ctx.runOutcomeQualityGate().passed, 1);
+  assert.equal(h.db.Stock[0].status, 'ready');
+});
+
+test('several individually short answers can become one long post with every source retained for review', () => {
+  const { h, g, r, first, second } = mergeFixture();
+  assert.ok(h.ctx.fitsInTweet(first)); assert.ok(h.ctx.fitsInTweet(second));
+  h.requests.push(debate(), r, [g]); h.ctx.generateDraftsFromInterview('s');
+  const row = h.db.Stock[0], meta = JSON.parse(row.edit_meta);
+  assert.equal(row.post_format, 'long'); assert.equal(row.source_idx, '1');
+  assert.deepEqual(meta.source_qis, ['1', '2']); assert.equal(meta.evidence.length, 2);
+  h.ctx.askClaudeJsonSalvageable = (_system, input) => {
+    const [data] = JSON.parse(input.split('\nJSON')[0]);
+    assert.ok(data.source.includes(first)); assert.ok(data.source.includes(second));
+    assert.deepEqual(data.edit.source_qis, ['1', '2']);
+    return { [data.id]: review(data.text) };
+  };
+  assert.equal(h.ctx.runOutcomeQualityGate().passed, 1);
+});
+
+test('a merged answer that fits a short post is not padded to force the long format', () => {
+  const { h, g, r } = mergeFixture();
+  h.db.Interviews[0].answer = '条件が揃うまで待ちます。';
+  h.db.Interviews[1].answer = '記録がない試験は次に使えません。';
+  g.format = 'single'; g.parts[0].text = h.db.Interviews.map(a => a.answer).join('');
+  h.requests.push(debate(), r, [g]); h.ctx.generateDraftsFromInterview('s');
+  assert.equal(h.db.Stock[0].post_format, 'single');
+  assert.ok(h.ctx.outcomeSourceForRow(h.db.Stock[0], h.db.Interviews).includes(h.db.Interviews[1].answer));
+});
+
+test('old single-source composition-v1 stock still resolves without new metadata fields', () => {
+  const h = setup();
+  const row = { session_id: 's', source_idx: '1', edit_meta: JSON.stringify({ version: 'composition-v1', core_quote: core }) };
+  assert.equal(h.ctx.outcomeSourceForRow(row, h.db.Interviews), longText);
+  assert.equal(h.ctx.outcomeQuestionContexts(row, h.db.Interviews).length, 0);
+});
+
+test('merging rejects unknown, duplicate, cross-session, reused or uncited answers before saving any post', () => {
+  for (const mutate of [
+    ({ g }) => { g.source_qis = [1, 99]; },
+    ({ g }) => { g.source_qis = [1, 1]; },
+    ({ h }) => { h.db.Interviews[1].session_id = 'another-session'; },
+    ({ h }) => { h.db.Interviews[1].answered_at = 'skipped'; },
+    ({ g }) => { g.parts[0].evidence.pop(); },
+    ({ g }) => { g.parts[0].evidence[1].quote = '本人が言っていない理由'; },
+    ({ g }) => { g.format = 'single'; },
+  ]) {
+    const f = mergeFixture(); mutate(f); f.h.requests.push(debate(), f.r, [f.g]);
+    assert.throws(() => f.h.ctx.generateDraftsFromInterview('s'), /不正/);
+    assert.equal(f.h.db.Stock.length, 0);
+  }
+  const f = mergeFixture(); f.h.requests.push(debate(), f.r, [f.g, f.g]);
+  assert.throws(() => f.h.ctx.generateDraftsFromInterview('s'), /重複/);
+  assert.equal(f.h.db.Stock.length, 0);
+});
+
+test('context must cite the actual question and corresponding answer, never invent or use skipped followups', () => {
+  for (const mutate of [
+    c => { c.qi = 99; }, c => { c.quote = '存在しない質問'; }, c => { c.answer_quote = '同意していない'; },
+    c => { c.text = '本文にない文脈'; }, c => { c.use = 'fact'; }, c => { c.field = 'followup_question'; },
+  ]) {
+    const { h, g, r } = contextFixture(); mutate(g.parts[0].question_context[0]);
+    h.requests.push(debate(), r, [g]);
+    assert.throws(() => h.ctx.generateDraftsFromInterview('s'), /文脈引用/);
+    assert.equal(h.db.Stock.length, 0);
+  }
+});
+
+test('unsupported question premises still hold a draft even when the composition review passes', () => {
+  const { h, g, r } = contextFixture();
+  h.requests.push(debate(), r, [g]); h.ctx.generateDraftsFromInterview('s');
+  h.db.Stock[0].text += '。性能が30%改善しました。';
+  h.ctx.askClaudeJsonSalvageable = (_system, input) => {
+    const [data] = JSON.parse(input.split('\nJSON')[0]);
+    return { [data.id]: { ...review(data.text), fidelity: 'confirm', issues: [{ kind: 'fidelity', quote: '性能が30%改善しました。',
+      reason: '本人の回答には性能改善の数値も実績もありません', action: '本人が述べていない数値と実績を削除する' }] } };
+  };
+  h.ctx.runOutcomeQualityGate(); assert.equal(h.db.Stock[0].status, 'stock');
+  assert.match(h.db.Stock[0].score_reason, /数値/);
+});
+
+test('review cannot pass on only the primary answer if another source disappears, and rejects stale source reviews', () => {
+  const { h, g, r } = mergeFixture();
+  h.requests.push(debate(), r, [g]); h.ctx.generateDraftsFromInterview('s');
+  h.ctx.askClaudeJsonSalvageable = (_system, input) => {
+    const [data] = JSON.parse(input.split('\nJSON')[0]);
+    h.db.Interviews[1].answer += '訂正しました。';
+    return { [data.id]: review(data.text) };
+  };
+  h.ctx.runOutcomeQualityGate(); assert.equal(h.db.Stock[0].status, 'draft');
+  h.db.Interviews.pop();
+  assert.equal(h.ctx.outcomeSourceForRow(h.db.Stock[0], h.db.Interviews), '');
+  h.ctx.askClaudeJsonSalvageable = (_system, input) => {
+    const [data] = JSON.parse(input.split('\nJSON')[0]); return { [data.id]: review(data.text) };
+  };
+  h.ctx.runOutcomeQualityGate(); assert.equal(h.db.Stock[0].status, 'stock');
+});
+
+test('a question edited during review invalidates that review even when its cited substring survives', () => {
+  const { h, g, r } = contextFixture();
+  h.requests.push(debate(), r, [g]); h.ctx.generateDraftsFromInterview('s');
+  h.ctx.askClaudeJsonSalvageable = (_system, input) => {
+    const [data] = JSON.parse(input.split('\nJSON')[0]); h.db.Interviews[0].question += '別の対象です。';
+    return { [data.id]: review(data.text) };
+  };
+  h.ctx.runOutcomeQualityGate(); assert.equal(h.db.Stock[0].status, 'draft');
+});
+
+test('question context counts toward the review source budget and is not silently truncated', () => {
+  const { h, g, r } = contextFixture();
+  h.requests.push(debate(), r, [g]); h.ctx.generateDraftsFromInterview('s');
+  h.db.Interviews[0].question += 'あ'.repeat(12000);
+  h.ctx.askClaudeJsonSalvageable = (_system, input) => {
+    const [data] = JSON.parse(input.split('\nJSON')[0]);
+    assert.equal(data.source, ''); assert.deepEqual(data.question_contexts, []);
+    return { [data.id]: review(data.text) };
+  };
+  h.ctx.runOutcomeQualityGate(); assert.equal(h.db.Stock[0].status, 'stock');
+});
+
 test('long answer runs the council, Mia and Rina, then stores the complete long post and editorial choice', () => {
   const h = setup();
   assert.equal(generate(h).length, 1);

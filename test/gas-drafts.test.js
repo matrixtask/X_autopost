@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
-const sources = ['Editorial', 'OutcomeQuality', 'Interview', 'Drafts', 'Quality'].map((name) => ({
+const sources = ['Pure', 'Editorial', 'PostComposition', 'OutcomeQuality', 'Interview', 'Drafts', 'Quality'].map((name) => ({
   name,
   code: readFileSync(new URL(`../gas/src/${name}.js`, import.meta.url), 'utf8'),
 }));
@@ -33,7 +33,12 @@ function harness(interviews, response = []) {
       state.prompts.push({ system, user });
       return Array.isArray(state.response) ? state.response.map(d => d && { ...d, core_quote: d.text }) : state.response;
     },
-    fitsInTweet: () => true,
+    councilText: (value, max) => typeof value === 'string' && !!value.trim() && value.length <= max,
+    askClaudeJson: (system, user) => {
+      state.prompts.push({ system, user });
+      return Array.isArray(state.response) ? state.response.map(d => d && ({ ...d, format: 'single', reason: '判断を短く伝える', tradeoff: '長文は不要', omitted: '', parts: [{ text: d.text, core_quote: d.text }] })) : state.response;
+    },
+    appendRowsObj: (_name, rows) => state.stock.push(...rows),
     newId: () => `draft-${++id}`,
     fmtDateTime: () => '2026-09-10 09:00',
     nowJst: () => new Date('2026-09-10T00:00:00Z'),
@@ -65,26 +70,16 @@ test('drafts: テーマ・カテゴリ・画像はモデル出力でなく回答
   assert.equal(state.stock[0].media_type, 'image/png');
 });
 
-test('drafts: 未回答・スキップ・別セッション・不正qiの案は保存しない', () => {
-  const { context, state } = harness([
-    answer(),
-    answer({ idx: 2, answer: '', answered_at: '' }),
-    answer({ idx: 3, answer: '残っていた文字', answered_at: 'skipped' }),
-    answer({ idx: 4, session_id: 'session-2' }),
-  ], [
-    { qi: 2, text: '未回答から生成' },
-    { qi: 3, text: 'スキップから生成' },
-    { qi: 4, text: '別セッションから生成' },
-    { qi: 99, text: '存在しない出典' },
-    { qi: 'toString', text: 'オブジェクトの継承キー' },
-    { text: 'qiなし' },
-    null,
-    { qi: 1, text: '正しい出典' },
-  ]);
-
-  assert.equal(context.generateDraftsFromInterview('session-1').length, 1);
-  assert.equal(state.stock[0].text, '正しい出典');
-  assert.equal(state.logs.filter((entry) => entry.type === 'draft_source_invalid').length, 7);
+test('drafts: 未回答・スキップ・別セッション・不正qiの案は一括保存前に棄却する', () => {
+  for (const qi of [2, 3, 4, 99, 'toString', undefined]) {
+    const { context, state } = harness([
+      answer(), answer({ idx: 2, answer: '', answered_at: '' }),
+      answer({ idx: 3, answer: '残っていた文字', answered_at: 'skipped' }),
+      answer({ idx: 4, session_id: 'session-2' }),
+    ], [{ qi: 1, text: '重量を3kg落とした' }, { qi, text: '不正な出典' }]);
+    assert.throws(() => context.generateDraftsFromInterview('session-1'), /不正/);
+    assert.equal(state.stock.length, 0);
+  }
 });
 
 test('drafts: 材料不足の空配列は正常終了しストックを増やさない', () => {
@@ -103,7 +98,7 @@ test('drafts: retired-topic-only output is no-material and preserves the origina
 
 test('drafts: 不正案しかない出力は材料不足と区別してエラーにする', () => {
   const { context, state } = harness([answer()], [{ qi: 99, text: '不正な案' }]);
-  assert.throws(() => context.generateDraftsFromInterview('session-1'), /有効な下書き/);
+  assert.throws(() => context.generateDraftsFromInterview('session-1'), /不正/);
   assert.equal(state.stock.length, 0);
 
   state.response = { qi: 1, text: '配列でない' };

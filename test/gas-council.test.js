@@ -20,10 +20,11 @@ function setup() {
     buildStylePrompt: () => '本人の原文を守る', ensureHeaders: () => {},
     readTable: name => structuredClone(name === 'Stock' ? stock : qa),
     appendRowObj: (_name, row) => stock.push(structuredClone(row)),
+    appendRowsObj: (_name, rows) => stock.push(...structuredClone(rows)),
     syncStockRowToNotion: () => {}, logEvent: (...args) => logs.push(args),
     newId: () => 'p1', nowJst: () => new Date(), fmtDateTime: () => '2026-09-11 10:00',
   });
-  for (const name of ['Pure', 'Editorial', 'EditorialCouncil', 'Interview', 'Drafts']) {
+  for (const name of ['Pure', 'Editorial', 'EditorialCouncil', 'Interview', 'PostComposition', 'Drafts']) {
     vm.runInContext(readFileSync(new URL(`../gas/src/${name}.js`, import.meta.url), 'utf8'), ctx);
   }
   ctx.axisGuidanceForQuestions = () => '';
@@ -46,7 +47,7 @@ test('council: questions wait for distinct final positions and Mia reflection, t
   assert.deepEqual(calls.map(c => c.kind), ['json', 'json', 'json']);
   assert.ok(calls.every(c => c.purpose === 'interview'));
   assert.match(calls[0].system, /hannibal（ハンニバル）.*敗北.*内省.*方針転換条件/);
-  assert.equal(JSON.parse(logs[0][1]).brief.version, 'council-v4');
+  assert.equal(JSON.parse(logs[0][1]).brief.version, 'council-v5');
   assert.match(calls[1].input, /final_debate.*確定0.*確定1.*確定2/);
   assert.match(calls[2].input, /後付けの教訓は使わない/);
   assert.doesNotMatch(calls[2].system, /価値がゼロ/);
@@ -110,12 +111,10 @@ test('council: draft core must survive verbatim, with its uncertainty and correc
   const quote = '完成より、まず壊れる条件を知りたい';
   qa.push({ session_id: 's', idx: 1, answer: quote + '。まだ試す前です。', theme: '試作', category: 'evergreen' });
   responses.push(debate(), reflection([{ qi: 1, quote, reason: '完成を急がない判断が固有', hiring_signal: '試験の判断基準' }]), [
-    { qi: 1, core_quote: quote, text: '安全と品質を大事にします。' },
-    { qi: 99, core_quote: quote, text: quote },
-    { qi: 1, core_quote: quote, text: quote + '。まだ試す前です。' },
+    { qi: 1, format: 'single', reason: '判断を短く伝える', tradeoff: '長文は不要', omitted: '', parts: [{ core_quote: quote, text: quote + '。まだ試す前です。' }] },
   ]);
   assert.equal(ctx.generateDraftsFromInterview('s').length, 1);
-  assert.deepEqual(calls.map(c => c.kind), ['json', 'json', 'draft']);
+  assert.deepEqual(calls.map(c => c.kind), ['json', 'json', 'json']);
   assert.ok(calls.every(c => c.purpose === 'generate'));
   assert.equal(stock[0].source_idx, '1');
   assert.equal(stock[0].text, quote + '。まだ試す前です。');
@@ -125,9 +124,9 @@ test('council: a long draft is rejected whole, never cut through its ending', ()
   const { ctx, qa, stock, responses } = setup();
   qa.push({ session_id: 's', idx: 1, answer: 'まだ試す前です', theme: '試作', category: 'evergreen' });
   responses.push(debate(), reflection([{ qi: 1, quote: 'まだ試す前です', reason: '未実施の留保を守る', hiring_signal: '仕事の実像' }]),
-    [{ qi: 1, core_quote: 'まだ試す前です', text: 'あ'.repeat(141) + 'まだ試す前です' }]);
+    [{ qi: 1, format: 'single', reason: '判断を短く伝える', tradeoff: '長文は不要', omitted: '', parts: [{ core_quote: 'まだ試す前です', text: 'あ'.repeat(141) + 'まだ試す前です' }] }]);
   ctx.truncateForTweet = () => { throw new Error('must not truncate'); };
-  assert.throws(() => ctx.generateDraftsFromInterview('s'), /有効な下書き/);
+  assert.throws(() => ctx.generateDraftsFromInterview('s'), /長さ/);
   assert.equal(stock.length, 0);
 });
 
@@ -138,7 +137,8 @@ test('council: no material ends after reflection; question premises cannot becom
   assert.equal(ctx.generateDraftsFromInterview('s').length, 0);
   assert.equal(calls.length, 2);
   assert.equal(stock.length, 0);
-  assert.doesNotMatch(calls[1].input, /架空の改善/);
+  assert.equal(JSON.parse(calls[1].input.split('\nJSON:')[0]).sources[0].answer, '特にない');
+  assert.equal(ctx.validateEditorialReflection(reflection([{ qi: 1, quote: '架空の改善', reason: '試験', hiring_signal: '仕事' }]), [{ qi: 1, answer: '特にない', question: '架空の改善' }]), false);
 });
 
 test('council: turn uses new discussion and does not add both a followup and replacement question', () => {

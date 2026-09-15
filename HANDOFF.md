@@ -370,3 +370,13 @@ draft（生成直後）→ 採点 → ready（合格・承認待ち）→ approv
 - 本人原文とモデル草稿は分離し、本人による編集・承認を明示的な操作として記録する。既存データは導入時点の観測版で、失われた過去の文や全中間版を復元したとは扱わない。公開可は版ごとに確認、非公開は訂正後も継承。記事の生成・note公開・人格の自動更新は今回未実装。詳細 `docs/article-source-archive.md`。
 - 検証: `npm test` 132件成功。10引用の修復、再び不正な引用の停止、時間予算、失敗通知、取り込みの反復、訂正/補足/削除、公開区分、本人とAIの区別、生成失敗時の原文保持、短文/長文の出典版固定、ロック所有権を確認。GAS本番での新処理・実モデルの再生成は未実行。
 - 反映: Ubuntuで `cd ~/X_autopost && git pull origin main && cd gas && ./deploy.sh`、A/B両方を更新。その後 **ArticleArchive.gs** で `setupArticleArchive`、続いて **Interview.gs** で `regenerateFailedInterviews`。必要な再回収は **ArticleArchive.gs** の `captureArticleArchive`（AI/Slack/X呼び出しなし）。
+
+### 2026-09-15 — Codex（質問からの文脈補完・複数回答の統合）
+
+- ユーザー要望: 文脈不足だけで見送らず、質問の内容を補ってポスト化したり、関連する複数回答を長文へ編集する。`council-v5` は質問を補助資料として読み、文脈補完・統合を検討してからno_materialを判断。核の引用は回答原文に限定する。
+- `Drafts.js` の短答専用経路を統合し、短答も **PostComposition.gs** のリナが編集。`composition-v2` で同じセッションの最大4回答を1本に統合できる。280重み以内はsingle、超える場合はlong。長文化の水増しや無関係な出来事の結合は禁止。分割は従来の1回答から2〜4本を維持。
+- Stockの既存 `edit_meta` に全出典番号source_qis、各回答の原文引用evidence、質問から補った箇所question_contextを保存。`source_idx` は主回答、原文版IDは全出典を記録。新列なし。全案の引用・形式を検証後に一括保存するため、短答も不正案を部分救出しない。
+- **OutcomeQuality.gs** が全回答を照合し、質問文脈は本人回答と分けて3人格＋ミアへ渡す。質問の未確認前提、偽の因果、否定・訂正・留保の脱落を審査。質問資料も12000字上限に含む。出典欠落は保留、審査中の回答/質問変更は古い判定を保存しない。旧単一出典/v1は継続して読める。既存保留・承認済み・投稿済みの一括改稿はしない。
+- 追加内部関数: **PostComposition.gs** のcompositionRawAnswer/compositionSources/validateQuestionContexts、**OutcomeQuality.gs** のoutcomeCompositionSources/outcomeQuestionContexts。手動実行不要。詳細 `docs/context-and-merged-posts.md`。
+- 検証: `npm test` 143件成功。文脈補完、短答からの統合長文、自然な短文への統合、全出典・原文版、出典/質問引用の棄却、未確認前提による保留、審査競合、資料予算、v1互換性を確認。実モデルの編集品質・本番動作は未検証。短文も1投稿ずつ構成審査するため、採点待ち時間が増えうる。
+- 反映はUbuntuで `cd ~/X_autopost && git pull origin main && cd gas && ./deploy.sh`、管理UIのAとSlackのBを更新。次の生成から適用。今回の列初期化は不要。記事資料の版保存が未導入なら既存 **ArticleArchive.gs** のsetupArticleArchiveを利用する。
