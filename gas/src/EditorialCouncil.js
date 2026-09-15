@@ -1,5 +1,5 @@
 /** EditorialCouncil.gs: 架空の3人格の編集会議 → ミアの採否判断 → 生成。 */
-var EDITORIAL_COUNCIL_VERSION = 'council-v4';
+var EDITORIAL_COUNCIL_VERSION = 'council-v5';
 // GASの1実行内で会話・投稿・採点に共有する。APIを中断できないため開始前に余裕を残す。
 var EDITORIAL_EXECUTION_DEADLINE = 0;
 
@@ -109,7 +109,8 @@ function prepareEditorialCouncil(stage, material, purpose, sources, contextId) {
     'questions/turnでは次に聞くべき不足1点を決め、anchors=[]、no_material=false。',
     'draftsでは本人回答のどの表現を消すと面白さが失われるか選ぶ。各anchorsはqiと回答に完全一致する80字以内の核の引用、選択理由、採用候補者への手掛かり。手掛かりがない趣味は「人間味、採用接点なし」でよい。',
     '核の引用には必要な留保（予定・目指す・かもしれない）や、意外な比喩・判断の違いを含める。一般的な単語だけを核にしない。核は投稿にそのまま残せる短さにする。長い回答の独立した発見は複数anchorsで残し、directionで分割と長文それぞれの得失をリナへ伝える。',
-    '一般論しかない回答は0案、全体で素材がなければno_material=true、anchors=[]。単に短いという理由で落とさない。',
+    '文脈不足だけで見送らない。質問から話題・対象を補えるか、同じインタビューの関連回答を結合すれば背景・判断・理由が通るかを先に検討し、directionでリナへ指示する。質問だけにある数字・成果・経験・因果は本人の事実にせず、訂正・否定を優先する。',
+    '質問の文脈補完や関連回答の統合でも固有の公開材料がないときだけno_material=true、anchors=[]。短答でも文脈の中で意味がある表現を核に選ぶ。anchorsの引用そのものは必ず回答原文から採る。',
     '厳密な形式制約: adoptは1〜400字、rejectは1〜400字、directionは1〜600字、question_focusは1〜300字。no_materialはboolean。',
     'anchorsは全体で最大6件。回答が10問以上でも各問から必ず選ばず、最も固有な核を選ぶ。各quoteは1〜80字の連続した回答原文を完全にコピーする。句読点・改行・語尾を変えず、省略記号や言い換えを挟まない。reason/hiring_signalは各1〜250字。qiとquoteの重複は禁止。',
   ].join('\n');

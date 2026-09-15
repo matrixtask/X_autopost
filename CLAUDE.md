@@ -47,6 +47,8 @@ GASエディタの関数プルダウンは、開いているファイルの関�
 
 ## 実装上の注意
 
+- **2026-09-15 質問の文脈補完・複数回答の統合:** `docs/context-and-merged-posts.md`。全回答をリナの編集へ通し、質問の話題/対象補完と同一セッションの最大4回答の統合を見送り前に検討。`composition-v2` の `source_qis/evidence/question_context` と全原文版IDを保存する。主回答だけで統合稿を審査しない。質問の未確認前提を事実化せず、審査中の出典変更は再評価へ。既存ストックの一括改稿はしない。
+
 - **2026-09-12 記事資料の履歴と内省修復:** `docs/article-source-archive.md`。**ArticleArchive.gs** の `setupArticleArchive` で4表・Stockの出典版列・直接編集回収トリガーを追加する。原文とAI原稿は分離。既存資料は観測スナップショットであり失われた旧文を復元しない。記事生成・公開は未実装。`council-v4` は内省の違反項目を記録し、時間内に1回だけ修復、原文不一致は引き続き停止。下書き0件は夜の採点では生成されず、**Interview.gs** の `regenerateFailedInterviews` で復旧する。
 
 - **2026-09-12 長文回答の編集:** `docs/long-answer-editing.md`。長い回答は `PostComposition.js` のリナが独立した分割/長文1本/短文1本を選ぶ。生成前の3者会議・ミア、生成後の3者＋ミア審査、人の承認を維持。`post_format` を無視して280重みへ切らない。新編集案を短文専用リライトへ送らない。長文利用可能はユーザー確認済み、`X_LONG_POSTS_ENABLED` 既定true。

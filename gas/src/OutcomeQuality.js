@@ -47,6 +47,7 @@ function outcomeScoringPrompt() {
     OUTCOME_AXES.map(function (a) { return a.key + '（' + a.label + '）: ' + a.anchor; }).join('\n'),
     '各軸のevidenceは本文中の連続した原文抜粋80字以内。非ゼロ点には必須。0点で根拠部分がなければ空文字。',
     '別に編集条件を判定。sourceは本人の回答だけ。意味を保った要約・言い換え・省略はfidelity=supported。本人の感想や目標に外部証明を要求しない。「目指す」を達成済みと読まない。本文に回答にない事実・感情・主張を足した場合だけconfirm。資料なしもconfirm。質問の前提は資料に含めない。',
+    'question_contextsがある場合だけ、その質問を文脈の補助資料として使う。質問に答えている回答の話題・対象・指示語を明らかにする補完はsupported。質問だけにある成果・数字・経験・因果を、本人が肯定・説明していないのに事実として採った場合はconfirm。sourceが複数の回答なら全回答を照合し、勝手な因果関係・時点の統合・否定や訂正の脱落を確認する。',
     '本人が非公開・投稿しない・訂正を求めた情報を含む、または判断不能ならprivacy=hold。それ以外はclear。',
     '主役が本人かテトラの経験・判断ならfocus=aligned。他者の評論や社名だけ後付けならoff_topic。',
     'これは資料との整合チェックで、事実の外部検証ではない。要確認の各条件にはissuesを必ず返す。kindはfidelity/privacy/focus、quoteは投稿本文の連続した原文抜粋80字以内、reasonは回答と照合して何が問題か、actionは具体的な修正または確認方法。理由を捏造して保留にしない。問題がなければissues=[]、review_note=""。',
@@ -124,6 +125,14 @@ function outcomeReferenceScore(axes) {
 
 /** 保存済みqiを使う。同一テーマに複数回答がある旧行は推測で対応づけない。 */
 function outcomeSourceForRow(row, interviews) {
+  var edit;
+  try { edit = JSON.parse(row.edit_meta); } catch (e) { /* 旧行 */ }
+  if (edit && edit.version === 'composition-v2') {
+    try {
+      var sources = outcomeCompositionSources(row, interviews, edit);
+      return sources.map(function (r) { return '[Q' + r.idx + '] 本人回答:\n' + compositionRawAnswer(r); }).join('\n\n');
+    } catch (e) { return ''; }
+  }
   var matches = interviews.filter(function (r) {
     return String(r.session_id) === String(row.session_id) && row.session_id &&
       String(r.answered_at) !== 'skipped' && String(r.answer || '').trim() &&
@@ -133,6 +142,30 @@ function outcomeSourceForRow(row, interviews) {
   var source = matches[0];
   return String(source.answer) + (source.followup_answer && source.followup_answered_at !== 'skipped'
     ? '\n本人の補足回答: ' + source.followup_answer : '');
+}
+
+/** v2は全出典を解決できなければ資料不明。主回答だけで統合稿を審査しない。 */
+function outcomeCompositionSources(row, interviews, edit) {
+  var sources = compositionSources(edit.source_qis, interviews.filter(function (r) {
+    return row.session_id && String(r.session_id) === String(row.session_id);
+  }));
+  if (!sources.some(function (r) { return String(r.idx) === String(row.source_idx); }) ||
+      (sources.length > 1 && ['single', 'long'].indexOf(row.post_format) < 0)) throw new Error('統合出典が不正です');
+  validateQuestionContexts(edit.question_context, sources);
+  return sources;
+}
+
+function outcomeQuestionContexts(row, interviews) {
+  var edit;
+  try { edit = JSON.parse(row.edit_meta); } catch (e) { return []; }
+  if (!edit || edit.version !== 'composition-v2') return [];
+  try {
+    var sources = outcomeCompositionSources(row, interviews, edit);
+    return edit.question_context.map(function (c) {
+      var r = sources.filter(function (s) { return String(s.idx) === String(c.qi); })[0];
+      return { qi: c.qi, field: c.field, question: String(r[c.field]), added_text: c.text, reason: c.reason, answer_quote: c.answer_quote };
+    });
+  } catch (e) { return []; }
 }
 
 /** 点数は参考。編集条件を満たす案は人の承認待ちへ。自動承認・点数リライトはしない。 */
@@ -154,9 +187,13 @@ function runOutcomeQualityGate(repairRows) {
     var input = batch.map(function (d) {
       var source = outcomeSourceForRow(d, interviews);
       // 切り捨てた資料で「整合」と判断させない。長い資料は人の確認へ。
-      var input = { id: String(d.id), text: String(d.text || ''), source: source.length <= 12000 ? source : '' };
+      var contexts = outcomeQuestionContexts(d, interviews);
+      var withinBudget = source.length + (contexts.length ? JSON.stringify(contexts).length : 0) <= 12000;
+      var input = { id: String(d.id), text: String(d.text || ''), source: withinBudget ? source : '' };
+      input.question_contexts = input.source ? contexts : [];
       if (d.edit_meta) {
         input.edit = { format: d.post_format, reason: d.edit_reason, part_index: d.part_index, part_count: d.part_count };
+        try { input.edit.source_qis = JSON.parse(d.edit_meta).source_qis || [String(d.source_idx)]; } catch (e) { /* 旧行 */ }
         input.siblings = stock.filter(function (r) { return r.edit_group && r.edit_group === d.edit_group; })
           .map(function (r) { return { id: String(r.id), text: String(r.text), part_index: r.part_index }; });
       }
@@ -196,6 +233,12 @@ function runOutcomeQualityGate(repairRows) {
           logEvent('outcome_changed', String(d.id) + ': 分割案が審査中に変更されました');
           return;
         }
+      }
+      var currentInterviews = readTable(SHEET.INTERVIEWS);
+      if (outcomeSourceForRow(d, currentInterviews) !== outcomeSourceForRow(d, interviews) ||
+          JSON.stringify(outcomeQuestionContexts(d, currentInterviews)) !== JSON.stringify(outcomeQuestionContexts(d, interviews))) {
+        logEvent('outcome_changed', String(d.id) + ': 審査中に回答または質問の文脈が変更されました');
+        return;
       }
       var text = String(d.text || '');
       var review = validateOutcomeReview(result && result[String(d.id)], text);

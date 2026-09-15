@@ -1,5 +1,7 @@
 # セットアップガイド（Google Apps Script版）
 
+**2026-09-15 文脈補完と複数回答の統合:** [仕様](../docs/context-and-merged-posts.md)。短い回答もリナに渡し、質問から話題・対象を補うか、同じインタビューの関連回答を最大4問まで1本にまとめてから見送りを判断します。必要なら長文、短くまとまれば短文。全回答・補った質問文脈を記録し、3人格＋ミアの審査と本人承認を維持します。`./deploy.sh` でA/B両方を更新すると次の生成から適用。今回の列追加・手動の初期化は不要。追加内部関数は **PostComposition.gs** / **OutcomeQuality.gs**、手動実行不要です。既存保留ポストの本文は自動で書き換えません。
+
 **2026-09-12 内省エラーと記事資料の保存:** ミアへの形式制約を明示し、不正項目を記録して時間に余裕がある場合だけ1回修復します。引用は原文完全一致を維持。[内省の仕様・復旧](../docs/editorial-council.md)。Ubuntuの `./deploy.sh` でA/B両方を更新後、**ArticleArchive.gs**（[`gas/src/ArticleArchive.js`](src/ArticleArchive.js)）を開いて `setupArticleArchive` を1回実行してください。回答原文・訂正・投稿編集履歴と将来の記事/出典の4表を準備します。[データ仕様](../docs/article-source-archive.md)。記事生成・公開はまだ行いません。今回のように下書き未生成の完了セッションは、続いて **Interview.gs**（[`gas/src/Interview.js`](src/Interview.js)）を開き `regenerateFailedInterviews` を実行。最新の該当セッションを既定1件、保存済み回答から再生成します（API呼び出し・Slack結果通知あり）。夜の品質ゲートだけでは未生成分は復旧しません。
 
 **2026-09-12 長文回答の編集:** [仕様](../docs/long-answer-editing.md)。リナが独立した分割・長文1本・短文1本を選び、全文を保存します。生成前の3者＋ミアに加え、編集後の構成も審査し、人の承認を待ちます。新規 **PostComposition.gs** は内部処理で手動実行不要。`./deploy.sh` でA/B両方を更新すると次の生成から適用。新列は自動追加。長文利用可能はユーザー確認済みで、`X_LONG_POSTS_ENABLED` は既定trueです。

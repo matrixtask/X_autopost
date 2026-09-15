@@ -138,7 +138,7 @@ test('archive: generation failure still captures the source and successful draft
   const quote = 'まだ仮説です。';
   h.ctx.prepareEditorialCouncil = () => ({ reflection: { anchors: [{ qi: 1, quote }] } });
   h.ctx.buildStylePrompt = () => ''; h.ctx.editorialCouncilInstructions = () => '';
-  h.ctx.askClaudeJsonSalvageable = () => [{ qi: 1, core_quote: quote, text: quote + '小さく試します。' }];
+  h.ctx.askClaudeJson = () => [{ qi: 1, format: 'single', reason: '短く判断を残せる', tradeoff: '長文にすると冗長', omitted: '', parts: [{ core_quote: quote, text: quote + '小さく試します。' }] }];
   h.ctx.isRetiredTopic = () => false;
   h.ctx.generateDraftsFromInterview('s');
   assert.deepEqual(JSON.parse(h.db.Stock[0].source_revision_ids), [h.db.SourceRevisions[0].revision_id]);
@@ -162,6 +162,23 @@ test('archive: the long-answer editor retains the exact primary and followup sou
   assert.deepEqual(ids, h.db.SourceRevisions.map(r => r.revision_id));
   assert.equal(h.db.EditorialHistory[0].source_revision_ids, h.db.Stock[0].source_revision_ids);
   assert.equal(h.db.EditorialHistory[0].actor_type, 'model');
+});
+
+test('archive: merging keeps immutable source revisions for every contributing answer and its question', () => {
+  const h = fixture();
+  h.db.Interviews.push(answer(), { ...answer(), idx: 2, _row: 3, question: '先に何を決める？', answer: '荷重条件を先に決めます。' });
+  const core = 'まだ仮説です。';
+  h.ctx.prepareEditorialCouncil = () => ({ version: 'test', reflection: { anchors: [{ qi: 1, quote: core }] } });
+  h.ctx.buildStylePrompt = () => ''; h.ctx.editorialCouncilInstructions = () => ''; h.ctx.isRetiredTopic = () => false;
+  h.ctx.askClaudeJson = () => [{ qi: 1, source_qis: [1, 2], format: 'single', reason: '仮説と試す条件をつなぐ', tradeoff: '別々では条件が見えない', omitted: '',
+    parts: [{ text: core + h.db.Interviews[1].answer, core_quote: core, evidence: [{ qi: 1, quote: core }, { qi: 2, quote: h.db.Interviews[1].answer }] }] }];
+  h.ctx.generateDraftsFromInterview('s');
+  const refs = JSON.parse(h.db.Stock[0].source_revision_ids);
+  assert.deepEqual(refs, h.db.SourceRevisions.map(r => r.revision_id));
+  assert.equal(refs.length, 2);
+  assert.equal(h.db.SourceRevisions[1].question, '先に何を決める？');
+  h.ctx.updateInterviewRow('s', 2, { answer: '温度条件も追加します。' });
+  assert.notEqual(refs[1], h.db.SourceRevisions.at(-1).revision_id);
 });
 
 test('archive: a held interview lock is retained; archival failure does not erase or prevent a reply', () => {
