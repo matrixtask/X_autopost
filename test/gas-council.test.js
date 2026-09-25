@@ -153,6 +153,23 @@ test('council: turn uses new discussion and does not add both a followup and rep
   assert.equal(result.next_question, '');
 });
 
+test('council: clarification keeps discussion and Mia before generating a structured explanation', () => {
+  const { ctx, calls, responses } = setup();
+  const current = { idx: 1, session_id: 's', theme: '試作', question: '判断の境界はどこですか？', answer: '' };
+  const detail = { context: 'ここでの境界は、案を採用するか見送るかを分ける条件という意味です。',
+    intent: '判断が変わる条件を知りたい質問です。', answer_hint: '仮の例なら、試験を進める条件を一つ考える切り口です。',
+    question: 'どの条件が変わると、別の案を選びますか？' };
+  responses.push(debate(), reflection(), { clarification: detail });
+  const result = ctx.planInterviewTurn([current], current, 'どういう意味？', null, false, true);
+  assert.deepEqual(calls.map(c => c.kind), ['json', 'json', 'text']);
+  assert.ok(calls.every(c => c.purpose === 'interview'));
+  assert.match(calls[0].input, /clarification_requested.*true/);
+  assert.match(calls[0].system, /新しい取材や追問を提案せず/);
+  assert.match(calls[1].input, /final_debate/);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.clarification)), detail);
+  assert.equal(current.answer, '');
+});
+
 test('council: a failed discussion does not silently fall back to generating an ordinary response', () => {
   const { ctx, calls, responses } = setup();
   responses.push(new Error('API unavailable'));
