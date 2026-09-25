@@ -380,3 +380,11 @@ draft（生成直後）→ 採点 → ready（合格・承認待ち）→ approv
 - 追加内部関数: **PostComposition.gs** のcompositionRawAnswer/compositionSources/validateQuestionContexts、**OutcomeQuality.gs** のoutcomeCompositionSources/outcomeQuestionContexts。手動実行不要。詳細 `docs/context-and-merged-posts.md`。
 - 検証: `npm test` 143件成功。文脈補完、短答からの統合長文、自然な短文への統合、全出典・原文版、出典/質問引用の棄却、未確認前提による保留、審査競合、資料予算、v1互換性を確認。実モデルの編集品質・本番動作は未検証。短文も1投稿ずつ構成審査するため、採点待ち時間が増えうる。
 - 反映はUbuntuで `cd ~/X_autopost && git pull origin main && cd gas && ./deploy.sh`、管理UIのAとSlackのBを更新。次の生成から適用。今回の列初期化は不要。記事資料の版保存が未導入なら既存 **ArticleArchive.gs** のsetupArticleArchiveを利用する。
+
+### 2026-09-25 — Codex（文脈補完を本人の口調で行う最終編集）
+
+- ユーザー依頼: 前後の文脈が分からない生成ポストには文脈を補い、補う部分も本人のオリジナルの口調にする。既存Voiceの「冒頭のお題の説明は書かない」が文脈補完と矛盾していたため、不要な挨拶は省きつつ必要な主語・対象・状況を置ける指示へ修正した。個別の本番ポストの失敗原因を特定したものではない。
+- 実装完了: **PostComposition.gs**（`gas/src/PostComposition.js`）の新しい内部関数 `completePostContext` で、初稿後・保存前に本文単独で読めるか点検し、原文・質問にある背景を補う。今回の回答原文の語尾・語彙・間・確信の強さを優先。初稿で取得したVoiceサンプルを補完にも再利用し、サンプルの出来事を事実へ流用しない。
+- 元の出典・主回答・グループ・各稿の核を保持したうえで、引用・形式・文字数を再検証して保存。必要なら長文化し末尾を切らない。`edit_meta.context_pass_version=context-v1` は処理記録。後段の3人格＋ミアも、補足の口調と本文単独での理解を審査し、人の承認は維持。
+- 検証完了: `npm test` 149件通過。実Voice指示/サンプル共用、補完後だけの保存、短文から長文への拡張、元の核/出典/グループの保護、不正引用/API失敗/時間不足時の停止、サンプル未登録時の回答原文利用を確認。実モデルの文体再現度とGAS本番の待ち時間は未検証。
+- 本番反映はユーザーのUbuntuで実施予定: `cd ~/X_autopost && git pull origin main && cd gas && ./deploy.sh`。A/B両方を更新すると次回生成から適用。追加の列初期化・関数の手動実行は不要。既存ポストの自動改稿は行わない。有効な初稿がある場合は生成APIが1段階増え、費用・待ち時間が増える。共通時間予算を超えれば未確認稿を保存せず、回答から再実行する。

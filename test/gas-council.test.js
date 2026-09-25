@@ -30,6 +30,7 @@ function setup() {
   ctx.axisGuidanceForQuestions = () => '';
   const request = (kind, system, input, tokens, opts) => {
     calls.push({ kind, system, input, tokens, purpose: opts.purpose });
+    if (system.includes('保存前の文脈・口調の最終編集') && !responses.length) return JSON.parse(input).drafts;
     const result = responses.shift();
     if (result instanceof Error) throw result;
     return kind === 'text' ? JSON.stringify(result) : structuredClone(result);
@@ -114,7 +115,7 @@ test('council: draft core must survive verbatim, with its uncertainty and correc
     { qi: 1, format: 'single', reason: '判断を短く伝える', tradeoff: '長文は不要', omitted: '', parts: [{ core_quote: quote, text: quote + '。まだ試す前です。' }] },
   ]);
   assert.equal(ctx.generateDraftsFromInterview('s').length, 1);
-  assert.deepEqual(calls.map(c => c.kind), ['json', 'json', 'json']);
+  assert.deepEqual(calls.map(c => c.kind), ['json', 'json', 'json', 'json']);
   assert.ok(calls.every(c => c.purpose === 'generate'));
   assert.equal(stock[0].source_idx, '1');
   assert.equal(stock[0].text, quote + '。まだ試す前です。');

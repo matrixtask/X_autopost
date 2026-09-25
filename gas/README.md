@@ -1,5 +1,7 @@
 # セットアップガイド（Google Apps Script版）
 
+**2026-09-25 文脈補完と本人の口調（実装済み・デプロイ後に適用）:** 初稿の後、保存前に本文単独で分かるか点検し、質問・回答の原文から必要な主語・対象・状況を本人の口調で補います。初稿と補完は同じVoiceサンプルを使用。補完後も原文引用・出典・文字数を検証し、3人格＋ミア審査と本人承認を維持します。[詳細](../docs/context-and-merged-posts.md)。`./deploy.sh` でA/B両方を更新。初期化不要。追加内部関数 `completePostContext` は **PostComposition.gs**（[`src/PostComposition.js`](src/PostComposition.js)）にあり、手動実行不要です。生成APIが1段階増えるため、待ち時間と費用は増えます。既存ポストは自動改稿しません。
+
 **2026-09-15 文脈補完と複数回答の統合:** [仕様](../docs/context-and-merged-posts.md)。短い回答もリナに渡し、質問から話題・対象を補うか、同じインタビューの関連回答を最大4問まで1本にまとめてから見送りを判断します。必要なら長文、短くまとまれば短文。全回答・補った質問文脈を記録し、3人格＋ミアの審査と本人承認を維持します。`./deploy.sh` でA/B両方を更新すると次の生成から適用。今回の列追加・手動の初期化は不要。追加内部関数は **PostComposition.gs** / **OutcomeQuality.gs**、手動実行不要です。既存保留ポストの本文は自動で書き換えません。
 
 **2026-09-12 内省エラーと記事資料の保存:** ミアへの形式制約を明示し、不正項目を記録して時間に余裕がある場合だけ1回修復します。引用は原文完全一致を維持。[内省の仕様・復旧](../docs/editorial-council.md)。Ubuntuの `./deploy.sh` でA/B両方を更新後、**ArticleArchive.gs**（[`gas/src/ArticleArchive.js`](src/ArticleArchive.js)）を開いて `setupArticleArchive` を1回実行してください。回答原文・訂正・投稿編集履歴と将来の記事/出典の4表を準備します。[データ仕様](../docs/article-source-archive.md)。記事生成・公開はまだ行いません。今回のように下書き未生成の完了セッションは、続いて **Interview.gs**（[`gas/src/Interview.js`](src/Interview.js)）を開き `regenerateFailedInterviews` を実行。最新の該当セッションを既定1件、保存済み回答から再生成します（API呼び出し・Slack結果通知あり）。夜の品質ゲートだけでは未生成分は復旧しません。
