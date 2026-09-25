@@ -33,6 +33,7 @@ function harness(interviews, response = []) {
       state.prompts.push({ system, user });
       return Array.isArray(state.response) ? state.response.map(d => d && { ...d, core_quote: d.text }) : state.response;
     },
+    assertEditorialExecutionBudget: () => {},
     councilText: (value, max) => typeof value === 'string' && !!value.trim() && value.length <= max,
     askClaudeJson: (system, user) => {
       state.prompts.push({ system, user });

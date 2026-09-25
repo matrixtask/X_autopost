@@ -36,7 +36,12 @@ function setup(properties = {}) {
     nowJst: () => new Date('2026-09-12T00:00:00Z'), fmtDateTime: () => '2026-09-12 09:00',
     newId: prefix => prefix + (++id), logEvent: (...args) => logs.push(args), notifySlack: () => {}, assertAccess: () => {},
     claudeModelFor: () => 'test', claudeEffortFor: () => '',
-    askClaudeJson: (system, input, tokens, opts) => { calls.push({ system, input, tokens, opts }); return structuredClone(requests.shift()); },
+    askClaudeJson: (system, input, tokens, opts) => {
+      calls.push({ system, input, tokens, opts });
+      if (system.includes('保存前の文脈・口調の最終編集') && !requests.length) return JSON.parse(input).drafts;
+      const response = requests.shift(); if (response instanceof Error) throw response;
+      return structuredClone(response);
+    },
     askClaudeJsonSalvageable: (_system, input) => Object.fromEntries(JSON.parse(input.split('\nJSON')[0]).map(r => [r.id, review(r.text)])),
   });
   return { ctx, db, calls, requests, logs };
@@ -45,6 +50,84 @@ function generate(h, format = 'long') {
   h.requests.push(debate(), reflection(), [group(format)]);
   return h.ctx.generateDraftsFromInterview('s');
 }
+
+test('final context edit uses the same actual Voice samples and saves only the completed post in the author tone', () => {
+  const { h, g, r, question } = contextFixture();
+  const quote = 'ちょっと待つかな。';
+  h.db.Interviews[0].answer = quote;
+  r.anchors[0].quote = quote;
+  const first = structuredClone(g); first.parts = [{ text: quote, core_quote: quote }];
+  g.parts[0].text = '試験を実施するか迷ったら、' + quote;
+  g.parts[0].core_quote = quote; g.parts[0].evidence[0].quote = quote;
+  g.parts[0].question_context[0].answer_quote = quote;
+  let sampleReads = 0;
+  vm.runInContext(readFileSync(new URL('../gas/src/Voice.js', import.meta.url), 'utf8'), h.ctx);
+  h.ctx.getVoiceSamples = () => { sampleReads++; return ['急がなくてもいいんじゃないかな。まだ試してないし。']; };
+  h.ctx.axisGuidanceForWriting = () => ''; h.ctx.buildMemoryPrompt = () => ''; h.ctx.topPostSamples = () => [];
+  h.requests.push(debate(), r, [first], [g]); h.ctx.generateDraftsFromInterview('s');
+  assert.equal(sampleReads, 1);
+  for (const call of h.calls.slice(2, 4)) {
+    assert.match(call.system, /急がなくてもいいんじゃないかな/);
+    assert.match(call.system, /今回の回答原文の語尾/);
+    assert.doesNotMatch(call.system, /お題の説明は書かない/);
+  }
+  assert.equal(JSON.parse(h.calls[3].input).answers[0].question, question);
+  assert.equal(JSON.parse(h.calls[3].input).drafts[0].parts[0].text, quote);
+  assert.equal(h.db.Stock.length, 1);
+  assert.equal(h.db.Stock[0].text, '試験を実施するか迷ったら、ちょっと待つかな。');
+  assert.equal(h.db.Interviews[0].answer, quote);
+  assert.equal(JSON.parse(h.db.Stock[0].edit_meta).context_pass_version, 'context-v1');
+  assert.match(h.ctx.compositionReviewPrompt(), /先に本文だけを読んで/);
+});
+
+test('context completion can expand a short draft to long without truncating the source ending', () => {
+  const h = setup();
+  const initial = group('single'); initial.parts[0].text = core;
+  h.requests.push(debate(), reflection(), [initial], [group('long')]);
+  h.ctx.generateDraftsFromInterview('s');
+  assert.equal(h.db.Stock[0].post_format, 'long');
+  assert.equal(h.db.Stock[0].text, longText);
+  assert.ok(h.db.Stock[0].text.endsWith(other + '。'));
+});
+
+test('final context editing cannot lose a split part core, a contributing source, or all groups', () => {
+  for (const kind of ['core', 'source', 'groups']) {
+    const { h, g, r } = mergeFixture();
+    let initial = g, final = structuredClone(g);
+    if (kind === 'core') {
+      h.db.Interviews = [answer()]; r.anchors[0].quote = core;
+      initial = group('split'); final = group('single'); final.parts = [initial.parts[0]];
+    }
+    if (kind === 'source') {
+      final.source_qis = [1]; final.parts[0].evidence = [final.parts[0].evidence[0]];
+    }
+    h.requests.push(debate(), r, [initial], kind === 'groups' ? [] : [final]);
+    assert.throws(() => h.ctx.generateDraftsFromInterview('s'), /元の出典・核・グループ/);
+    assert.equal(h.db.Stock.length, 0);
+  }
+});
+
+test('invented question context or API failure in the final edit cannot save the provisional draft', () => {
+  for (const kind of ['quote', 'api']) {
+    const { h, g, r } = contextFixture();
+    const final = structuredClone(g); final.parts[0].question_context[0].quote = '元の質問にない話';
+    h.requests.push(debate(), r, [g], kind === 'api' ? new Error('API unavailable') : [final]);
+    assert.throws(() => h.ctx.generateDraftsFromInterview('s'), /文脈引用|API unavailable/);
+    assert.equal(h.db.Stock.length, 0);
+    assert.equal(h.db.Interviews[0].answer, '条件が揃うまで待ちます。');
+  }
+});
+
+test('the final context edit checks the remaining budget after the initial draft API finishes', () => {
+  const h = setup(), request = h.ctx.askClaudeJson;
+  h.ctx.askClaudeJson = (...args) => {
+    const result = request(...args);
+    if (h.calls.length === 3) h.ctx.EDITORIAL_EXECUTION_DEADLINE = Date.now() + 59000;
+    return result;
+  };
+  assert.throws(() => generate(h), /時間予算/);
+  assert.equal(h.calls.length, 3); assert.equal(h.db.Stock.length, 0);
+});
 
 function contextFixture() {
   const h = setup();
@@ -215,14 +298,14 @@ test('long answer runs the council, Mia and Rina, then stores the complete long 
   assert.equal(generate(h).length, 1);
   assert.match(h.calls[2].system, /リナ.*架空の長文編集者/);
   assert.match(h.calls[2].system, /split:.*単独で読める/);
-  assert.ok(h.calls.slice(0, 3).every(c => c.opts.purpose === 'generate'));
+  assert.ok(h.calls.slice(0, 4).every(c => c.opts.purpose === 'generate'));
   assert.equal(h.db.Stock[0].text, longText);
   assert.equal(h.db.Stock[0].post_format, 'long');
   assert.equal(h.db.Stock[0].source_idx, '1');
   assert.equal(h.db.Stock[0].status, 'draft');
   assert.equal(JSON.parse(h.db.Stock[0].edit_meta).editor, 'rina');
   assert.match(h.db.Stock[0].edit_reason, /他の形式との比較/);
-  assert.deepEqual(h.calls[3], ['save', 1]);
+  assert.deepEqual(h.calls[4], ['save', 1]);
 });
 
 test('split posts share provenance and group identity but remain separate approval and scheduling units', () => {
@@ -231,7 +314,7 @@ test('split posts share provenance and group identity but remain separate approv
   assert.equal(a.edit_group, b.edit_group); assert.notEqual(a.id, b.id);
   assert.equal(a.part_count, '2'); assert.equal(b.part_index, '2');
   assert.equal(a.source_idx, b.source_idx); assert.ok(h.ctx.fitsStockText(a)); assert.ok(h.ctx.fitsStockText(b));
-  assert.deepEqual(h.calls[3], ['save', 2]);
+  assert.deepEqual(h.calls[4], ['save', 2]);
   a.status = 'approved';
   assert.equal(h.ctx.scheduleApprovedPosts().length, 1);
   assert.equal(b.status, 'draft');

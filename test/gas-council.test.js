@@ -30,6 +30,7 @@ function setup() {
   ctx.axisGuidanceForQuestions = () => '';
   const request = (kind, system, input, tokens, opts) => {
     calls.push({ kind, system, input, tokens, purpose: opts.purpose });
+    if (system.includes('保存前の文脈・口調の最終編集') && !responses.length) return JSON.parse(input).drafts;
     const result = responses.shift();
     if (result instanceof Error) throw result;
     return kind === 'text' ? JSON.stringify(result) : structuredClone(result);
@@ -114,7 +115,7 @@ test('council: draft core must survive verbatim, with its uncertainty and correc
     { qi: 1, format: 'single', reason: '判断を短く伝える', tradeoff: '長文は不要', omitted: '', parts: [{ core_quote: quote, text: quote + '。まだ試す前です。' }] },
   ]);
   assert.equal(ctx.generateDraftsFromInterview('s').length, 1);
-  assert.deepEqual(calls.map(c => c.kind), ['json', 'json', 'json']);
+  assert.deepEqual(calls.map(c => c.kind), ['json', 'json', 'json', 'json']);
   assert.ok(calls.every(c => c.purpose === 'generate'));
   assert.equal(stock[0].source_idx, '1');
   assert.equal(stock[0].text, quote + '。まだ試す前です。');
@@ -150,6 +151,23 @@ test('council: turn uses new discussion and does not add both a followup and rep
   assert.equal(calls.length, 3);
   assert.equal(result.followup, '見送った案は何でした？');
   assert.equal(result.next_question, '');
+});
+
+test('council: clarification keeps discussion and Mia before generating a structured explanation', () => {
+  const { ctx, calls, responses } = setup();
+  const current = { idx: 1, session_id: 's', theme: '試作', question: '判断の境界はどこですか？', answer: '' };
+  const detail = { context: 'ここでの境界は、案を採用するか見送るかを分ける条件という意味です。',
+    intent: '判断が変わる条件を知りたい質問です。', answer_hint: '仮の例なら、試験を進める条件を一つ考える切り口です。',
+    question: 'どの条件が変わると、別の案を選びますか？' };
+  responses.push(debate(), reflection(), { clarification: detail });
+  const result = ctx.planInterviewTurn([current], current, 'どういう意味？', null, false, true);
+  assert.deepEqual(calls.map(c => c.kind), ['json', 'json', 'text']);
+  assert.ok(calls.every(c => c.purpose === 'interview'));
+  assert.match(calls[0].input, /clarification_requested.*true/);
+  assert.match(calls[0].system, /新しい取材や追問を提案せず/);
+  assert.match(calls[1].input, /final_debate/);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.clarification)), detail);
+  assert.equal(current.answer, '');
 });
 
 test('council: a failed discussion does not silently fall back to generating an ordinary response', () => {

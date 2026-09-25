@@ -8,6 +8,13 @@ const sources = ['Pure', 'Editorial', 'OutcomeQuality', 'Interview'].map((name) 
 const threadTs = '1789000000.123456';
 const sessionId = '2026-09-10_iv_test';
 const clone = (value) => JSON.parse(JSON.stringify(value));
+const explanation = (overrides = {}) => ({
+  context: 'もし複数の案から何かを選ぶ場面があったなら、そのときの判断を想定しています。実際にあったとは決めつけていません。',
+  intent: '何を選んだかより、どこで迷い、何を優先したかを知りたい質問です。',
+  answer_hint: '仮の例なら、案を比較したときの迷いを1つ振り返る切り口です。該当する経験がなくても構いません。',
+  question: '昨日決めたことがあれば、何を優先して選びましたか？',
+  ...overrides,
+});
 
 function fixture(count = 2, options = {}) {
   const rows = Array.from({ length: count }, (_, i) => ({
@@ -113,13 +120,16 @@ test('interview: failed generation explains that the nightly scoring gate cannot
 test('interview: clarification retains the current question and does not save an answer', () => {
   const f = fixture();
   const originalQuestion = f.rows[0].question;
-  f.responses.push({ clarification: '昨日決めたことを1つ教えてください。' });
+  f.responses.push({ clarification: explanation() });
   f.reply('どういう意味？');
   assert.equal(f.rows[0].question, originalQuestion);
   assert.equal(f.rows[0].answer, '');
   assert.equal(f.rows[0].answered_at, '');
   assert.equal(f.rows[1].answer, '');
   assert.match(f.messages.at(-1).text, /昨日決めたこと/);
+  assert.match(f.messages.at(-1).text, /想定している場面:.*\n\n聞きたいこと:.*\n\n答える切り口:/s);
+  assert.deepEqual(JSON.parse(f.rows[0].clarification_context).explanation, explanation());
+  assert.equal(f.context.interviewAnswerText(f.rows[0]), '');
   assert.equal(f.finished.length, 0);
 });
 
@@ -127,7 +137,7 @@ test('interview: clarification of a pending follow-up refers to that follow-up',
   const f = fixture();
   f.responses.push({ followup: '3社に共通していた理由は何でしたか？' });
   f.reply('昨日3社に断られた');
-  f.responses.push({ clarification: '断られた理由で同じものはありましたか？' });
+  f.responses.push({ clarification: explanation({ question: '断られた理由で同じものはありましたか？' }) });
   f.reply('もう少し具体的に');
   const input = JSON.parse(f.calls.at(-1).input.split('\nJSONのみ:')[0]);
   assert.equal(input.current_question, f.rows[0].followup_question);
@@ -135,6 +145,82 @@ test('interview: clarification of a pending follow-up refers to that follow-up',
   assert.equal(f.rows[0].answer, '昨日3社に断られた');
   assert.equal(f.rows[0].followup_answered_at, undefined);
   assert.match(f.messages.at(-1).text, /Q1の補足/);
+});
+
+test('interview: repeated clarification sees previous explanation and never consumes a follow-up', () => {
+  const f = fixture();
+  f.responses.push({ clarification: explanation() });
+  f.reply('どういう文脈？');
+  const second = explanation({ context: 'ここでいう判断とは、候補が複数あったときに何を基準に選ぶか、という意味です。' });
+  f.responses.push({ clarification: second });
+  f.reply('まだ意味が分からない');
+  const input = JSON.parse(f.calls.at(-1).input.split('\nJSONのみ:')[0]);
+  assert.deepEqual(input.previous_clarification.explanation, explanation());
+  assert.equal(input.current_theme, f.rows[0].theme);
+  assert.equal(input.allow_followup, false);
+  assert.match(f.calls.at(-1).system, /仮の例/);
+  assert.deepEqual(JSON.parse(f.rows[0].clarification_context).explanation, second);
+  assert.equal(f.rows[0].answer, '');
+  assert.equal(f.rows[0].followup_question, undefined);
+  assert.equal(f.finished.length, 0);
+  // A later actual answer is saved verbatim, with AI context still explicitly separate.
+  f.reply('それなら、試験を延期したことかな。');
+  assert.equal(f.rows[0].answer, 'それなら、試験を延期したことかな。');
+  const answerInput = JSON.parse(f.calls.at(-1).input.split('\nJSONのみ:')[0]);
+  assert.equal(answerInput.history[0].answer, f.rows[0].answer);
+  assert.deepEqual(answerInput.history[0].ai_clarification.explanation, second);
+});
+
+test('interview: malformed explanation, repeated question, and API failure never echo the original question', () => {
+  for (const response of [new Error('API unavailable'), {}, { clarification: '質問1は何ですか？' },
+    { clarification: explanation({ question: '質問1は何ですか？' }) },
+    { clarification: explanation({ context: '' }) },
+    { clarification: explanation({ intent: 'あ'.repeat(251) }) },
+    { clarification: explanation({ context: '質問1は何ですか？' }) }]) {
+    const f = fixture();
+    f.responses.push(response);
+    f.reply('どういう意味？');
+    assert.match(f.messages.at(-1).text, /説明を生成できませんでした/);
+    assert.ok(!f.messages.at(-1).text.includes(f.rows[0].question));
+    assert.equal(f.rows[0].answer, '');
+    assert.equal(f.rows[0].answered_at, '');
+    assert.equal(f.rows[0].clarification_context, undefined);
+    assert.equal(f.finished.length, 0);
+    assert.equal(f.releases, 1);
+  }
+});
+
+test('interview: repeating an explanation is rejected even if the final question is paraphrased', () => {
+  const f = fixture();
+  f.responses.push({ clarification: explanation() });
+  f.reply('どういう意味？');
+  const saved = f.rows[0].clarification_context;
+  f.responses.push({ clarification: explanation({ question: '何を基準に決めたのですか？' }) });
+  f.reply('もう少し具体的に');
+  assert.match(f.messages.at(-1).text, /説明を生成できませんでした/);
+  assert.equal(f.rows[0].clarification_context, saved);
+});
+
+test('interview: clarification detection includes explicit context requests but not stories containing the phrase', () => {
+  const f = fixture();
+  for (const value of ['どういう意味？', 'それってどういう意味ですか？', '質問の文脈が分からない',
+    '質問の背景を説明して', '質問について詳しく教えてください', '「判断の境界」ってどういう意味？']) {
+    assert.equal(f.context.isInterviewClarificationRequest(value), true, value);
+  }
+  for (const value of ['相手に「どういう意味？」と聞きました', '意味が分からないので試験を止めた',
+    'なぜ必要なんだろう？', 'この質問は難しいけど、私なら延期する']) {
+    assert.equal(f.context.isInterviewClarificationRequest(value), false, value);
+  }
+});
+
+test('interview: legacy rows and explanations for another question do not leak into a new follow-up', () => {
+  const f = fixture();
+  assert.equal(f.context.previousInterviewClarification(f.rows[0]), null);
+  f.rows[0].clarification_context = '{bad JSON';
+  assert.equal(f.context.previousInterviewClarification(f.rows[0]), null);
+  f.rows[0].clarification_context = JSON.stringify({ question: f.rows[0].question, explanation: explanation() });
+  f.rows[0].followup_question = '何を優先しましたか？';
+  assert.equal(f.context.previousInterviewClarification(f.rows[0]), null);
 });
 
 test('interview: end commands require an exact match, not the prefix of an answer', () => {
