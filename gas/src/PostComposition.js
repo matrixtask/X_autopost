@@ -24,6 +24,7 @@ function postCompositionInstructions() {
 
 /** 同じ文体見本を再利用して、保存前に初見の読者として読み直し、不足する文脈を補う。 */
 function completePostContext(output, qa, brief, stylePrompt, answers) {
+  output = validatePostCompositionsWithEvidenceRepair(output, qa, brief, stylePrompt);
   var original = validatePostCompositions(output, qa, brief);
   if (!original.length) return original;
   assertEditorialExecutionBudget();
@@ -35,7 +36,7 @@ function completePostContext(output, qa, brief, stylePrompt, answers) {
     'グループの数・順番・主回答qiと既存の出典・核の引用は保持。必要なら同じセッションの回答を追加してよいが、別グループとの重複使用は禁止。分割の各ポストは単独で分かるようにする。文脈を入れると短文上限を超える場合はlongへ変え、末尾を切らない。形式変更の理由はreason/tradeoffを更新する。',
     'draftsと同じJSON配列の形式で、修正後の全グループを返す。解説や人格名を投稿本文へ混ぜない。',
   ].join('\n'), JSON.stringify({ answers: answers, drafts: output }), 12000, { purpose: 'generate' });
-  var result = validatePostCompositions(completed, qa, brief);
+  var result = validatePostCompositions(validatePostCompositionsWithEvidenceRepair(completed, qa, brief, stylePrompt), qa, brief);
   if (result.length !== original.length || original.some(function (g, i) {
     var next = result[i];
     return String(g.source.idx) !== String(next.source.idx) ||
@@ -80,6 +81,52 @@ function validateQuestionContexts(contexts, sources, text) {
   });
 }
 
+/** モデルが出典引用だけを壊した場合、本文を変えず引用メタデータだけ1回修復する。 */
+function validatePostCompositionsWithEvidenceRepair(groups, qa, brief, stylePrompt) {
+  var originalError;
+  try {
+    if (!Array.isArray(groups)) throw new Error('編集者の出力が不正です');
+    groups.forEach(function (g) {
+      if (g && Array.isArray(g.source_qis) && g.source_qis.length === 1 && String(g.source_qis[0]) === String(g.qi)) {
+        (g.parts || []).forEach(function (p) { p.evidence = [{ qi: g.qi, quote: p.core_quote }]; });
+      }
+    });
+    validatePostCompositions(groups, qa, brief);
+    return groups;
+  }
+  catch (error) {
+    if (!/回答ごとの原文引用が不正です/.test(String(error && error.message || error))) throw error;
+    originalError = error;
+  }
+  assertEditorialExecutionBudget();
+  var repaired = askClaudeJson(stylePrompt + editorialCouncilInstructions(brief) + '\n' + postCompositionInstructions() + '\n' + [
+    '回答ごとの原文引用メタデータだけを修復する。元のdraftsは証拠検証に失敗したので、その引用表記を真似しない。',
+    '全グループ/partの本文text、qi、source_qis、format、core_quote、reason、tradeoff、omitted、question_contextを元JSONと完全に同一に保つ。文面や主張を一文字も編集しない。',
+    '各partのevidenceにsource_qisに含まれる全回答のqiを各1件だけ置く。quoteは該当する回答原文から句読点を含めて完全一致で連続した1〜80字を選び、同じquoteが該当する本文textにも完全一致で存在する必要がある。主回答のquoteはcore_quoteと同一にする。',
+    '本文内に一致する引用がない回答は根拠として足さない。ただしsource_qisは削らない。正しい証拠を構成できない場合は元draftsをそのまま返し、検証側で保存を止める。',
+    '出力は元draftsと同じJSON配列。余計な文章は禁止。',
+  ].join('\n'), JSON.stringify({ answers: qa.map(function (r) {
+    return { qi: r.idx, question: String(r.question || ''), followup_question: String(r.followup_question || ''),
+      answer: compositionRawAnswer(r) };
+  }), drafts: groups }), 12000, { purpose: 'generate' });
+  if (!Array.isArray(repaired) || repaired.length !== groups.length || repaired.some(function (g) {
+    return !g || !Array.isArray(g.parts);
+  })) throw originalError;
+  if (JSON.stringify(repaired.map(function (g) {
+    return { qi: g.qi, source_qis: g.source_qis, format: g.format, reason: g.reason, tradeoff: g.tradeoff,
+      omitted: g.omitted, parts: (g.parts || []).map(function (p) {
+        return { text: p.text, core_quote: p.core_quote, question_context: p.question_context };
+      }) };
+  })) !== JSON.stringify(groups.map(function (g) {
+    return { qi: g.qi, source_qis: g.source_qis, format: g.format, reason: g.reason, tradeoff: g.tradeoff,
+      omitted: g.omitted, parts: (g.parts || []).map(function (p) {
+        return { text: p.text, core_quote: p.core_quote, question_context: p.question_context };
+      }) };
+  }))) throw new Error('原文引用修復で投稿本文または出典が変わりました。保存を止めました');
+  validatePostCompositions(repaired, qa, brief);
+  return repaired;
+}
+
 /** 全グループを検証してから一括保存。途中まで救出して分割の後半を失わない。 */
 function validatePostCompositions(groups, qa, brief) {
   if (!Array.isArray(groups) || groups.length > 6) throw new Error('編集者の出力が不正です');
@@ -108,7 +155,9 @@ function validatePostCompositions(groups, qa, brief) {
       }
       seenTexts[key] = true;
       count++; chars += Array.from(text).length;
-      var evidence = part.evidence === undefined && sources.length === 1 ? [{ qi: g.qi, quote: part.core_quote }] : part.evidence;
+      // 単一回答は、上で検証したcore_quoteが回答/本文の双方に完全一致する。
+      // モデルが省略・空配列・別引用を返しても、この証明可能な核を使う。
+      var evidence = sources.length === 1 ? [{ qi: g.qi, quote: part.core_quote }] : part.evidence;
       if (!Array.isArray(evidence) || evidence.length !== sources.length || !sources.every(function (r) {
         var found = evidence.filter(function (e) { return e && String(e.qi) === String(r.idx); });
         return found.length === 1 && councilText(found[0].quote, 80) && compositionRawAnswer(r).indexOf(found[0].quote) >= 0 &&

@@ -47,6 +47,8 @@ GASエディタの関数プルダウンは、開いているファイルの関�
 
 ## 実装上の注意
 
+- **2026-09-26 原文引用検証:** 単一回答の `evidence` は検証済み `core_quote` から正規化。複数回答で引用メタデータが壊れた時だけ本文を変えず1回修復し、再検証に通らなければ保存停止・回答維持。詳細は `docs/context-and-merged-posts.md`。
+
 - **2026-09-26 Luna:** OpenAIの質問/会話/生成は既定 `gpt-6-luna`。採点・分析のClaude既定は `claude-opus-5-5`（ユーザー了承済み）。既存の `OPENAI_MODEL` / `OPENAI_MODEL_GENERATE` が優先するため、切り替え時は両方をLunaに保存する。`OpenAI.gs` の `testOpenAIConnection` / `testOpenAIGenerationConnection` で会話/生成を個別確認。詳細は `docs/openai-responses.md`。
 
 - **2026-09-26 聞き返しの説明:** `Interview.js` は「どういう意味？」に場面/意図/答える切り口/言い換えの4項目を返す。質問用140字制限を説明全体へ適用しない。3人格→ミアを維持し、仮の例を本人の事実にしない。Interviews末尾 `clarification_context`（保存時自動追加）は直近のAI説明であり回答原文ではない。同文・不正・API失敗時に元質問を再掲せず、現問で待つ。詳細は `docs/interview-quality.md`。
