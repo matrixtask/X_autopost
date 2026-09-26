@@ -341,6 +341,52 @@ test('invalid source, missing core, duplicate claims, wrong counts and overlong 
   }
 });
 
+test('single-source drafts use the verified core as evidence when Luna omits or malforms evidence metadata', () => {
+  const h = setup();
+  const g = group('single');
+  g.parts[0].text = core + '。';
+  g.parts[0].evidence = [];
+  h.requests.push(debate(), reflection(), [g]);
+  h.ctx.generateDraftsFromInterview('s');
+  const meta = JSON.parse(h.db.Stock[0].edit_meta);
+  assert.deepEqual(meta.evidence, [{ qi: '1', quote: core }]);
+  assert.equal(h.db.Stock[0].text, core + '。');
+});
+
+test('invalid evidence on a merge gets one metadata-only repair before saving', () => {
+  const { h, g, r } = mergeFixture();
+  const repaired = structuredClone(g);
+  repaired.parts[0].evidence = [{ qi: 1, quote: '条件が揃うまで待ちます。' },
+    { qi: 2, quote: '記録がない試験は次に使えません。' }];
+  const invalid = structuredClone(g);
+  invalid.parts[0].evidence = [{ qi: 1, quote: '引用が回答に存在しない' }];
+  h.requests.push(debate(), r, [invalid], [repaired]);
+  h.ctx.generateDraftsFromInterview('s');
+  assert.equal(h.db.Stock.length, 1);
+  assert.equal(h.db.Stock[0].text, g.parts[0].text);
+  assert.deepEqual(JSON.parse(h.db.Stock[0].edit_meta).evidence.map(e => e.qi), ['1', '2']);
+  const repairCall = h.calls.find(c => c.system.includes('回答ごとの原文引用メタデータだけを修復'));
+  assert.ok(repairCall);
+  assert.match(repairCall.system, /一文字も編集しない/);
+});
+
+test('evidence repair cannot alter draft text and an irreparable merge saves nothing', () => {
+  for (const response of [
+    (() => { const changed = mergeFixture().g; changed.parts[0].text += '余計な文章'; return [changed]; })(),
+    undefined,
+  ]) {
+    const { h, g, r } = mergeFixture();
+    const invalid = structuredClone(g);
+    invalid.parts[0].evidence = [];
+    const originalAnswer = h.db.Interviews[0].answer;
+    h.requests.push(debate(), r, [invalid]);
+    if (response) h.requests.push(response);
+    assert.throws(() => h.ctx.generateDraftsFromInterview('s'));
+    assert.equal(h.db.Stock.length, 0);
+    assert.equal(h.db.Interviews[0].answer, originalAnswer);
+  }
+});
+
 test('truncated JSON is never partially salvaged into a split series; a repeated generation does not duplicate stock', () => {
   const h = setup(); h.requests.push(debate(), reflection(), { parts: 'incomplete' });
   assert.throws(() => h.ctx.generateDraftsFromInterview('s'), /出力が不正/); assert.equal(h.db.Stock.length, 0);
