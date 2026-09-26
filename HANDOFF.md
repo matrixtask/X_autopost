@@ -403,3 +403,9 @@ draft（生成直後）→ 採点 → ready（合格・承認待ち）→ approv
 - `OpenAI.gs` に手動接続テスト `testOpenAIGenerationConnection` を追加。会話側は既存 `testOpenAIConnection`。それぞれAPIを1回呼び、実際に選択したモデル名と応答を返す。投稿・Slack送信はしない。
 - 検証: 全156テスト成功、OpenAI.js構文チェック、diffチェック成功。公式Luna仕様でResponses/low/mediumを確認。実APIの利用権限・文体品質・本番設定は未確認。
 - 本番の設定値は自動上書きしない。GASのスクリプトプロパティ `OPENAI_MODEL` と `OPENAI_MODEL_GENERATE` を両方 `gpt-6-luna`、`RESPONSE_PROVIDER=openai` に保存すると、既存コードでも次回実行から切り替わる。コード更新はUbuntuの通常コマンドでA/Bを更新。追加の生成用接続テストは更新後に利用可能。
+
+### 同日追記: 採点・分析もOpus 5.5へ変更
+
+- ユーザーが採点官の変更を明示了承。Claudeの既定を `claude-opus-5-5` に変更。既存の `CLAUDE_MODEL` / `CLAUDE_MODEL_SCORE` の設定が優先するため、本番は両方を同モデルに保存する。旧スコアを一括再採点する処理は起動しない。通常の今後の採点から適用。
+- **Claude.gs** に手動接続確認 `testClaudeScoringConnection` を追加。APIへOKのみを要求し、実際の投稿の採点やSlack送信はしない。既存fallback設定を維持し、fallbackが発生すればLogに記録。採点官を厳密に固定したい場合は既存 `CLAUDE_FALLBACKS=off` を利用できる。
+- 全157テスト成功。Opus 5.5のthinkingブロックを除外した本文取得、禁止パラメータの非送信、採点と分析の既定/明示上書きを確認。公式モデルID・互換性確認済み。実API/本番切り替え・採点品質の改善は未検証。

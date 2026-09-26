@@ -60,15 +60,23 @@ function isRefusalError(e) {
  *              ここだけ上位モデル（CLAUDE_MODEL_GENERATE）を使う
  *   score    … 採点・遡及採点。数百件を回すうえ、途中でモデルを変えると
  *              過去のスコアと比較できなくなる。CLAUDE_MODEL_SCORE で固定
- *   それ以外 … 質問生成・分析など。CLAUDE_MODEL（既定 claude-sonnet-5）
+ *   それ以外 … 分析など。CLAUDE_MODEL（既定 claude-opus-5-5）
  *
  * 用途別の設定が無ければ CLAUDE_MODEL に落ちる。
  */
 function claudeModelFor(purpose) {
-  var base = getProp('CLAUDE_MODEL', 'claude-sonnet-5');
+  var base = getProp('CLAUDE_MODEL', 'claude-opus-5-5');
   if (purpose === 'generate') return getProp('CLAUDE_MODEL_GENERATE', base);
   if (purpose === 'score') return getProp('CLAUDE_MODEL_SCORE', base);
   return base;
+}
+
+/** Claude.gsで手動実行する採点経路の接続確認。実際の投稿の採点・Slack送信はしない。 */
+function testClaudeScoringConnection() {
+  var text = askClaude('接続確認です。OK とだけ返してください。', 'OK', 4000, { purpose: 'score' });
+  var result = 'Claude採点接続OK / model=' + claudeModelFor('score') + ' / 応答=' + text;
+  console.log(result);
+  return result;
 }
 
 /**

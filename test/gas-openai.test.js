@@ -60,6 +60,23 @@ test('OpenAI: scoring and untagged background analysis retain Claude', () => {
   assert.equal(h.requests[0].headers.Authorization, undefined);
 });
 
+test('Claude: scoring and analysis default to Opus 5.5 while explicit model settings win', () => {
+  const response = { body: { content: [{ type: 'thinking', thinking: '' }, { type: 'text', text: 'OK' }], stop_reason: 'end_turn' } };
+  const h = harness({}, [response, response]);
+  assert.equal(h.ctx.testClaudeScoringConnection(), 'Claude採点接続OK / model=claude-opus-5-5 / 応答=OK');
+  h.ctx.askClaude('analysis', 'input', 4000);
+  for (const r of h.requests) {
+    assert.equal(r.payload.model, 'claude-opus-5-5');
+    assert.equal(r.payload.thinking, undefined);
+    assert.equal(r.payload.temperature, undefined);
+    assert.equal(r.payload.fallbacks, 'default');
+    assert.equal(r.headers['anthropic-beta'], 'server-side-fallback-2026-07-01');
+  }
+  const overridden = harness({ CLAUDE_MODEL: 'custom-base', CLAUDE_MODEL_SCORE: 'custom-score' }, [response]);
+  assert.match(overridden.ctx.testClaudeScoringConnection(), /model=custom-score/);
+  assert.equal(overridden.ctx.claudeModelFor(), 'custom-base');
+});
+
 test('OpenAI: both connection checks show the actual model including existing overrides', () => {
   for (const props of [{}, { OPENAI_MODEL: 'gpt-6-astra', OPENAI_MODEL_GENERATE: 'gpt-6-luna' }]) {
     const h = harness(props);
