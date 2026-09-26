@@ -13,7 +13,7 @@ function responseProviderFor(purpose) {
 }
 
 function openAIModelFor(purpose) {
-  var base = getProp('OPENAI_MODEL', 'gpt-6-astra');
+  var base = getProp('OPENAI_MODEL', 'gpt-6-luna');
   return purpose === 'generate' ? getProp('OPENAI_MODEL_GENERATE', base) : base;
 }
 
@@ -112,6 +112,14 @@ function openAIMessage(systemPrompt, content, maxTokens, opts) {
 function testOpenAIConnection() {
   var text = openAIMessage('接続確認です。OK とだけ返してください。', 'OK', 1000, { purpose: 'interview' });
   var result = 'OpenAI接続OK / model=' + openAIModelFor('interview') + ' / 応答=' + text;
+  console.log(result);
+  return result;
+}
+
+/** OpenAI.gsで手動実行。生成側のモデルとmedium推論設定も確認する。 */
+function testOpenAIGenerationConnection() {
+  var text = openAIMessage('接続確認です。OK とだけ返してください。', 'OK', 4000, { purpose: 'generate' });
+  var result = 'OpenAI生成接続OK / model=' + openAIModelFor('generate') + ' / 応答=' + text;
   console.log(result);
   return result;
 }

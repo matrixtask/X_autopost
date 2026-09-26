@@ -334,7 +334,9 @@ weight = anchor * (1 + s * (perf - 50) / span)
 
 ## 質問と受け答えの品質
 
-質問・受け答え・下書き生成はOpenAI Responses APIを使用します。既定は `gpt-6-astra`。
+質問・受け答え・下書き生成はOpenAI Responses APIを使用します。既定は `gpt-6-luna`。
+既存の設定がある場合は、GASのスクリプトプロパティ `OPENAI_MODEL` / `OPENAI_MODEL_GENERATE` を両方 `gpt-6-luna` に変更してください（`RESPONSE_PROVIDER=openai`）。プロパティ保存後の次の実行から有効です。
+`OpenAI.gs` の `testOpenAIConnection`（会話）と `testOpenAIGenerationConnection`（生成）でモデル名を確認できます。生成用接続確認は今回追加したため、利用するにはコードのデプロイが必要です。
 接続設定・検証手順は [OpenAIへの切り替え](../docs/openai-responses.md) を参照してください。
 
 回答原文を保存したうえで、その回答中の短い抜粋を返し、不足情報があるときだけ
@@ -392,13 +394,13 @@ GASエディタで **`regenerateFailedInterviews`** を実行すると、
 | `MAX_POSTS_PER_DAY` | `3` | 1日の最大投稿数 |
 | `INTERVIEW_QUESTIONS` | `4` | 毎朝の質問数 |
 | `RESPONSE_PROVIDER` | `openai` | 質問・会話・画像説明・下書き・リライト。`claude` で旧経路へ切り戻す。採点と裏方分析には影響しない |
-| `OPENAI_MODEL` | `gpt-6-astra` | 質問・会話・画像説明・補足ヒント用 |
+| `OPENAI_MODEL` | `gpt-6-luna` | 質問・会話・画像説明・補足ヒント用 |
 | `OPENAI_MODEL_GENERATE` | （`OPENAI_MODEL`） | 下書き・リライト用 |
 | `OPENAI_EFFORT_INTERVIEW` | `low` | OpenAIの会話用 reasoning.effort |
 | `OPENAI_EFFORT_GENERATE` | `medium` | OpenAIの生成用 reasoning.effort |
-| `CLAUDE_MODEL` | `claude-sonnet-5` | 質問生成・分析など、下の2つに当てはまらない呼び出しのモデル |
-| `CLAUDE_MODEL_GENERATE` | （`CLAUDE_MODEL`） | 下書き生成・リライトのモデル。文体の質が直接ポストに出るので、ここだけ `claude-fable-5-1` などの上位モデルにできる |
-| `CLAUDE_MODEL_SCORE` | （`CLAUDE_MODEL`） | 採点のモデル。途中で変えると過去のスコアと比較できなくなるので、変えるなら意図して変える |
+| `CLAUDE_MODEL` | `claude-opus-5-5` | 質問生成・分析など、下の2つに当てはまらない呼び出しのモデル |
+| `CLAUDE_MODEL_GENERATE` | （`CLAUDE_MODEL`） | Claude経路に切り替えた際の下書き生成・リライトモデル |
+| `CLAUDE_MODEL_SCORE` | （`CLAUDE_MODEL`） | 採点モデル。既存スコアは保存時のまま保持し、モデル切替後の採点に適用 |
 | `CLAUDE_EFFORT_GENERATE` | `medium` | 生成の思考の深さ（`low`/`medium`/`high`/`xhigh`/`max`）。Fable 5.1 は思考が常時オンなので、定型作業で深く考えすぎて出力枠を使い切るのを防ぐ |
 | `CLAUDE_FALLBACKS` | `auto` | 安全分類器に拒否されたとき別モデルへ自動で引き継ぐか。`auto` は Fable / Opus 5 系のときだけ付ける。`off` で止められる |
 | `BACKFILL_MAX_POSTS` | `1000` | `backfillManualPosts` が遡る件数 |

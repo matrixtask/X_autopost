@@ -15,14 +15,14 @@
  *
  * 任意:
  *   RESPONSE_PROVIDER   openai（既定）/ claude。質問・会話・画像説明・下書き・リライト用
- *   OPENAI_MODEL        gpt-6-astra（既定）。質問・会話用
+ *   OPENAI_MODEL        gpt-6-luna（既定）。質問・会話用
  *   OPENAI_MODEL_GENERATE 下書き・リライト用。未設定なら OPENAI_MODEL
  *   OPENAI_EFFORT_INTERVIEW low（既定）。OPENAI_EFFORT_GENERATE medium（既定）
  *   NOTION_TOKEN        Notionインテグレーションのシークレット
  *   NOTION_DATABASE_ID  ストック同期先NotionデータベースID
  *   NOTION_THEMES_DATABASE_ID  テーマ管理DB（トークテーマ（運用中）_X）のID。
  *                       設定するとNotionの行がThemesシートへ毎朝同期される
- *   CLAUDE_MODEL        既定: claude-sonnet-5（質問生成・分析など）
+ *   CLAUDE_MODEL        既定: claude-opus-5-5（採点・分析など）
  *   CLAUDE_MODEL_GENERATE 下書き生成・リライト用。未設定なら CLAUDE_MODEL。
  *                       文体の質が直接ポストに出るので、ここだけ上位モデルにできる
  *   CLAUDE_MODEL_SCORE  採点用。未設定なら CLAUDE_MODEL。途中で変えると過去の
