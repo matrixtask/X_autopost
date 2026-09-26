@@ -37,7 +37,7 @@ test('OpenAI: interview and writing use Responses with separate reasoning budget
     assert.equal(req.url, 'https://api.openai.com/v1/responses');
     assert.equal(req.headers.Authorization, 'Bearer fake-openai-key');
     assert.equal(req.headers['x-api-key'], undefined);
-    assert.equal(req.payload.model, 'gpt-6-astra');
+    assert.equal(req.payload.model, 'gpt-6-luna');
     assert.equal(req.payload.store, false);
     for (const unsupported of ['temperature', 'top_p', 'fallbacks', 'max_tokens']) {
       assert.equal(req.payload[unsupported], undefined);
@@ -58,6 +58,18 @@ test('OpenAI: scoring and untagged background analysis retain Claude', () => {
   assert.ok(h.requests.every((r) => r.url === 'https://api.anthropic.com/v1/messages'));
   assert.equal(h.requests[0].payload.model, 'existing-scoring-model');
   assert.equal(h.requests[0].headers.Authorization, undefined);
+});
+
+test('OpenAI: both connection checks show the actual model including existing overrides', () => {
+  for (const props of [{}, { OPENAI_MODEL: 'gpt-6-astra', OPENAI_MODEL_GENERATE: 'gpt-6-luna' }]) {
+    const h = harness(props);
+    const interviewModel = props.OPENAI_MODEL || 'gpt-6-luna';
+    const writingModel = props.OPENAI_MODEL_GENERATE || interviewModel;
+    assert.equal(h.ctx.testOpenAIConnection(), `OpenAI接続OK / model=${interviewModel} / 応答=OK`);
+    assert.equal(h.ctx.testOpenAIGenerationConnection(), `OpenAI生成接続OK / model=${writingModel} / 応答=OK`);
+    assert.deepEqual(h.requests.map(r => [r.payload.model, r.payload.reasoning.effort]),
+      [[interviewModel, 'low'], [writingModel, 'medium']]);
+  }
 });
 
 test('OpenAI: explicit Claude rollback retains existing writing model', () => {

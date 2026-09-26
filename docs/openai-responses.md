@@ -3,9 +3,15 @@
 2026-09-10の依頼により、本人向けの生成処理をOpenAI Responses APIへ切り替えた。
 ChatGPTの画面を操作する仕組みではなく、GASからAPIを呼び出す。
 
+2026-09-26: ユーザー指定で質問・会話・投稿生成の既定モデルを `gpt-6-luna` へ変更。質問/会話のeffortはlow、投稿生成はmediumを維持。生成前の3人格会議とミア、保存前編集も用途に応じてLunaを使う。採点・裏方分析はClaudeのまま。
+既にスクリプトプロパティにモデル名がある場合は既定値より優先されるため、`OPENAI_MODEL` と `OPENAI_MODEL_GENERATE` の両方を `gpt-6-luna` に更新する。`RESPONSE_PROVIDER` は `openai`。キーは変更不要。
+既存コードにもこの3プロパティはあるため、モデルの切り替え自体はプロパティ保存で次の実行から有効になる。
+
+公式仕様: [GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna) はResponses APIとreasoning.effortのlow/mediumをサポート（2026-09-26確認）。ローカルの模擬APIテストは156件通過。実アカウントのモデル利用権限・出力品質・本番切り替えは未確認。
+
 | 用途 | 既定プロバイダ | モデル・設定 |
 | --- | --- | --- |
-| 初回質問・受け答え・追問・次問調整・聞き返し | OpenAI | `OPENAI_MODEL=gpt-6-astra` / effort `low` |
+| 初回質問・受け答え・追問・次問調整・聞き返し | OpenAI | `OPENAI_MODEL=gpt-6-luna` / effort `low` |
 | 画像説明・下書きを補うヒント | OpenAI | 同上 |
 | 下書き・リライト | OpenAI | `OPENAI_MODEL_GENERATE`（未設定なら `OPENAI_MODEL`）/ effort `medium` |
 | 採点・遡及採点・採点再現性確認 | Claude | 既存 `CLAUDE_MODEL_SCORE` を維持 |
@@ -18,7 +24,7 @@ ChatGPTの画面を操作する仕組みではなく、GASからAPIを呼び出�
 
 1. GASの「プロジェクトの設定」→「スクリプト プロパティ」に `OPENAI_API_KEY` を登録する。
    キーはコード・スプレッドシート・Slack・GitHubへ書かない。API側で対象モデルを利用できる必要がある。
-2. `RESPONSE_PROVIDER=openai`、`OPENAI_MODEL=gpt-6-astra` を設定する。どちらも未設定時の既定値と同じ。
+2. `RESPONSE_PROVIDER=openai`、`OPENAI_MODEL=gpt-6-luna`、`OPENAI_MODEL_GENERATE=gpt-6-luna` を設定する。
    採点と裏方分析用の `ANTHROPIC_API_KEY` は残す。
 3. Ubuntuで反映する:
 
@@ -29,6 +35,7 @@ ChatGPTの画面を操作する仕組みではなく、GASからAPIを呼び出�
    B（Slack）のバージョン付きデプロイも更新する。`.deployment-id-slack` が登録されていれば
    `deploy.sh` が更新する。`clasp push` だけではSlackからの受信処理は切り替わらない。
 4. GASエディタで **`OpenAI.gs` を開き、`testOpenAIConnection` を選んで実行**する。
+   生成側は同じファイルの **`testOpenAIGenerationConnection`** を選んで実行する。両方の結果が `model=gpt-6-luna` になることを確認する。
    モデル名と応答が実行ログへ出る。OpenAI APIを1回呼び、Logへ診断記録を残す。
    X投稿・Slack送信・Stock/Interviewsの変更は行わない。
 5. 次のインタビューで会話と生成を確認する。Logの `openai_response` にモデル・用途・トークン数が残る。
@@ -51,7 +58,7 @@ ChatGPTの画面を操作する仕組みではなく、GASからAPIを呼び出�
 
 新規ファイルは `gas/src/OpenAI.js` → GASの **`OpenAI.gs`**。
 `responseProviderFor` / `openAIModelFor` / `openAIError` / `openAIInput` / `openAIMessage` は内部関数。
-手動実行するのは引数なしの `testOpenAIConnection` のみ。
+手動接続確認は引数なしの `testOpenAIConnection` / `testOpenAIGenerationConnection`。
 既存 `askClaude*` の関数名と呼び出し形式を維持し、`purpose: interview|generate` をルーティングする。
 `purpose: score` と用途未指定はClaudeに残す。
 

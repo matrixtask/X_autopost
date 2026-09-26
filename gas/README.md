@@ -334,7 +334,9 @@ weight = anchor * (1 + s * (perf - 50) / span)
 
 ## 質問と受け答えの品質
 
-質問・受け答え・下書き生成はOpenAI Responses APIを使用します。既定は `gpt-6-astra`。
+質問・受け答え・下書き生成はOpenAI Responses APIを使用します。既定は `gpt-6-luna`。
+既存の設定がある場合は、GASのスクリプトプロパティ `OPENAI_MODEL` / `OPENAI_MODEL_GENERATE` を両方 `gpt-6-luna` に変更してください（`RESPONSE_PROVIDER=openai`）。プロパティ保存後の次の実行から有効です。
+`OpenAI.gs` の `testOpenAIConnection`（会話）と `testOpenAIGenerationConnection`（生成）でモデル名を確認できます。生成用接続確認は今回追加したため、利用するにはコードのデプロイが必要です。
 接続設定・検証手順は [OpenAIへの切り替え](../docs/openai-responses.md) を参照してください。
 
 回答原文を保存したうえで、その回答中の短い抜粋を返し、不足情報があるときだけ
@@ -392,7 +394,7 @@ GASエディタで **`regenerateFailedInterviews`** を実行すると、
 | `MAX_POSTS_PER_DAY` | `3` | 1日の最大投稿数 |
 | `INTERVIEW_QUESTIONS` | `4` | 毎朝の質問数 |
 | `RESPONSE_PROVIDER` | `openai` | 質問・会話・画像説明・下書き・リライト。`claude` で旧経路へ切り戻す。採点と裏方分析には影響しない |
-| `OPENAI_MODEL` | `gpt-6-astra` | 質問・会話・画像説明・補足ヒント用 |
+| `OPENAI_MODEL` | `gpt-6-luna` | 質問・会話・画像説明・補足ヒント用 |
 | `OPENAI_MODEL_GENERATE` | （`OPENAI_MODEL`） | 下書き・リライト用 |
 | `OPENAI_EFFORT_INTERVIEW` | `low` | OpenAIの会話用 reasoning.effort |
 | `OPENAI_EFFORT_GENERATE` | `medium` | OpenAIの生成用 reasoning.effort |

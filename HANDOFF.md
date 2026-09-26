@@ -396,3 +396,10 @@ draft（生成直後）→ 採点 → ready（合格・承認待ち）→ approv
 - 新しい内部関数は **Interview.gs** の `isInterviewClarificationRequest` / `previousInterviewClarification` / `validateInterviewClarification`。手動実行不要。
 - 検証: 全155テストと全GAS JSの構文チェック。再説明の引き継ぎ、説明対象の追問、通常回答の誤判定防止、説明失敗/同文時の状態保持、会議と内省の順序を確認。実モデルの意味的な重複・説明品質、本番動作は未検証。
 - 本番デプロイ未実施。Ubuntuで `cd ~/X_autopost && git pull origin main && cd gas && ./deploy.sh`、A/B両方を更新。進行中インタビューにも次の聞き返しから適用する。列初期化は不要。前回の本人の口調による投稿文脈補完と合わせて反映する。
+
+### 2026-09-26 — Codex（質問・会話・生成をLunaへ）
+
+- ユーザーの最終指定は生成側と質問・会話の両方をLunaにすること。`OpenAI.js` の既定モデルを `gpt-6-luna` に変更。生成は既存どおり `OPENAI_MODEL_GENERATE` 優先、未指定なら `OPENAI_MODEL` を継承。推論設定low/medium、採点Claude、会議/審査/原文検証を維持。
+- `OpenAI.gs` に手動接続テスト `testOpenAIGenerationConnection` を追加。会話側は既存 `testOpenAIConnection`。それぞれAPIを1回呼び、実際に選択したモデル名と応答を返す。投稿・Slack送信はしない。
+- 検証: 全156テスト成功、OpenAI.js構文チェック、diffチェック成功。公式Luna仕様でResponses/low/mediumを確認。実APIの利用権限・文体品質・本番設定は未確認。
+- 本番の設定値は自動上書きしない。GASのスクリプトプロパティ `OPENAI_MODEL` と `OPENAI_MODEL_GENERATE` を両方 `gpt-6-luna`、`RESPONSE_PROVIDER=openai` に保存すると、既存コードでも次回実行から切り替わる。コード更新はUbuntuの通常コマンドでA/Bを更新。追加の生成用接続テストは更新後に利用可能。

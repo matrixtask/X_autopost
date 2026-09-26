@@ -15,7 +15,7 @@
  *
  * 任意:
  *   RESPONSE_PROVIDER   openai（既定）/ claude。質問・会話・画像説明・下書き・リライト用
- *   OPENAI_MODEL        gpt-6-astra（既定）。質問・会話用
+ *   OPENAI_MODEL        gpt-6-luna（既定）。質問・会話用
  *   OPENAI_MODEL_GENERATE 下書き・リライト用。未設定なら OPENAI_MODEL
  *   OPENAI_EFFORT_INTERVIEW low（既定）。OPENAI_EFFORT_GENERATE medium（既定）
  *   NOTION_TOKEN        Notionインテグレーションのシークレット
