@@ -9,7 +9,7 @@ Claude側の既存値も既定値より優先される。採点・分析のOpus 
 `CLAUDE_FALLBACKS=auto` は拒否時にAnthropic推奨の別モデルへサーバー側で引き継ぐことがある。採点官をOpusに固定したい場合は `CLAUDE_FALLBACKS=off` にする。Logに `claude_fallback` が出た採点は通常のOpus採点と分けて解釈する。
 既存コードにもこの3プロパティはあるため、モデルの切り替え自体はプロパティ保存で次の実行から有効になる。
 
-公式仕様: [GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna) はResponses APIとreasoning.effortのlow/mediumをサポート（2026-09-26確認）。ローカルの模擬APIテストは157件通過。実アカウントのモデル利用権限・出力品質・本番切り替えは未確認。
+公式仕様: [GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna) はResponses APIとreasoning.effortのlow/mediumをサポート（2026-09-26確認）。Luna変更時にローカルの模擬APIテスト156件通過。Opus用の回帰テストを追加したが未実行。実アカウントのモデル利用権限・出力品質・本番切り替えは未確認。
 
 | 用途 | 既定プロバイダ | モデル・設定 |
 | --- | --- | --- |
