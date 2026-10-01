@@ -24,7 +24,8 @@ function postCompositionInstructions() {
 
 /** 同じ文体見本を再利用して、保存前に初見の読者として読み直し、不足する文脈を補う。 */
 function completePostContext(output, qa, brief, stylePrompt, answers) {
-  output = validatePostCompositionsWithEvidenceRepair(output, qa, brief, stylePrompt);
+  output = validatePostCompositionsWithEvidenceRepair(output, qa, brief, stylePrompt, true);
+  output = repairMissingEditorialAnchors(output, qa, brief, stylePrompt);
   var original = validatePostCompositions(output, qa, brief);
   if (!original.length) return original;
   assertEditorialExecutionBudget();
@@ -36,7 +37,9 @@ function completePostContext(output, qa, brief, stylePrompt, answers) {
     'グループの数・順番・主回答qiと既存の出典・核の引用は保持。必要なら同じセッションの回答を追加してよいが、別グループとの重複使用は禁止。分割の各ポストは単独で分かるようにする。文脈を入れると短文上限を超える場合はlongへ変え、末尾を切らない。形式変更の理由はreason/tradeoffを更新する。',
     'draftsと同じJSON配列の形式で、修正後の全グループを返す。解説や人格名を投稿本文へ混ぜない。',
   ].join('\n'), JSON.stringify({ answers: answers, drafts: output }), 12000, { purpose: 'generate' });
-  var result = validatePostCompositions(validatePostCompositionsWithEvidenceRepair(completed, qa, brief, stylePrompt), qa, brief);
+  completed = validatePostCompositionsWithEvidenceRepair(completed, qa, brief, stylePrompt, true);
+  completed = repairMissingEditorialAnchors(completed, qa, brief, stylePrompt);
+  var result = validatePostCompositions(completed, qa, brief);
   if (result.length !== original.length || original.some(function (g, i) {
     var next = result[i];
     return String(g.source.idx) !== String(next.source.idx) ||
@@ -82,7 +85,7 @@ function validateQuestionContexts(contexts, sources, text) {
 }
 
 /** モデルが出典引用だけを壊した場合、本文を変えず引用メタデータだけ1回修復する。 */
-function validatePostCompositionsWithEvidenceRepair(groups, qa, brief, stylePrompt) {
+function validatePostCompositionsWithEvidenceRepair(groups, qa, brief, stylePrompt, allowMissingAnchors) {
   var originalError;
   try {
     if (!Array.isArray(groups)) throw new Error('編集者の出力が不正です');
@@ -91,7 +94,7 @@ function validatePostCompositionsWithEvidenceRepair(groups, qa, brief, styleProm
         (g.parts || []).forEach(function (p) { p.evidence = [{ qi: g.qi, quote: p.core_quote }]; });
       }
     });
-    validatePostCompositions(groups, qa, brief);
+    validatePostCompositions(groups, qa, brief, allowMissingAnchors);
     return groups;
   }
   catch (error) {
@@ -123,12 +126,46 @@ function validatePostCompositionsWithEvidenceRepair(groups, qa, brief, styleProm
         return { text: p.text, core_quote: p.core_quote, question_context: p.question_context };
       }) };
   }))) throw new Error('原文引用修復で投稿本文または出典が変わりました。保存を止めました');
+  validatePostCompositions(repaired, qa, brief, allowMissingAnchors);
+  return repaired;
+}
+
+/** ミアの核が抜けた場合は本文だけを一度修復し、根拠メタデータや編集判断は固定する。 */
+function repairMissingEditorialAnchors(groups, qa, brief, stylePrompt) {
+  function missing(values) {
+    return values.some(function (g) {
+      return !brief.reflection.anchors.some(function (a) {
+        return String(a.qi) === String(g.qi) && (g.parts || []).some(function (p) { return String(p.text || '').indexOf(a.quote) >= 0; });
+      });
+    });
+  }
+  if (!missing(groups)) return groups;
+  assertEditorialExecutionBudget();
+  var repaired = askClaudeJson(stylePrompt + editorialCouncilInstructions(brief) + '\n' + postCompositionInstructions() + '\n' + [
+    'ミアが選んだ回答の核を本文に残すための一度だけの修復。各該当グループの主回答qiに対応するanchor.quoteを、句読点も含め一字一句そのまま、同じpartの本文textに含める。引用を分割・言い換えしない。',
+    'anchor以外の内容は最小限の変更にする。回答にない事実・理由・口調を足さない。',
+    'qi、source_qis、format、reason、tradeoff、omitted、part数、各partのcore_quote/evidence/question_contextは元JSONと完全に同一に保つ。変更してよいのは各partのtextだけ。',
+    'JSON配列のみ返す。正しく修復できない場合も元draftsを返し、検証側で保存を止める。',
+  ].join('\n'), JSON.stringify({ answers: qa.map(function (r) {
+    return { qi: r.idx, question: String(r.question || ''), answer: compositionRawAnswer(r) };
+  }), drafts: groups, required_anchors: brief.reflection.anchors }), 12000, { purpose: 'generate' });
+  function immutableShape(values) {
+    return JSON.stringify(values.map(function (g) {
+      return { qi: g.qi, source_qis: g.source_qis, format: g.format, reason: g.reason, tradeoff: g.tradeoff,
+        omitted: g.omitted, parts: (g.parts || []).map(function (p) {
+          return { core_quote: p.core_quote, evidence: p.evidence, question_context: p.question_context };
+        }) };
+    }));
+  }
+  if (!Array.isArray(repaired) || repaired.length !== groups.length || immutableShape(repaired) !== immutableShape(groups)) {
+    throw new Error('ミアの核の修復で出典・編集判断が変わりました。保存を止めました');
+  }
   validatePostCompositions(repaired, qa, brief);
   return repaired;
 }
 
 /** 全グループを検証してから一括保存。途中まで救出して分割の後半を失わない。 */
-function validatePostCompositions(groups, qa, brief) {
+function validatePostCompositions(groups, qa, brief, allowMissingAnchors) {
   if (!Array.isArray(groups) || groups.length > 6) throw new Error('編集者の出力が不正です');
   var seenSources = {}, seenTexts = {}, count = 0, chars = 0;
   return groups.map(function (g) {
@@ -166,7 +203,7 @@ function validatePostCompositions(groups, qa, brief) {
       return { text: text, core_quote: part.core_quote, evidence: evidence.map(function (e) { return { qi: String(e.qi), quote: e.quote }; }),
         question_context: validateQuestionContexts(part.question_context === undefined ? [] : part.question_context, sources, text) };
     });
-    if (!brief.reflection.anchors.some(function (a) {
+    if (!allowMissingAnchors && !brief.reflection.anchors.some(function (a) {
       return String(a.qi) === String(g.qi) && parts.some(function (p) { return p.text.indexOf(a.quote) >= 0; });
     })) throw new Error('ミアが選んだ回答の核が編集本文にありません');
     if (count > 8 || chars > 6000) throw new Error('編集全体の量が上限を超えています');
