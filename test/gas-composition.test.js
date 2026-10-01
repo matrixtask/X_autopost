@@ -353,6 +353,32 @@ test('single-source drafts use the verified core as evidence when Luna omits or 
   assert.equal(h.db.Stock[0].text, core + '。');
 });
 
+test('a missing Mia anchor gets one text-only repair before context editing and saving', () => {
+  const h = setup(), initial = group('long'), repaired = group('long');
+  const anchor = other;
+  const r = reflection(); r.anchors = [{ qi: 1, quote: anchor, reason: '別の固有な判断', hiring_signal: '判断材料' }];
+  initial.parts[0].text = core + '。' + '説明を続けます。'.repeat(45);
+  repaired.parts[0].text = core + '。' + anchor + '。' + '説明を続けます。'.repeat(45);
+  h.requests.push(debate(), r, [initial], [repaired]);
+  h.ctx.generateDraftsFromInterview('s');
+  assert.ok(h.db.Stock[0].text.includes(anchor));
+  assert.equal(h.db.Stock.length, 1);
+  const repairCall = h.calls.find(c => c.system.includes('ミアが選んだ回答の核を本文に残すため'));
+  assert.ok(repairCall);
+  assert.match(repairCall.system, /変更してよいのは各partのtextだけ/);
+});
+
+test('Mia-anchor repair cannot alter citations or editorial structure and saves nothing if it does', () => {
+  const h = setup(), initial = group('long'), changed = group('long');
+  const r = reflection(); r.anchors = [{ qi: 1, quote: other, reason: '判断', hiring_signal: '仕事' }];
+  initial.parts[0].text = core + '。' + '説明を続けます。'.repeat(45);
+  changed.parts[0].text = initial.parts[0].text + other;
+  changed.parts[0].core_quote = other;
+  h.requests.push(debate(), r, [initial], [changed]);
+  assert.throws(() => h.ctx.generateDraftsFromInterview('s'), /ミアの核の修復で出典・編集判断が変わりました/);
+  assert.equal(h.db.Stock.length, 0);
+});
+
 test('invalid evidence on a merge gets one metadata-only repair before saving', () => {
   const { h, g, r } = mergeFixture();
   const repaired = structuredClone(g);
