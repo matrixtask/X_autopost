@@ -24,7 +24,7 @@ function setup(properties = {}) {
   const db = { Stock: [], Interviews: [answer()] }, calls = [], requests = [], logs = [];
   let id = 0;
   const ctx = vm.createContext({ console, Date });
-  for (const file of ['Pure', 'Config', 'Editorial', 'EditorialCouncil', 'PostComposition', 'Interview', 'Drafts', 'OutcomeQuality', 'Quality', 'WebApp', 'Scheduler', 'XApi', 'Notion', 'Rewrite']) {
+  for (const file of ['Pure', 'Config', 'Editorial', 'EditorialCouncil', 'PostComposition', 'Interview', 'Drafts', 'OutcomeQuality', 'Quality', 'WebApp', 'Scheduler', 'XApi', 'Notion', 'Rewrite', 'Reach']) {
     vm.runInContext(readFileSync(new URL(`../gas/src/${file}.js`, import.meta.url), 'utf8'), ctx);
   }
   Object.assign(ctx, {
@@ -35,6 +35,7 @@ function setup(properties = {}) {
     buildStylePrompt: () => '本人の声を守る', ensureHeaders: () => {}, syncStockRowToNotion: () => {}, syncSafe: () => {},
     nowJst: () => new Date('2026-09-12T00:00:00Z'), fmtDateTime: () => '2026-09-12 09:00',
     newId: prefix => prefix + (++id), logEvent: (...args) => logs.push(args), notifySlack: () => {}, assertAccess: () => {},
+    spendCapActiveUntil: () => null,
     claudeModelFor: () => 'test', claudeEffortFor: () => '',
     askClaudeJson: (system, input, tokens, opts) => {
       calls.push({ system, input, tokens, opts });
@@ -50,6 +51,78 @@ function generate(h, format = 'long') {
   h.requests.push(debate(), reflection(), [group(format)]);
   return h.ctx.generateDraftsFromInterview('s');
 }
+
+function attachQuote(h) {
+  const source = { tweet_id: '2104053537751880093', author_id: '12345', url: 'https://x.com/i/status/2104053537751880093',
+    text: '待ち時間まで含めて全体を設計する。', created_at: '2026-09-11T00:00:00Z', observed_at: '2026-09-12 09:00', impressions: 4100 };
+  Object.assign(h.db.Interviews[0], { quote_tweet_id: source.tweet_id, quote_source: JSON.stringify(source),
+    reach_meta: JSON.stringify({ version: 'reach-v1', angle: 'cross_domain' }) });
+  return source;
+}
+
+test('quote generation preserves external source separately through council, editor, review and human approval', () => {
+  const h = setup(), source = attachQuote(h);
+  const initial = group('single'); initial.parts[0].text = core + 'あ'.repeat(140 - core.length);
+  h.requests.push(debate(), reflection(), [initial]); h.ctx.generateDraftsFromInterview('s');
+  const row = h.db.Stock[0];
+  assert.equal(row.quote_mode, 'link');
+  assert.equal(row.quote_tweet_id, source.tweet_id);
+  assert.equal(row.post_format, 'long'); // The reference pushes the short fixture over 280 weight; no truncation.
+  assert.ok(row.text.endsWith(source.url));
+  assert.equal(JSON.parse(row.edit_meta).quote_source.text, source.text);
+  assert.match(h.calls[0].input, /quote_sources/);
+  assert.match(h.calls[2].input, /待ち時間まで含めて/);
+  h.ctx.askClaudeJsonSalvageable = (_system, input) => {
+    const r = JSON.parse(input.split('\nJSON')[0])[0];
+    assert.equal(r.quote_source.text, source.text);
+    assert.doesNotMatch(JSON.stringify(r), /4100/);
+    assert.doesNotMatch(r.source, /待ち時間まで含めて/);
+    return { [row.id]: review(row.text) };
+  };
+  h.ctx.runOutcomeQualityGate();
+  assert.equal(row.status, 'ready');
+  assert.match(JSON.parse(h.ctx.api_listPosts(''))[0].quote_preview, /参照リンク付き/);
+  assert.match(h.ctx.formatInterviewDraftReview(row, 0), /引用元/);
+});
+
+test('quote generation does not split references, mix sources, or save malformed citation snapshots', () => {
+  for (const kind of ['split', 'snapshot']) {
+    const h = setup(); attachQuote(h);
+    if (kind === 'snapshot') h.db.Interviews[0].quote_source = '{broken';
+    assert.throws(() => generate(h, kind === 'split' ? 'split' : 'long'), kind === 'split' ? /分割/ : /資料/);
+    assert.equal(h.db.Stock.length, 0);
+  }
+});
+
+test('quote review cannot accept a different source than the interview snapshot or a source changed during review', () => {
+  for (const phase of ['before', 'during']) {
+    const h = setup(); attachQuote(h); generate(h);
+    const row = h.db.Stock[0], original = h.ctx.askClaudeJsonSalvageable;
+    const change = () => {
+      const source = JSON.parse(h.db.Interviews[0].quote_source); source.text = '差し替えられた資料';
+      h.db.Interviews[0].quote_source = JSON.stringify(source);
+    };
+    if (phase === 'before') change();
+    h.ctx.askClaudeJsonSalvageable = (...args) => { if (phase === 'during') change(); return original(...args); };
+    h.ctx.runOutcomeQualityGate();
+    assert.equal(row.status, phase === 'before' ? 'stock' : 'draft');
+  }
+});
+
+test('quote publishing retains the citation and checks availability before the first write', () => {
+  for (const available of [true, false]) {
+    const h = setup({ DRY_RUN: 'false' }), source = attachQuote(h); generate(h);
+    const row = h.db.Stock[0]; row.status = 'scheduled'; row.scheduled_at = '2026-09-11 09:00';
+    const sent = [];
+    h.ctx.xApiGet = () => available ? { data: { id: source.tweet_id, text: source.text } } : { data: null };
+    h.ctx.postTweet = (...args) => { sent.push(args); return { id: '999999' }; };
+    h.ctx.postTick();
+    assert.equal(sent.length, available ? 1 : 0);
+    assert.equal(row.status, available ? 'posted' : 'failed');
+    assert.ok(row.text.endsWith(source.url));
+    if (available) assert.equal(sent[0][2], '');
+  }
+});
 
 test('final context edit uses the same actual Voice samples and saves only the completed post in the author tone', () => {
   const { h, g, r, question } = contextFixture();

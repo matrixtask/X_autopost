@@ -197,6 +197,7 @@ function api_listPosts(token) {
       source_idx: String(r.source_idx || ''),
       edit_reason: String(r.edit_reason || ''),
       publish_note: stockPublishingProblem(r),
+      quote_preview: r.quote_tweet_id ? quotePreview(r) : '',
       score: r.score === '' ? null : Number(r.score),
       score_version: String(r.score_version || ''),
       score_reason: r.score_version === OUTCOME_SCORE_VERSION ? outcomeReviewFeedback(r) : String(r.score_reason || ''),

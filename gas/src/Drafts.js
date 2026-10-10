@@ -17,7 +17,9 @@ function generateDraftsFromInterview(sessionId) {
       followup_question: r.followup_answer && r.followup_answered_at !== 'skipped' ? String(r.followup_question || '') : '', answer: String(r.answer || '') +
       (r.followup_answer && String(r.followup_answered_at) !== 'skipped' ? '\n' + r.followup_answer : '') };
   });
-  var brief = prepareEditorialCouncil('drafts', { answers: councilSources }, 'generate', councilSources, sessionId);
+  var brief = prepareEditorialCouncil('drafts', { answers: councilSources,
+    quote_sources: qa.filter(function (r) { return r.quote_tweet_id; }).map(function (r) { return { qi: r.idx, external_post: quoteSourceForRow(r) }; }),
+    reach_guidance: typeof reachHypothesesPrompt === 'function' ? reachHypothesesPrompt() : '' }, 'generate', councilSources, sessionId);
   if (brief.reflection.no_material) {
     logEvent('drafts_created', sessionId + ' -> 0件（会議で投稿の核なし）');
     return [];

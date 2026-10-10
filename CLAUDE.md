@@ -47,6 +47,8 @@ GASエディタの関数プルダウンは、開いているファイルの関�
 
 ## 実装上の注意
 
+- **2026-10-10 実績を使う質問・外部引用:** `docs/reach-driven-interviews.md`。`Reach.js` は広告除外・由来/計測経過帯を分けた実測事例を質問だけへ渡し、採点に人気を渡さない。外部投稿は1日最大2リクエスト・40件の観測、引用候補最大5件、質問最大1問。Interviews/Stock/記事資料へ外部原文を本人回答と別に保存。既定は参照リンク形式。ネイティブ引用はEnterprise API権限を確認した場合だけ `X_NATIVE_QUOTES_ENABLED=true`。通常の会議・審査・本人承認を通し、引用元削除/編集/確認不能なら投稿を止める。新規トリガー不要、次の新規セッションから適用。
+
 - **2026-09-26 原文引用検証:** 単一回答の `evidence` は検証済み `core_quote` から正規化。複数回答で引用メタデータが壊れた時だけ本文を変えず1回修復し、再検証に通らなければ保存停止・回答維持。詳細は `docs/context-and-merged-posts.md`。
 
 - **2026-09-26 Luna:** OpenAIの質問/会話/生成は既定 `gpt-6-luna`。採点・分析のClaude既定は `claude-opus-5-5`（ユーザー了承済み）。既存の `OPENAI_MODEL` / `OPENAI_MODEL_GENERATE` が優先するため、切り替え時は両方をLunaに保存する。`OpenAI.gs` の `testOpenAIConnection` / `testOpenAIGenerationConnection` で会話/生成を個別確認。詳細は `docs/openai-responses.md`。
