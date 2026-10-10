@@ -89,6 +89,14 @@ function fixture(count = 2, options = {}) {
   };
 }
 
+test('interview: manual regeneration cannot overlap an active recovery batch', () => {
+  const f = fixture();
+  f.context.interviewRecoveryIsActive = () => true;
+  assert.match(f.context.regenerateFailedInterviews(), /一括再生成が実行中/);
+  assert.equal(f.generations, 0);
+  assert.equal(f.releases, 1);
+});
+
 test('interview: save the original answer before calling Claude and advance with detached sheet rows', () => {
   const f = fixture();
   const answer = '昨日3社に断られた。\n理由はまだ聞けていない。';
