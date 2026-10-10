@@ -1,5 +1,5 @@
 /** EditorialCouncil.gs: 架空の3人格の編集会議 → ミアの採否判断 → 生成。 */
-var EDITORIAL_COUNCIL_VERSION = 'council-v5';
+var EDITORIAL_COUNCIL_VERSION = 'council-v6';
 // GASの1実行内で会話・投稿・採点に共有する。APIを中断できないため開始前に余裕を残す。
 var EDITORIAL_EXECUTION_DEADLINE = 0;
 
@@ -20,17 +20,33 @@ function councilText(value, max) {
 }
 
 function validateEditorialDebate(value) {
+  return editorialDebateErrors(value).length === 0;
+}
+
+/** 生応答を複製せず、違反した項目と制約のみを診断する。 */
+function editorialDebateErrors(value) {
   var people = ['rei', 'sebastian', 'hannibal'];
-  if (!value || !Array.isArray(value.opinions) || value.opinions.length !== 3 ||
-      !councilText(value.agreement, 300) || !councilText(value.disagreement, 300)) return false;
-  var seen = {};
-  return value.opinions.every(function (o) {
-    if (!o || people.indexOf(o.persona) < 0 || seen[o.persona] ||
-        people.indexOf(o.challenge_to) < 0 || o.challenge_to === o.persona ||
-        !councilText(o.proposal, 250) || !councilText(o.challenge, 250) || !councilText(o.final_position, 350)) return false;
-    seen[o.persona] = true;
-    return true;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return ['debate.object'];
+  var errors = [];
+  ['agreement', 'disagreement'].forEach(function (key) {
+    if (!councilText(value[key], 300)) errors.push(key + '.required_max_300');
   });
+  if (!Array.isArray(value.opinions)) return errors.concat(['opinions.array']);
+  if (value.opinions.length !== 3) errors.push('opinions.exactly_3');
+  var seen = {};
+  value.opinions.forEach(function (o, i) {
+    var at = 'opinions[' + i + ']';
+    if (!o || typeof o !== 'object' || Array.isArray(o)) { errors.push(at + '.object'); return; }
+    if (people.indexOf(o.persona) < 0) errors.push(at + '.persona.unknown');
+    else if (seen[o.persona]) errors.push(at + '.persona.duplicate');
+    if (people.indexOf(o.challenge_to) < 0 || o.challenge_to === o.persona) errors.push(at + '.challenge_to.other_persona');
+    var limits = { proposal: 250, challenge: 250, final_position: 350 };
+    Object.keys(limits).forEach(function (key) {
+      if (!councilText(o[key], limits[key])) errors.push(at + '.' + key + '.required_max_' + limits[key]);
+    });
+    seen[o.persona] = true;
+  });
+  return errors;
 }
 
 /** 本人の原文だけを核の根拠にする。質問・文体サンプルを原文として採らない。 */
@@ -92,16 +108,32 @@ function prepareEditorialCouncil(stage, material, purpose, sources, contextId) {
     'draftsで回答が長い場合は、別々に読める複数の発見か、一緒に読むべき背景・転換・結論かを議論する。長さだけで分割せず、独立性・文脈の損失・冒頭と結末の対応を見る。',
     editorialFocusPrompt(),
   ].join('\n');
-  var debate = askClaudeJson(shared + '\n' + [
+  var debateSystem = shared + '\n' + [
     '3人格がまず別々の提案を出し、互いの案への異論を述べ、その異論を受けて各人の最終意見を確定する。',
     'rei（レイ）: 根拠・判断・捨てた案・留保を守る戦略参謀。',
     'sebastian（セバスチャン）: 候補者の信頼、仕事の現実・任せ方・難しさを重視する執事。',
     'hannibal（ハンニバル）: 一度の敗北を徹底して内省し転生した架空の軍師。外部投資家・メンターの視点も持つ。局地的な勝利と最終目的を区別し、資金・人員・時間・組織・相手の適応を考える。提案には成立条件、代償、対立仮説、失敗経路、方針転換条件を添え、読者の予想との差と成長を問い直す。冷静で率直、英雄礼賛や勝利の保証はしない。',
     '同じ意見の言い換えを3つ作らない。合意と残る異論を区別する。まだ質問・応答・投稿の完成稿は生成しない。',
-  ].join('\n'), JSON.stringify({ stage: stage, material: material }) +
-    '\nJSON: {"opinions":[{"persona":"rei","proposal":"提案","challenge_to":"sebastian","challenge":"異論","final_position":"確定意見"}, 同形式でsebastianとhannibal],"agreement":"合意","disagreement":"残る異論。なければ解消した対立と条件"}',
-    3500, { purpose: purpose });
-  if (!validateEditorialDebate(debate)) throw new Error('編集会議の3人格の確定意見が不正です。生成を止めました');
+    '厳密な形式制約: opinionsはrei、sebastian、hannibal各1件の計3件。persona/challenge_toはこの英字IDのみ。challenge_toは自分以外。proposalとchallengeは各1〜250字、final_positionは1〜350字、agreementとdisagreementは各1〜300字。全項目は必須の文字列。対立が解消した場合もdisagreementにその条件を書く。',
+  ].join('\n');
+  var debateInput = JSON.stringify({ stage: stage, material: material });
+  var debateSchema = '\nJSON: ' + JSON.stringify({ opinions: ['rei', 'sebastian', 'hannibal'].map(function (persona, i, people) {
+    return { persona: persona, proposal: '提案', challenge_to: people[(i + 1) % 3], challenge: '異論', final_position: '確定意見' };
+  }), agreement: '合意', disagreement: '残る異論。なければ解消した対立と条件' });
+  var debate = askClaudeJson(debateSystem, debateInput + debateSchema, 3500, { purpose: purpose });
+  var debateProblems = editorialDebateErrors(debate);
+  if (debateProblems.length) {
+    logEvent('editorial_debate_invalid', JSON.stringify({ context_id: contextId || '', stage: stage, attempt: 1, errors: debateProblems }));
+    if (Date.now() - started < 60000 && editorialHasTime(120000)) {
+      debate = askClaudeJson(debateSystem, debateInput + '\n前回の検証結果: ' + JSON.stringify(debateProblems) +
+        '\n前回の会議（事実の根拠ではない）: ' + JSON.stringify(debate) +
+        '\n同じ資料に基づき、不正項目を修復した会議全体を返す。3人の提案・異論・確定意見を残し、資料にない事実を足さない。' + debateSchema,
+        3500, { purpose: purpose });
+      debateProblems = editorialDebateErrors(debate);
+      if (debateProblems.length) logEvent('editorial_debate_invalid', JSON.stringify({ context_id: contextId || '', stage: stage, attempt: 2, errors: debateProblems }));
+    }
+    if (debateProblems.length) throw new Error('編集会議の3人格の検証に失敗しました（' + debateProblems.join(', ') + '）。生成を止めました');
+  }
   if (Date.now() - started > 120000) throw new Error('編集会議が時間上限に達しました。生成は未実行です');
   assertEditorialExecutionBudget();
   var reflectionSystem = shared + '\n' + [
