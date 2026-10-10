@@ -48,7 +48,7 @@ test('council: questions wait for distinct final positions and Mia reflection, t
   assert.deepEqual(calls.map(c => c.kind), ['json', 'json', 'json']);
   assert.ok(calls.every(c => c.purpose === 'interview'));
   assert.match(calls[0].system, /hannibal（ハンニバル）.*敗北.*内省.*方針転換条件/);
-  assert.equal(JSON.parse(logs[0][1]).brief.version, 'council-v5');
+  assert.equal(JSON.parse(logs[0][1]).brief.version, 'council-v6');
   assert.match(calls[1].input, /final_debate.*確定0.*確定1.*確定2/);
   assert.match(calls[2].input, /後付けの教訓は使わない/);
   assert.doesNotMatch(calls[2].system, /価値がゼロ/);
@@ -62,11 +62,49 @@ test('council: duplicate personas, missing objections and ungrounded quotes stop
     const d = debate();
     if (invalid === 'duplicate') d.opinions[1].persona = 'rei';
     if (invalid === 'missing') d.opinions[1].challenge = '';
+    if (invalid !== 'quote') responses.push(d);
     responses.push(d, reflection([{ qi: 1, quote: '創作した事実', reason: '面白い', hiring_signal: '仕事の実像' }]));
     responses.push(reflection([{ qi: 1, quote: '創作した事実', reason: '面白い', hiring_signal: '仕事の実像' }]));
     assert.throws(() => ctx.prepareEditorialCouncil('drafts', {}, 'generate', [{ qi: 1, answer: '本人の回答' }]), /生成を止めました|quote.not_in_answer/);
-    assert.equal(calls.length, invalid === 'quote' ? 3 : 1);
+    assert.equal(calls.length, invalid === 'quote' ? 3 : 2);
   }
+});
+
+test('council: repairs a length violation once, logs only diagnostics and sends the repaired debate to Mia', () => {
+  const { ctx, calls, logs, responses } = setup();
+  const invalid = debate(); invalid.opinions[2].final_position = '秘'.repeat(351);
+  responses.push(invalid, debate(), reflection());
+  const brief = ctx.prepareEditorialCouncil('questions', { topic: '一次資料' }, 'interview', undefined, 's');
+  assert.equal(brief.debate.opinions[2].final_position, '確定2');
+  assert.equal(calls.length, 3);
+  assert.match(calls[0].system, /final_positionは1〜350字/);
+  assert.match(calls[1].input, /opinions\[2\].final_position.required_max_350/);
+  assert.equal(JSON.parse(calls[2].input.split('\nJSON:')[0]).final_debate.opinions[2].final_position, '確定2');
+  assert.equal(logs[0][0], 'editorial_debate_invalid');
+  assert.deepEqual(JSON.parse(logs[0][1]), { context_id: 's', stage: 'questions', attempt: 1, errors: ['opinions[2].final_position.required_max_350'] });
+  assert.doesNotMatch(logs[0][1], /秘/);
+});
+
+test('council: debate repair stops on insufficient time or transport errors without reaching Mia', () => {
+  for (const kind of ['budget', 'transport', 'repair_transport']) {
+    const { ctx, calls, responses } = setup();
+    const invalid = debate(); invalid.opinions[0].challenge_to = 'rei';
+    if (kind === 'budget') ctx.EDITORIAL_EXECUTION_DEADLINE = Date.now() + 110000;
+    responses.push(kind === 'transport' ? new Error('API unavailable') : invalid);
+    if (kind === 'repair_transport') responses.push(new Error('API unavailable'));
+    assert.throws(() => ctx.prepareEditorialCouncil('questions', {}, 'interview'), /検証に失敗|API unavailable/);
+    assert.equal(calls.length, kind === 'repair_transport' ? 2 : 1);
+  }
+});
+
+test('council: debate diagnostics cover wrong identities, counts, missing fields and self-objections', () => {
+  const { ctx } = setup();
+  const invalid = debate(); invalid.opinions[1].persona = 'rei'; invalid.opinions[1].challenge = '';
+  invalid.opinions[2].challenge_to = 'hannibal'; invalid.agreement = 'あ'.repeat(301);
+  assert.deepEqual(Array.from(ctx.editorialDebateErrors(invalid)), ['agreement.required_max_300',
+    'opinions[1].persona.duplicate', 'opinions[1].challenge.required_max_250', 'opinions[2].challenge_to.other_persona']);
+  assert.deepEqual(Array.from(ctx.editorialDebateErrors(null)), ['debate.object']);
+  assert.ok(Array.from(ctx.editorialDebateErrors({ ...debate(), opinions: [] })).includes('opinions.exactly_3'));
 });
 
 test('council: ten answers with ten valid quotes repair to at most six, without altering sources', () => {
