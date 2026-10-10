@@ -1,5 +1,7 @@
 # セットアップガイド（Google Apps Script版）
 
+**2026-10-10 未生成セッションの一括救済:** デプロイ後、GASの **InterviewRecovery.gs** で `startFailedInterviewBatch` を一度実行すると、開始時の未生成・完了済みセッションを約5分ごとに1件ずつ自動生成します。生成済み・回答途中は除外し、失敗・中断したセッションは保留して次へ進みます。3人格→ミア→リナの工程を維持し、採点は夜の品質ゲート、公開は本人承認後です。終了時に専用トリガーを除去してSlackへ結果を通知します。停止は同ファイルの `stopFailedInterviewBatch`。生成中の1件は最後まで進みます。既存の `regenerateFailedInterviews` は手動処理として残ります。[詳細](../docs/interview-recovery.md)。
+
 **2026-09-26 質問の説明（実装済み・デプロイ後に適用）:** 「どういう意味？」には想定場面・意図・答える切り口・言い換えを返す。前の説明はInterviews末尾の `clarification_context` に回答とは別に保存（初回保存時に列を自動追加）。元質問の再掲だけを成功扱いせず、生成失敗時も現問を保持する。3人格→ミアを維持。Ubuntuで `cd ~/X_autopost && git pull origin main && cd gas && ./deploy.sh` を実行しA/B両方を更新すると、進行中の質問にも次の聞き返しから適用。初期化・関数の手動実行は不要。内部ヘルパーは **Interview.gs**、列定義は **Sheets.gs**。全155テスト通過、実モデルと本番Slackは未検証。詳細は [質問品質の仕様](../docs/interview-quality.md)。
 
 **2026-09-25 文脈補完と本人の口調（実装済み・デプロイ後に適用）:** 初稿の後、保存前に本文単独で分かるか点検し、質問・回答の原文から必要な主語・対象・状況を本人の口調で補います。初稿と補完は同じVoiceサンプルを使用。補完後も原文引用・出典・文字数を検証し、3人格＋ミア審査と本人承認を維持します。[詳細](../docs/context-and-merged-posts.md)。`./deploy.sh` でA/B両方を更新。初期化不要。追加内部関数 `completePostContext` は **PostComposition.gs**（[`src/PostComposition.js`](src/PostComposition.js)）にあり、手動実行不要です。生成APIが1段階増えるため、待ち時間と費用は増えます。既存ポストは自動改稿しません。

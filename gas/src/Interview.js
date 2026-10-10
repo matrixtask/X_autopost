@@ -813,7 +813,7 @@ function interviewFailureRecoveryMessage(sessionId) {
   catch (e) { return '回答し直す必要はありません。下書きの保存件数を確認できませんでした。復旧後にStockと実行ログを確認してください。'; }
   return '回答は保存済みです。回答し直す必要はありません。\n' + (saved.length
     ? '下書きは' + saved.length + '件保存されています。未完了の採点は今夜の品質ゲートで処理します。'
-    : '下書きはまだ保存されていません。夜の品質ゲートだけでは生成されません。修正反映後、GASのInterview.gsを開いてregenerateFailedInterviewsを実行すると、保存済み回答から再生成できます。');
+    : '下書きはまだ保存されていません。夜の品質ゲートだけでは生成されません。修正反映後、GASのInterview.gsを開いてregenerateFailedInterviewsを実行すると、保存済み回答から再生成できます。一括処理はInterviewRecovery.gsのstartFailedInterviewBatchを一度実行してください。');
 }
 
 /**
@@ -823,10 +823,9 @@ function interviewFailureRecoveryMessage(sessionId) {
  * 生成→採点をやり直す。生成中にエラーが出た日の救済用で、GASエディタから
  * 引数なしで実行できる。回答そのものは残っているので何度でもやり直せる。
  *
- * @param {number} maxSessions 1回で処理するセッション数（既定1。会議が増えたため）
+ * 未生成かつ完了済みのセッションを列挙する（手動・一括処理で共通）。
  */
-function regenerateFailedInterviews(maxSessions) {
-  var limit = Math.max(1, Math.min(3, Math.floor(Number(maxSessions) || 1)));
+function failedInterviewSessions() {
   var stockSessions = {};
   readTable(SHEET.STOCK).forEach(function (r) {
     if (r.session_id) stockSessions[String(r.session_id)] = true;
@@ -845,9 +844,27 @@ function regenerateFailedInterviews(maxSessions) {
   });
 
   // session_id は先頭が日時なので、降順に並べると新しい順になる
-  var failed = Object.keys(bySession)
+  return Object.keys(bySession)
     .filter(function (sid) { return !stockSessions[sid] && !waitingSessions[sid]; })
-    .sort().reverse();
+    .sort().reverse().map(function (sid) { return bySession[sid]; });
+}
+
+/** @param {number} maxSessions 1回の手動処理数（既定1、最大3）。 */
+function regenerateFailedInterviews(maxSessions) {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(1000)) return '別の編集処理が実行中です。終了後に再実行してください。';
+  try {
+    if (typeof interviewRecoveryIsActive === 'function' && interviewRecoveryIsActive()) return '一括再生成が実行中です。手動再生成は完了後に実行してください。';
+    return regenerateFailedInterviewsLocked(maxSessions);
+  } finally { lock.releaseLock(); }
+}
+
+function regenerateFailedInterviewsLocked(maxSessions) {
+  var limit = Math.max(1, Math.min(3, Math.floor(Number(maxSessions) || 1)));
+  var sessions = failedInterviewSessions();
+  var bySession = {};
+  sessions.forEach(function (s) { bySession[s.sid] = s; });
+  var failed = sessions.map(function (s) { return s.sid; });
 
   if (!failed.length) {
     var none = '作り直す対象はありません（回答があるのに下書きが無いセッションは0件）';

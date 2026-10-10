@@ -1,0 +1,13 @@
+# 未生成インタビューの一括救済
+
+GASの **InterviewRecovery.gs** から `startFailedInterviewBatch` を一度実行する。対象は開始時点で回答があり、Stockに投稿がなく、回答・追問が完了しているセッション。新しい順に約5分ごとに1件ずつ、別のGAS実行で生成する。開始後に回答が完了したセッションは次のバッチで扱う。開始と全件終了をSlackへ通知する。デプロイ自体では処理は開始しない。
+
+Script Propertiesの `INTERVIEW_RECOVERY_STATE` とセッションごとの `INTERVIEW_RECOVERY_JOB_` に進行状態を保存する。回答原文・モデル生応答は保存しない。各実行で対象条件を再確認するため、途中で生成済み・回答途中になったセッションは除外される。新バッチの開始時に前回の進行状態を置き換えるが、実行結果はLogに残る。
+
+3人格の会議、ミア、リナの編集・文脈補完を既存と同じ経路で実行する。生成時間予算は1回240秒。採点は夜の品質ゲートに回し、3人格＋ミアの審査と本人承認を経る。投稿の自動承認や公開はしない。
+
+APIエラーや検証失敗は当該セッションをfailedとして記録し、次へ進む。処理直前にrunningを保存し、7分以内は別のworkerが同時処理しない。GAS強制終了でrunningだけ残った場合、7分経過後に中断として保留し、自動では同じ回答を再生成しない。Stockに保存できていた可能性もあるため、確認してから新しいバッチを開始する。完了済みのStockは次回の対象から除外される。
+
+通常の回答保存をLLM待ちで妨げないよう、Script Lockはジョブの取得と確定の短い区間に使う。バッチ実行中の手動 `regenerateFailedInterviews` は開始しない。従来の手動処理もScript Lockで排他する。
+
+停止は `stopFailedInterviewBatch`。生成中の1件は終了まで進め、次の実行用トリガーのみ削除する。日常の投稿・インタビューのトリガーや保存済み回答・下書きは保持する。全件完了時にも専用workerのトリガーだけを削除する。Logの `regenerate_batch_start`、`regenerate_batch_result`、`regenerate_batch_failed`、`regenerate_batch_complete` で対象と結果を確認できる。
