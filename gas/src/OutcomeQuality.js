@@ -51,6 +51,7 @@ function outcomeScoringPrompt() {
     '本人が非公開・投稿しない・訂正を求めた情報を含む、または判断不能ならprivacy=hold。それ以外はclear。',
     '主役が本人かテトラの経験・判断ならfocus=aligned。他者の評論や社名だけ後付けならoff_topic。',
     'これは資料との整合チェックで、事実の外部検証ではない。要確認の各条件にはissuesを必ず返す。kindはfidelity/privacy/focus、quoteは投稿本文の連続した原文抜粋80字以内、reasonは回答と照合して何が問題か、actionは具体的な修正または確認方法。理由を捏造して保留にしない。問題がなければissues=[]、review_note=""。',
+    'quote_sourceは外部投稿者の主張で、本人回答sourceと別の資料。出典が分かる紹介は許容するが、外部の主張を本人の体験や確認済み事実に変えたらconfirm。本人の意見・賛否はsourceに基づく。参照URLの付加を本人回答への事実追加と取り違えない。引用元の人気は採点の根拠にしない。',
   ].join('\n');
 }
 
@@ -191,6 +192,15 @@ function runOutcomeQualityGate(repairRows) {
       var withinBudget = source.length + (contexts.length ? JSON.stringify(contexts).length : 0) <= 12000;
       var input = { id: String(d.id), text: String(d.text || ''), source: withinBudget ? source : '' };
       input.question_contexts = input.source ? contexts : [];
+      if (d.quote_tweet_id || d.quote_source) {
+        try {
+          var quoted = quoteSourceForRow(d);
+          var savedSources = outcomeCompositionSources(d, interviews, JSON.parse(d.edit_meta));
+          if (JSON.stringify(compositionQuoteSource(savedSources)) !== JSON.stringify(quoted)) throw new Error('引用元が回答時の資料と異なります');
+          input.quote_source = { tweet_id: quoted.tweet_id, url: quoted.url, text: quoted.text };
+          if (source.length + JSON.stringify(contexts).length + quoted.text.length > 12000) throw new Error('回答・質問の文脈・引用元の合計が12000字を超えています');
+        } catch (e) { input.source = ''; input.quote_error = String(e.message || e); }
+      }
       if (d.edit_meta) {
         input.edit = { format: d.post_format, reason: d.edit_reason, part_index: d.part_index, part_count: d.part_count };
         try { input.edit.source_qis = JSON.parse(d.edit_meta).source_qis || [String(d.source_idx)]; } catch (e) { /* 旧行 */ }
@@ -222,7 +232,8 @@ function runOutcomeQualityGate(repairRows) {
       var current = readTable(SHEET.STOCK).filter(function (r) { return String(r.id) === String(d.id); })[0];
       if (!current || current.text !== d.text || current.status !== d.status || current.editorial_review !== d.editorial_review ||
           current.source_idx !== d.source_idx || current.session_id !== d.session_id || current.edit_meta !== d.edit_meta ||
-          current.post_format !== d.post_format || current.edit_review !== d.edit_review) {
+          current.post_format !== d.post_format || current.edit_review !== d.edit_review ||
+          current.quote_source !== d.quote_source || current.quote_tweet_id !== d.quote_tweet_id || current.quote_mode !== d.quote_mode) {
         logEvent('outcome_changed', String(d.id));
         return;
       }
@@ -236,7 +247,9 @@ function runOutcomeQualityGate(repairRows) {
       }
       var currentInterviews = readTable(SHEET.INTERVIEWS);
       if (outcomeSourceForRow(d, currentInterviews) !== outcomeSourceForRow(d, interviews) ||
-          JSON.stringify(outcomeQuestionContexts(d, currentInterviews)) !== JSON.stringify(outcomeQuestionContexts(d, interviews))) {
+          JSON.stringify(outcomeQuestionContexts(d, currentInterviews)) !== JSON.stringify(outcomeQuestionContexts(d, interviews)) ||
+          (d.quote_tweet_id && currentInterviews.filter(function (r) { return r.session_id === d.session_id; })
+            .some(function (r) { return interviews.some(function (old) { return old.session_id === r.session_id && String(old.idx) === String(r.idx) && (old.quote_source !== r.quote_source || old.quote_tweet_id !== r.quote_tweet_id); }); }))) {
         logEvent('outcome_changed', String(d.id) + ': 審査中に回答または質問の文脈が変更されました');
         return;
       }
@@ -255,6 +268,9 @@ function runOutcomeQualityGate(repairRows) {
         review.fidelity = 'confirm';
         review.review_note += (review.review_note ? '\n' : '') + '保存回答を一意に取得できないか12000字を超えています（回答番号: ' + String(d.source_idx || '未保存') + '）。回答の紐づけを確認してください。追加回答は不要です。';
       }
+      if (input[j].quote_error) review.review_note += '\n引用元の資料: ' + input[j].quote_error;
+      var quoteProblem = typeof quotePublishingProblem === 'function' ? quotePublishingProblem(d) : '';
+      if (quoteProblem) { review.fidelity = 'confirm'; review.review_note += '\n引用元の確認: ' + quoteProblem; }
       review.scorer = 'claude/' + claudeModelFor('score') + '/' + claudeEffortFor('score');
       review.review_version = 'grounded-v2';
       if (isRetiredTopic(text + ' ' + d.theme)) {

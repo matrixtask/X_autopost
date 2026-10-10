@@ -34,7 +34,7 @@ function buildNotionProperties(row) {
   var properties = {
     Name: { title: [{ text: { content: text.slice(0, 60) || '(本文なし)' } }] },
     Status: { select: { name: String(row.status || 'draft') } },
-    Body: { rich_text: notionTextChunks(text) },
+    Body: { rich_text: notionTextChunks(text + (row.quote_tweet_id && typeof quotePreview === 'function' ? '\n\n［編集資料・投稿本文には含めない］\n' + quotePreview(row) : '')) },
   };
   if (row.category) properties.Category = { select: { name: String(row.category) } };
   if (row.score !== '' && row.score !== null && row.score !== undefined) {

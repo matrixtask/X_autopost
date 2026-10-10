@@ -306,6 +306,7 @@
         '<div class="meta">' + meta + '</div>' +
         (p.edit_reason ? '<div class="reason">編集判断: ' + esc(p.edit_reason) + '</div>' : '') +
         (p.publish_note ? '<div class="reason">予約前の確認: ' + esc(p.publish_note) + '</div>' : '') +
+        (p.quote_preview ? '<div class="reason" style="white-space:pre-wrap">' + esc(p.quote_preview) + '</div>' : '') +
         '<div class="body-text" id="text-' + p.id + '">' + esc(p.text) +
         (p.has_media ? ' <span title="投稿時に画像が添付されます">🖼</span>' : '') + '</div>' +
         '<div id="editor-' + p.id + '" style="display:none">' +

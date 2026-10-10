@@ -4,6 +4,19 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
+test('archive: external quote stays separate from the author answer and a changed quote creates a new source revision', () => {
+  const { ctx, db } = fixture();
+  const row = { session_id: 's', idx: 1, answer: '全体を見たいんだよね。', answered_at: '2026-10-10 12:00',
+    quote_tweet_id: '2104053537751880093', quote_source: '{"text":"外部の主張"}' };
+  ctx.archiveInterviewSources([row], 'test');
+  assert.equal(db.SourceRevisions[0].text, row.answer);
+  assert.equal(db.SourceRevisions[0].quote_source, row.quote_source);
+  ctx.archiveInterviewSources([{ ...row, quote_source: '{"text":"外部の主張の訂正"}' }], 'test');
+  assert.equal(db.SourceRevisions.length, 2);
+  assert.equal(db.SourceRevisions[1].text, row.answer);
+  assert.equal(db.SourceRevisions[1].supersedes_revision_id, db.SourceRevisions[0].revision_id);
+});
+
 function fixture(enabled = true) {
   const db = { Interviews: [], Stock: [] }, logs = [], triggers = [], writes = [];
   if (enabled) for (const name of ['SourceRevisions', 'EditorialHistory', 'ArticleDrafts', 'ArticleSources']) db[name] = [];

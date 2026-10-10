@@ -37,6 +37,10 @@
  *   SLOT_TIMES          予約枠 "08:00,12:30,19:30"（既定）
  *   MAX_POSTS_PER_DAY   1日の最大投稿数（既定: 3）
  *   INTERVIEW_QUESTIONS 1回のインタビューの質問数（既定: 4）
+ *   QUOTE_DISCOVERY_ENABLED 関連投稿の検索・再観測（既定 true、1日最大2読取リクエスト）
+ *   QUOTE_SEARCH_QUERY 外部投稿検索条件。既定は製造・設計・移動・チーム・採用
+ *   QUOTE_MIN_IMPRESSIONS 引用候補の最低公開表示数（既定 1000、広告を含みうる）
+ *   X_NATIVE_QUOTES_ENABLED Enterpriseの引用API権限を確認した場合だけtrue。既定falseは参照リンク形式
  */
 
 var SHEET = {

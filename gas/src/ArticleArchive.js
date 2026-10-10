@@ -53,6 +53,7 @@ function latestArticleRecords(rows, key) {
 function archiveInterviewSources(rows, origin) {
   if (!articleArchiveEnabled()) return {};
   return withArticleArchiveLock(function () {
+    ensureHeaders('SourceRevisions');
     var latest = latestArticleRecords(readTable('SourceRevisions'), 'source_id');
     var pending = [], refs = {};
     rows.forEach(function (r) {
@@ -65,6 +66,7 @@ function archiveInterviewSources(rows, origin) {
         var snapshot = {
           text: text, question: String(r[field === 'answer' ? 'question' : 'followup_question'] || ''),
           theme: String(r.theme || ''), source_time: String(r[field === 'answer' ? 'answered_at' : 'followup_answered_at'] || ''),
+          quote_tweet_id: String(r.quote_tweet_id || ''), quote_source: String(r.quote_source || ''),
           thread_ts: String(r.thread_ts || ''), media_url: String(r.media_url || ''), media_type: String(r.media_type || '')
         };
         var hash = articleSnapshotHash(snapshot);

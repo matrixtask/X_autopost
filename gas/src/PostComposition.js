@@ -19,6 +19,7 @@ function postCompositionInstructions() {
     '各partにevidenceを置く。使った回答それぞれから本文にも残した80字以内の原文quoteとqiを1組ずつ記録し、主回答のquoteはcore_quoteと同じにする。question_contextは質問から補った箇所ごとにqi,field(question/followup_question),quote(質問の原文200字以内),answer_quote(同じ回答の原文80字以内),text(補った本文箇所200字以内),use(topic/referent),reason(250字以内)を記録。補わなければ[]。最大4件。',
     '同じ論点の言い換えを複数ストックしない。全体で最大6グループ/8ポスト、本文合計6000文字以内。reason/tradeoff/omittedは各500字以内。省いた材料があればomittedへ正直に記録する。',
     '回答に固有な公開材料がないものは出力しない。完成稿に人格名や編集理由は混ぜない。',
+    'quote_sourceがある回答は、引用元に対する本人の専門的な見方・経験を加える1本のsingle/longにする。splitにせず、違う引用元を結合しない。単なる要約や「同意」だけなら見送る。外部の主張は「この投稿の〜」など出典を明確にし、本人が経験した事実へ置換しない。本人の賛否・留保を変えず、原文の大量転載をしない。引用URLはシステムが付けるため本文に作らない。',
   ].join('\n');
 }
 
@@ -33,6 +34,7 @@ function completePostContext(output, qa, brief, stylePrompt, answers) {
     '保存前の文脈・口調の最終編集。最初にdraftsの各ポスト本文だけを読み、質問や他のポストを知らない読者として点検する。その後でanswersを参照して直す。',
     '点検: 誰の何の話か／「これ・それ・その判断」などの指す対象／行動や結論に至る最低限の状況／文と文のつながり。どれか分からなければ、原文と質問に根拠のある最小限の主語・対象・背景を補う。補う必要がない案は本文を変えない。',
     '補足の口調は今回の本人回答を最優先し、同じVoiceサンプルを使う。本人が「〜かな」と迷っているなら補足も断定へ変えず、説明文だけ「重要です」「〜と考えられます」のような広報・評論調にしない。元の固有の表現、笑い、留保、テンポを残す。',
+    'quote_sourceがあるときは、リンクを開かない読者にも本人が何に意見を述べているか分かる最小限の話題・対象を補う。外部投稿の紹介と分かる書き方にし、外部の主張を本人の経験・検証済み事実へ変えない。原文の大量転載はしない。',
     '質問から補った部分はquestion_context、他の回答を使った場合はsource_qisとevidenceにも記録する。文体サンプルから出来事や理由を補わない。原文で分からない主語・原因・時点・実績を推測しない。どうしても不明なら無理に足さず、後段の審査へ残す。',
     'グループの数・順番・主回答qiと既存の出典・核の引用は保持。必要なら同じセッションの回答を追加してよいが、別グループとの重複使用は禁止。分割の各ポストは単独で分かるようにする。文脈を入れると短文上限を超える場合はlongへ変え、末尾を切らない。形式変更の理由はreason/tradeoffを更新する。',
     'draftsと同じJSON配列の形式で、修正後の全グループを返す。解説や人格名を投稿本文へ混ぜない。',
@@ -207,7 +209,9 @@ function validatePostCompositions(groups, qa, brief, allowMissingAnchors) {
       return String(a.qi) === String(g.qi) && parts.some(function (p) { return p.text.indexOf(a.quote) >= 0; });
     })) throw new Error('ミアが選んだ回答の核が編集本文にありません');
     if (count > 8 || chars > 6000) throw new Error('編集全体の量が上限を超えています');
-    return { source: source, sources: sources, format: g.format, reason: g.reason, tradeoff: g.tradeoff, omitted: g.omitted, parts: parts };
+    var quote = sources.some(function (r) { return r.quote_tweet_id || r.quote_source; }) ? compositionQuoteSource(sources) : null;
+    if (quote && g.format === 'split') throw new Error('引用元付きの回答は分割せず1本に編集してください');
+    return { source: source, sources: sources, quote_source: quote, format: g.format, reason: g.reason, tradeoff: g.tradeoff, omitted: g.omitted, parts: parts };
   });
 }
 
@@ -215,6 +219,7 @@ function generateEditedDrafts(sessionId, qa, brief) {
   var stylePrompt = buildStylePrompt(); // ランダム抽出した本人サンプルを初稿と補完で共用。
   var answers = qa.map(function (r) {
       return { qi: r.idx, theme: r.theme, category: r.category, question: String(r.question || ''),
+        quote_source: r.quote_tweet_id ? quoteSourceForRow(r) : null,
         followup_question: r.followup_answer && r.followup_answered_at !== 'skipped' ? String(r.followup_question || '') : '', answer: compositionRawAnswer(r) };
   });
   var output = askClaudeJson(stylePrompt + editorialCouncilInstructions(brief) + '\n' + postCompositionInstructions(),
@@ -230,14 +235,23 @@ function generateEditedDrafts(sessionId, qa, brief) {
     });
     var groupId = newId('edit');
     g.parts.forEach(function (part, i) {
+      var quoteMode = g.quote_source ? (getProp('X_NATIVE_QUOTES_ENABLED', 'false') === 'true' ? 'native' : 'link') : '';
+      if (quoteMode === 'link' && part.text.indexOf(g.quote_source.url) < 0) part.text += '\n\n' + g.quote_source.url;
+      var format = g.format;
+      if (quoteMode === 'link' && format === 'single' && !fitsInTweet(part.text)) format = 'long';
+      if (!fitsStockText({ post_format: format }, part.text)) throw new Error('引用リンクを含む投稿が文字数上限を超えています。本文は切りません');
+      var reachMeta = JSON.stringify({ version: typeof REACH_VERSION === 'string' ? REACH_VERSION : 'reach-v1',
+        sources: g.sources.map(function (r) { return { qi: String(r.idx), question_meta: r.reach_meta || '' }; }) });
       rows.push({ id: newId('p'), created_at: fmtDateTime(nowJst()), theme: String(g.source.theme || ''),
         category: String(g.source.category || ''), session_id: sessionId, source_idx: String(g.source.idx),
         source_revision_ids: JSON.stringify(revisionIds),
         text: part.text, status: STATUS.DRAFT, score: '', score_reason: '',
-        post_format: g.format, edit_group: groupId, part_index: String(i + 1), part_count: String(g.parts.length),
+        post_format: format, edit_group: groupId, part_index: String(i + 1), part_count: String(g.parts.length),
+        quote_tweet_id: g.quote_source ? g.quote_source.tweet_id : '', quote_source: g.quote_source ? JSON.stringify(g.quote_source) : '', quote_mode: quoteMode, reach_meta: reachMeta,
         edit_reason: g.reason + '\n他の形式との比較: ' + g.tradeoff + (g.omitted ? '\n省いた材料: ' + g.omitted : ''),
         edit_meta: JSON.stringify({ version: POST_COMPOSITION_VERSION, editor: 'rina', core_quote: part.core_quote,
           context_pass_version: POST_CONTEXT_PASS_VERSION,
+          quote_source: g.quote_source, quote_mode: quoteMode, reach_meta: reachMeta,
           source_qis: g.sources.map(function (r) { return String(r.idx); }), evidence: part.evidence, question_context: part.question_context,
           council_version: brief.version, reason: g.reason, tradeoff: g.tradeoff, omitted: g.omitted }),
         edit_review: '', media_url: String(g.source.media_url || ''), media_type: String(g.source.media_type || '') });
@@ -257,6 +271,10 @@ function generateEditedDrafts(sessionId, qa, brief) {
 
 /** アカウントの長文利用可能をユーザーが確認済み。明示falseで予約・送信だけ停止できる。 */
 function stockPublishingProblem(row) {
+  if (typeof quotePublishingProblem === 'function') {
+    var quoteProblem = quotePublishingProblem(row);
+    if (quoteProblem) return quoteProblem;
+  }
   if (!fitsStockText(row)) return '選択した投稿形式の文字数上限を超えています';
   if (row.post_format === 'long' && getProp('X_LONG_POSTS_ENABLED', 'true') !== 'true') {
     return '長文投稿が無効です。本文は保持しています';
@@ -269,6 +287,7 @@ function compositionReviewPrompt() {
     'レイ(rei)は留保・因果・回答への忠実さ、セバスチャン(sebastian)は初見の理解と仕事の実像、ハンニバル(hannibal)は独立性・発見の重複・形式選択の代償を見る。' +
     '分割案はsiblings全体で論点の重複と大切な材料の脱落を確認し、各案が単独で完結するかを見る。長文は冒頭の約束を本文が回収し、必要な文脈を維持しているかを見る。' +
     'ミア(mia)は自分たちの編集で意外さを一般論に薄めていないかも点検する。短さや長さ自体で加減点しない。' +
+    'quote_sourceは外部投稿の保存資料で、本人回答とは別。本人の専門的な解釈・経験が加わっているか、外部の主張を本人の体験や検証済み事実にしていないかも審査する。表示数の高さを合格理由にしない。単なる賛同や要約ならrevise。' +
     '補足部分もsourceの本人回答の口調に照らし、語尾・確信の強さが変わったり、説明部分だけ広報調になったりしていないか審査する。先に本文だけを読んで対象・状況・指示語が分かるか確認し、資料を読めば分かることを投稿本文でも分かると取り違えない。文脈がまだ不明なら具体的な引用と補完指示を示してrevise。' +
     'question_contextは質問から補った文脈と対応する回答。話題や指示語を補う編集は認めるが、質問だけの成果・数字・経験・因果を事実化していないか確認する。source_qisが複数なら全回答を照合し、結合で時点・対象・因果を捏造していないか、否定・訂正・留保が消えていないかを3者とミアで審査する。文脈が足りない場合は、質問のどの対象を補うか、どの回答をつなぐかという編集指示を出す。' +
     '\n追加フィールドcomposition: {"opinions":[{"persona":"rei","verdict":"passまたはrevise","reason":"本文に即した判断理由","quote":"問題箇所の本文引用","action":"具体的な編集指示"},同形式でsebastian,hannibal],"mia":{"persona":"mia","verdict":"passまたはrevise","reason":"採否と理由","quote":"問題箇所の本文引用","action":"具体的な編集指示"}}。' +

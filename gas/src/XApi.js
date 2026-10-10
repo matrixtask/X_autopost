@@ -67,9 +67,13 @@ function uploadMediaToX(blob) {
   return id;
 }
 
-function postTweet(text, mediaIds) {
+function postTweet(text, mediaIds, quoteTweetId) {
   var url = 'https://api.twitter.com/2/tweets';
   var body = { text: text };
+  if (quoteTweetId) {
+    if (typeof quoteTweetId !== 'string' || !/^\d{5,25}$/.test(quoteTweetId) || getProp('X_NATIVE_QUOTES_ENABLED', 'false') !== 'true') throw new Error('ネイティブ引用のIDまたはAPI権限を確認してください');
+    body.quote_tweet_id = quoteTweetId;
+  }
   if (mediaIds && mediaIds.length) body.media = { media_ids: mediaIds };
   var res = UrlFetchApp.fetch(url, {
     method: 'post',
@@ -141,6 +145,7 @@ function postTick() {
       return;
     }
     try {
+      if (post.quote_tweet_id) verifyQuoteBeforePosting(post);
       // 画像の準備に失敗しても本文だけは出す。予約枠を落とすより、
       // 添付なしで出して警告を出すほうが被害が小さい
       var media = { ids: [], problem: '' };
@@ -152,7 +157,7 @@ function postTick() {
             '\n本文だけを投稿します。');
         }
       }
-      var tweet = postTweet(text, media.ids);
+      var tweet = postTweet(text, media.ids, post.quote_mode === 'native' ? String(post.quote_tweet_id) : '');
       updateStockById(post.id, { status: STATUS.POSTED, posted_at: now, tweet_id: tweet.id });
       logEvent('posted', post.id + ' tweet_id=' + tweet.id + (media.ids.length ? ' media=1' : ''));
       notifySlack(':bird: 投稿しました' + (media.ids.length ? '（画像つき）' : '') + ':\n' + text +
