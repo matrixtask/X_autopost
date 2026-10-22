@@ -3,8 +3,7 @@
  *
  * 必須プロパティ（GASエディタ > プロジェクトの設定 > スクリプト プロパティ）:
  *   SPREADSHEET_ID      データ管理用スプレッドシートのID
- *   ANTHROPIC_API_KEY   Claude APIキー
- *   OPENAI_API_KEY      OpenAI APIキー（既定の質問・会話・下書き生成に使用）
+ *   OPENAI_API_KEY      OpenAI APIキー（質問・会話・画像説明・生成・採点・分析の全用途）
  *   SLACK_BOT_TOKEN     Slackボットトークン (xoxb-...)
  *   SLACK_CHANNEL_ID    インタビュー・通知先チャンネルID
  *   ADMIN_TOKEN         Webアプリ閲覧用の長いランダム文字列
@@ -14,22 +13,16 @@
  *     （X Developer PortalのOAuth 1.0a User Context、Read and Write権限）
  *
  * 任意:
- *   RESPONSE_PROVIDER   openai（既定）/ claude。質問・会話・画像説明・下書き・リライト用
- *   OPENAI_MODEL        gpt-6-luna（既定）。質問・会話用
+ *   OPENAI_MODEL        gpt-6-luna（既定）。全用途の基本モデル
  *   OPENAI_MODEL_GENERATE 下書き・リライト用。未設定なら OPENAI_MODEL
+ *   OPENAI_MODEL_SCORE 採点用。OPENAI_MODEL_ANALYSIS 分析用。未設定なら OPENAI_MODEL
  *   OPENAI_EFFORT_INTERVIEW low（既定）。OPENAI_EFFORT_GENERATE medium（既定）
+ *   OPENAI_EFFORT_SCORE / OPENAI_EFFORT_ANALYSIS medium（既定）
+ *   RESPONSE_PROVIDER / CLAUDE_* / ANTHROPIC_API_KEY の旧設定は使用しない
  *   NOTION_TOKEN        Notionインテグレーションのシークレット
  *   NOTION_DATABASE_ID  ストック同期先NotionデータベースID
  *   NOTION_THEMES_DATABASE_ID  テーマ管理DB（トークテーマ（運用中）_X）のID。
  *                       設定するとNotionの行がThemesシートへ毎朝同期される
- *   CLAUDE_MODEL        既定: claude-opus-5-5（採点・分析など）
- *   CLAUDE_MODEL_GENERATE 下書き生成・リライト用。未設定なら CLAUDE_MODEL。
- *                       文体の質が直接ポストに出るので、ここだけ上位モデルにできる
- *   CLAUDE_MODEL_SCORE  採点用。未設定なら CLAUDE_MODEL。途中で変えると過去の
- *                       スコアと比較できなくなるので、変えるなら意図して変える
- *   CLAUDE_EFFORT_GENERATE 生成の思考の深さ low/medium/high/xhigh/max（既定 medium）
- *   CLAUDE_FALLBACKS    拒否時に別モデルへ自動で引き継ぐか auto/on/off（既定 auto =
- *                       Fable/Opus 5 系のときだけ付ける）
  *   DRY_RUN             "false" にするまでXへは投稿しない（既定: true）
  *   QUALITY_MODE        outcome（既定、新5軸は参考値・必ず人の承認）/ legacy（旧17軸）
  *   AUTO_APPROVE        legacy時だけ "true" で品質ゲート通過分を承認なしで予約（既定: false）

@@ -1,93 +1,53 @@
-# 応答モデルをOpenAIへ切り替える
+# 全用途をOpenAIへ統一する
 
-2026-09-10の依頼により、本人向けの生成処理をOpenAI Responses APIへ切り替えた。
-ChatGPTの画面を操作する仕組みではなく、GASからAPIを呼び出す。
+2026-10-22の依頼により、本番GASの質問・会話・画像説明・生成・採点・分析をすべてOpenAI Responses APIへ統一した。ChatGPT画面の操作ではなく、既存のOpenAI APIキーを使う。
 
-2026-09-26: ユーザー指定で質問・会話・投稿生成の既定モデルを `gpt-6-luna` へ変更。質問/会話のeffortはlow、投稿生成はmediumを維持。生成前の3人格会議とミア、保存前編集も用途に応じてLunaを使う。採点・裏方分析はClaude Opus 5.5へ変更（採点官の変更はユーザー了承済み）。
-既にスクリプトプロパティにモデル名がある場合は既定値より優先されるため、`OPENAI_MODEL` と `OPENAI_MODEL_GENERATE` の両方を `gpt-6-luna` に更新する。`RESPONSE_PROVIDER` は `openai`。キーは変更不要。
-Claude側の既存値も既定値より優先される。採点・分析のOpus 5.5は `CLAUDE_MODEL=claude-opus-5-5` と `CLAUDE_MODEL_SCORE=claude-opus-5-5` を設定する。スクリプトプロパティに `CLAUDE_MODEL_GENERATE` が既にあり、Claudeの下書き経路もOpusにする場合はその値も更新する（現在の `RESPONSE_PROVIDER=openai` では投稿生成に使わない）。キーとプロバイダ設定は変更不要。
-`CLAUDE_FALLBACKS=auto` は拒否時にAnthropic推奨の別モデルへサーバー側で引き継ぐことがある。採点官をOpusに固定したい場合は `CLAUDE_FALLBACKS=off` にする。Logに `claude_fallback` が出た採点は通常のOpus採点と分けて解釈する。
-既存コードにもこの3プロパティはあるため、モデルの切り替え自体はプロパティ保存で次の実行から有効になる。
+従来は採点・分析だけClaudeだった。現在は `RESPONSE_PROVIDER=claude`、`CLAUDE_*`、`ANTHROPIC_API_KEY` が残っていても参照しない。Anthropicへの送信処理とプロバイダ間fallbackはなく、設定の削除・キーの変更は不要。
 
-公式仕様: [GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna) はResponses APIとreasoning.effortのlow/mediumをサポート（2026-09-26確認）。Luna変更時にローカルの模擬APIテスト156件通過。Opus用の回帰テストを追加したが未実行。実アカウントのモデル利用権限・出力品質・本番切り替えは未確認。
+## 用途別モデルと推論量
 
-| 用途 | 既定プロバイダ | モデル・設定 |
+| 用途 | モデルの設定 | 推論量の設定・既定 |
 | --- | --- | --- |
-| 初回質問・受け答え・追問・次問調整・聞き返し | OpenAI | `OPENAI_MODEL=gpt-6-luna` / effort `low` |
-| 画像説明・下書きを補うヒント | OpenAI | 同上 |
-| 下書き・リライト | OpenAI | `OPENAI_MODEL_GENERATE`（未設定なら `OPENAI_MODEL`）/ effort `medium` |
-| 採点・遡及採点・採点再現性確認 | Claude | `CLAUDE_MODEL_SCORE=claude-opus-5-5` |
-| テーマの分類・分析・メンテナンス | Claude | `CLAUDE_MODEL=claude-opus-5-5` |
+| 質問・会話・聞き返し・画像説明 | `OPENAI_MODEL`（未設定は `gpt-6-luna`） | `OPENAI_EFFORT_INTERVIEW=low` |
+| 下書き・リライト・生成前の会議と編集 | `OPENAI_MODEL_GENERATE`（未設定は基本モデル） | `OPENAI_EFFORT_GENERATE=medium` |
+| 採点・編集審査・遡及採点 | `OPENAI_MODEL_SCORE`（未設定は基本モデル） | `OPENAI_EFFORT_SCORE=medium` |
+| テーマ分類・分析・用途未指定の処理 | `OPENAI_MODEL_ANALYSIS`（未設定は基本モデル） | `OPENAI_EFFORT_ANALYSIS=medium` |
 
-生成先だけを変え、Voiceや本人メモ、質問の品質ルール、出典検証は引き継ぐ。
-モデル変更による品質向上は未検証。既存の点数・審査履歴は書き換えず、切り替え後の採点に適用する。旧採点官との点数差だけを品質向上と解釈しない。
+既存のOpenAIモデル指定は引き継ぐ。今回、採点・分析用のモデル指定を新設した。未設定なら基本モデルへ継承するため、既存設定がLunaなら全用途Lunaになる。モデルや推論量を変えた効果は別途検証する。
 
-## 設定と反映
+Voice、本人メモ、3人格→ミア→リナの編集、原文引用・出典検証、時間予算、本人承認は維持する。保存済みの回答・下書き・過去の採点は一括改稿・再採点しない。
 
-1. GASの「プロジェクトの設定」→「スクリプト プロパティ」に `OPENAI_API_KEY` を登録する。
-   キーはコード・スプレッドシート・Slack・GitHubへ書かない。API側で対象モデルを利用できる必要がある。
-2. `RESPONSE_PROVIDER=openai`、`OPENAI_MODEL=gpt-6-luna`、`OPENAI_MODEL_GENERATE=gpt-6-luna`、`CLAUDE_MODEL=claude-opus-5-5`、`CLAUDE_MODEL_SCORE=claude-opus-5-5` を設定する。
-   採点と裏方分析用の `ANTHROPIC_API_KEY` は残す。
-3. Ubuntuで反映する:
+## 接続確認と反映
+
+1. 既存の `OPENAI_API_KEY` を使用する。キーはコード・シート・Slack・GitHubへ書かない。Anthropicのキーは不要だが、この変更で削除はしない。
+2. UbuntuでコードとA/B両方を反映する。
 
    ```bash
    cd ~/X_autopost && git pull origin main && cd gas && ./deploy.sh
    ```
 
-   B（Slack）のバージョン付きデプロイも更新する。`.deployment-id-slack` が登録されていれば
-   `deploy.sh` が更新する。`clasp push` だけではSlackからの受信処理は切り替わらない。
-4. GASエディタで **`OpenAI.gs`** の `testOpenAIConnection` / `testOpenAIGenerationConnection` と **`Claude.gs`** の `testClaudeScoringConnection` を実行し、選択されたモデル名を確認する。各関数はAPIを1回呼ぶ。
-   モデル名と応答が実行ログへ出る。OpenAI APIを1回呼び、Logへ診断記録を残す。
-   X投稿・Slack送信・Stock/Interviewsの変更は行わない。
-5. 次のインタビューで会話と生成を確認する。Logの `openai_response` にモデル・用途・トークン数が残る。
+   `clasp push` だけでは、Slack受け口のバージョン付きデプロイは更新されない。モデル切り替えにシート初期化やトリガー再登録は不要。
+3. GASエディタの **OpenAI.gs** を開き、次の関数を実行すると、実際のモデル名とOK応答を確認できる。各1回のAPI呼び出しでLogに診断を残す。投稿、Slack送信、Stock/Interviewsの変更はしない。
+   - `testOpenAIConnection`：質問・会話
+   - `testOpenAIGenerationConnection`：下書き生成
+   - `testOpenAIScoringConnection`：採点
+   - `testOpenAIAnalysisConnection`：用途未指定の分析
+4. 次の処理から全用途OpenAIになる。進行中のインタビューも、次のモデル呼び出しから切り替わる。Logの `openai_response` にモデル・用途・推論量・トークン数が残る。
 
-この変更自体は列追加なし。PR #52の補足機能をまだ反映していなければ、`Sheets.gs` の
-`setupSpreadsheet` も1回実行する。
+旧 **Claude.gs** の `testClaudeScoringConnection` は互換口として残すが、OpenAIの採点接続確認を実行し、結果にもOpenAIと表示する。`askClaude*`、`claudeMessage` という旧関数名もOpenAIへ接続するため、ファイル名・関数名からプロバイダを判断しない。
 
-## エラーと切り戻し
+## 採点履歴とエラー
 
-- キー未設定、認証・権限・モデル指定のエラー、利用枠不足は再試行せず設定を案内する。
-- 拒否・content filterは部分出力があっても採用せず、他モデルへの自動切替もしない。
-- 出力トークン不足は既存のJSON再試行・部分救出を使う。通常の会話応答は1回で打ち切り、
-  失敗時は原文を残して予定質問で進む。部分救出は完成したJSON要素のみ。
-- 429等の一時エラーは既存JSONラッパーの上限内でのみ再試行する。
-- APIエラー本文やAPIキーはLogへ出さず、HTTPステータスとエラーコードを記録する。
-- `store:false` で応答保存を無効にする。送信内容の取り扱い全体をゼロ保持と保証する設定ではない。
-- `RESPONSE_PROVIDER=claude` で旧生成経路へ戻せる。既存のClaudeモデル設定を再利用する。
+新規の編集審査は `openai/<model>/<effort>` をscorerに保存する。Claudeで保存済みの履歴はそのまま保持し、成果検証では採点官別に分ける。審査中にモデル・推論量が変更された場合は、異なる採点官の名前で結果を保存せず再評価待ちにする。旧モデルとの点数差だけで品質向上とは判断しない。
 
-## 実装と検証
+キー未設定、認証・権限・モデル指定・利用枠のエラーでは、Claudeへ戻さない。一時エラーだけ既存JSONラッパーの上限内で再試行する。拒否・content filterは部分出力があっても不採用。出力トークン不足は既存の出力枠拡大・JSON部分救出を使うが、投稿構成の厳密な検証は維持する。
 
-新規ファイルは `gas/src/OpenAI.js` → GASの **`OpenAI.gs`**。
-`responseProviderFor` / `openAIModelFor` / `openAIError` / `openAIInput` / `openAIMessage` は内部関数。
-手動接続確認は引数なしの `testOpenAIConnection` / `testOpenAIGenerationConnection`。
-既存 `askClaude*` の関数名と呼び出し形式を維持し、`purpose: interview|generate` をルーティングする。
-`purpose: score` と用途未指定はClaudeに残す。
+`store:false` は応答保存を無効にする設定で、送信内容全体のゼロ保持を保証するものではない。APIエラー本文・キー・JSONパース失敗時の回答本文をログへ丸ごと出さない。共通の再試行ログは `llm_retry`、部分救出は `llm_json_salvaged`。
 
-`npm test` 68件合格（既存56+新規12）。用途別ルーティング、画像形式、拒否・キー未設定・
-HTTPエラー・途中切れ・JSON部分救出・秘密を出さないログを模擬APIで検証。
-キーとGAS接続設定のない開発環境のため、実API通信・GASデプロイ・応答時間・文体の品質は未検証。
+旧プロバイダ設定でClaudeへ切り戻す機能はない。障害時は勝手に別プロバイダへ送らず、保存済み回答を維持して停止する。コードのロールバックはGit履歴と既存のデプロイ版を使う。
 
-仕様確認元（2026-09-10取得）:
+## 検証範囲
 
-- [GPT-6 Astra移行ガイド](https://developers.openai.com/api/docs/guides/latest-model/gpt-6-astra.md#migration-quickstart)：モデルID、reasoning.effort、非対応パラメータ。
-- [Responses API](https://developers.openai.com/api/reference/cli/resources/responses/methods/create)：入力、出力ブロック、トークン上限、不完全応答、保存設定。
-#### 本番スクリプトプロパティ
+全用途のルーティング、旧設定とAnthropicキーなしでの動作、用途別モデル・推論量、画像変換、拒否・HTTPエラー・打ち切り・JSON救出、採点官記録と審査中の設定変更を模擬APIで検証する。テスト・デプロイだけで、実モデルの採点品質やインプレッション向上を証明しない。
 
-| プロパティ | 値 |
-| --- | --- |
-| `RESPONSE_PROVIDER` | `openai` |
-| `OPENAI_MODEL` | `gpt-6-luna` |
-| `OPENAI_MODEL_GENERATE` | `gpt-6-luna` |
-| `CLAUDE_MODEL` | `claude-opus-5-5` |
-| `CLAUDE_MODEL_SCORE` | `claude-opus-5-5` |
-| `CLAUDE_FALLBACKS` | Opusへ固定するなら `off`（現設定 `auto` は拒否時に別モデルへ引き継ぐ場合あり） |
-
-- `CLAUDE_MODEL_GENERATE` はClaudeで下書きする時だけ使う。いまのOpenAI生成経路では参照しない。Anthropic/OpenAIの各APIキーは変更不要。
-- Anthropic公式モデルIDは `claude-opus-5-5`。Messages APIのthinking blockは既存コードがtypeで選別して本文から除外する。Opus 5.5はadaptive thinkingが常時有効、既定effortはmedium。fallbacksは拒否時に推奨先へ移るので、固定採点には `off` を選べる。
-- 既存の採点値、説明、判定履歴を書き換える再採点は実行しない。今後の採点だけモデルが変わる。点数水準の変更は品質の変化と混同しないよう、旧モデルとOpusのサンプルを同じ下書きで比較するまで慎重に判断する。
-
-【安全な接続確認】GASエディタの **OpenAI.gs** で `testOpenAIConnection` と `testOpenAIGenerationConnection`、**Claude.gs** で `testClaudeScoringConnection` をそれぞれ実行する。OKだけを求めるAPI呼び出しで、採点データ・Stock・投稿・Slackを変更しない。結果に出るモデル名を確認する。
-
-【反映】設定保存だけで次の実行からモデル選択が変わる。接続テスト用関数と既定値のコードも更新するため、Ubuntuから `cd ~/X_autopost && git pull origin main && cd gas && ./deploy.sh` を実行し、デプロイA/B両方を更新する。
-
-公式仕様: [Claude Opus 5.5](https://platform.claude.com/docs/en/models/overview) / [Opus 5.5の変更と互換性](https://platform.claude.com/docs/en/models/opus-5-5/whats-new-opus-5-5)
+公式仕様（2026-10-22確認）: [GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna)、[Responses API](https://developers.openai.com/api/docs/guides/reasoning)。LunaのResponses APIとlow/medium推論量を確認し、既存のモデル選択を維持した。

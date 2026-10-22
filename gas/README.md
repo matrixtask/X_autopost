@@ -1,5 +1,7 @@
 # セットアップガイド（Google Apps Script版）
 
+**2026-10-22 全用途OpenAIへ統一:** 質問・画像説明・投稿生成に加え、採点・編集審査・分析もOpenAI Responses APIへ変更。既存のOpenAIモデル設定を引き継ぎ、採点/分析は用途別モデル・推論量を指定可能です。古いClaude設定が残っていても使用しません。保存済み回答・評価・本人承認は保持。接続確認は **OpenAI.gs** の `testOpenAIScoringConnection` / `testOpenAIAnalysisConnection`（各1回のAPI呼び出し、投稿・Slack送信なし）。[設定と検証手順](../docs/openai-responses.md)。
+
 **2026-10-10 実績を使った質問・参照投稿:** 新しいインタビューから、広告を除外した過去投稿の上位例と比較例を質問の参考に使います。関連する外部投稿を1日最大2リクエスト・最大40件取得し、表示数と観測間の増分を保存。接点があれば最大1問で本人の見方を聞き、回答から参照リンク付きの下書きを作ります。会議・ミア・リナ・審査・本人承認は維持。X APIのネイティブ引用は公式資料ではEnterprise限定のため既定無効です。新規トリガー・列の手動作成は不要。次の新規インタビューから適用され、回答途中の問いは変わりません。[詳細・設定](../docs/reach-driven-interviews.md)。
 
 **2026-10-10 未生成セッションの一括救済:** デプロイ後、GASの **InterviewRecovery.gs** で `startFailedInterviewBatch` を一度実行すると、開始時の未生成・完了済みセッションを約5分ごとに1件ずつ自動生成します。生成済み・回答途中は除外し、失敗・中断したセッションは保留して次へ進みます。3人格→ミア→リナの工程を維持し、採点は夜の品質ゲート、公開は本人承認後です。終了時に専用トリガーを除去してSlackへ結果を通知します。停止は同ファイルの `stopFailedInterviewBatch`。生成中の1件は最後まで進みます。既存の `regenerateFailedInterviews` は手動処理として残ります。[詳細](../docs/interview-recovery.md)。
@@ -47,7 +49,6 @@
 | プロパティ | 値 |
 | --- | --- |
 | `SPREADSHEET_ID` | 手順1のID |
-| `ANTHROPIC_API_KEY` | AnthropicのAPIキー |
 | `OPENAI_API_KEY` | OpenAIのAPIキー。ChatGPTのログイン情報ではなくAPIキーを設定 |
 | `ADMIN_TOKEN` | 長いランダム文字列（Webアプリの認証用） |
 | `DRY_RUN` | `true`（最初は必ずtrueのまま） |
@@ -338,9 +339,9 @@ weight = anchor * (1 + s * (perf - 50) / span)
 
 ## 質問と受け答えの品質
 
-質問・受け答え・下書き生成はOpenAI Responses APIを使用します。既定は `gpt-6-luna`。
-既存の設定がある場合は、GASのスクリプトプロパティ `OPENAI_MODEL` / `OPENAI_MODEL_GENERATE` を両方 `gpt-6-luna` に変更してください（`RESPONSE_PROVIDER=openai`）。プロパティ保存後の次の実行から有効です。
-`OpenAI.gs` の `testOpenAIConnection`（会話）と `testOpenAIGenerationConnection`（生成）でモデル名を確認できます。生成用接続確認は今回追加したため、利用するにはコードのデプロイが必要です。
+質問・受け答え・画像説明・下書き生成・採点・分析はOpenAI Responses APIを使用します。基本モデルの既定は `gpt-6-luna`。
+既存の `OPENAI_MODEL` / `OPENAI_MODEL_GENERATE` は引き継ぎます。採点は `OPENAI_MODEL_SCORE`、分析は `OPENAI_MODEL_ANALYSIS` を指定でき、未設定なら基本モデルを使います。旧Claude設定は参照しません。
+`OpenAI.gs` の `testOpenAIConnection`（会話）、`testOpenAIGenerationConnection`（生成）、`testOpenAIScoringConnection`（採点）、`testOpenAIAnalysisConnection`（分析）で各モデル名を確認できます。
 接続設定・検証手順は [OpenAIへの切り替え](../docs/openai-responses.md) を参照してください。
 
 回答原文を保存したうえで、その回答中の短い抜粋を返し、不足情報があるときだけ
@@ -397,16 +398,19 @@ GASエディタで **`regenerateFailedInterviews`** を実行すると、
 | `SLOT_TIMES` | `08:00,12:30,19:30` | 1日の予約枠 |
 | `MAX_POSTS_PER_DAY` | `3` | 1日の最大投稿数 |
 | `INTERVIEW_QUESTIONS` | `4` | 毎朝の質問数 |
-| `RESPONSE_PROVIDER` | `openai` | 質問・会話・画像説明・下書き・リライト。`claude` で旧経路へ切り戻す。採点と裏方分析には影響しない |
-| `OPENAI_MODEL` | `gpt-6-luna` | 質問・会話・画像説明・補足ヒント用 |
+| `OPENAI_MODEL` | `gpt-6-luna` | 全用途の基本モデル。質問・会話・画像説明・補足ヒントも使用 |
 | `OPENAI_MODEL_GENERATE` | （`OPENAI_MODEL`） | 下書き・リライト用 |
+| `OPENAI_MODEL_SCORE` | （`OPENAI_MODEL`） | 採点・編集審査用。採点官の実名を履歴へ記録 |
+| `OPENAI_MODEL_ANALYSIS` | （`OPENAI_MODEL`） | テーマ分類・分析・用途未指定の処理用 |
 | `OPENAI_EFFORT_INTERVIEW` | `low` | OpenAIの会話用 reasoning.effort |
 | `OPENAI_EFFORT_GENERATE` | `medium` | OpenAIの生成用 reasoning.effort |
-| `CLAUDE_MODEL` | `claude-opus-5-5` | 質問生成・分析など、下の2つに当てはまらない呼び出しのモデル |
-| `CLAUDE_MODEL_GENERATE` | （`CLAUDE_MODEL`） | Claude経路に切り替えた際の下書き生成・リライトモデル |
-| `CLAUDE_MODEL_SCORE` | （`CLAUDE_MODEL`） | 採点モデル。既存スコアは保存時のまま保持し、モデル切替後の採点に適用 |
-| `CLAUDE_EFFORT_GENERATE` | `medium` | 生成の思考の深さ（`low`/`medium`/`high`/`xhigh`/`max`）。Fable 5.1 は思考が常時オンなので、定型作業で深く考えすぎて出力枠を使い切るのを防ぐ |
-| `CLAUDE_FALLBACKS` | `auto` | 安全分類器に拒否されたとき別モデルへ自動で引き継ぐか。`auto` は Fable / Opus 5 系のときだけ付ける。`off` で止められる |
+| `OPENAI_EFFORT_SCORE` | `medium` | OpenAIの採点用 reasoning.effort |
+| `OPENAI_EFFORT_ANALYSIS` | `medium` | OpenAIの分析用 reasoning.effort |
+
+`RESPONSE_PROVIDER` / `CLAUDE_*` / `ANTHROPIC_API_KEY` は旧設定です。残っていても使わず、削除は必須ではありません。
+
+| その他のプロパティ | 既定値 | 意味 |
+| --- | --- | --- |
 | `BACKFILL_MAX_POSTS` | `1000` | `backfillManualPosts` が遡る件数 |
 | `BACKFILL_BATCH` | `15` | `backfillAxisScores` が1回のAPI呼び出しで採点する件数（失敗すると自動で半減する） |
 | `METRICS_SETTLE_DAYS` | `30` | 投稿から何日後の数字を「確定」とみなすか。これより早い時点の記録しか無い投稿は毎週取り直す |

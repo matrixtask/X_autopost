@@ -18,7 +18,7 @@ function setup(props = {}) {
     logEvent: (...args) => logs.push(args),
     notifySlack: () => { throw new Error('no outbound messages in this test'); },
   });
-  for (const file of ['Pure', 'Config', 'Editorial', 'OutcomeQuality', 'Themes', 'Quality', 'Metrics', 'Interview']) {
+  for (const file of ['Pure', 'Config', 'Editorial', 'OutcomeQuality', 'Themes', 'Quality', 'Metrics', 'Interview', 'OpenAI']) {
     vm.runInContext(readFileSync(new URL(`../gas/src/${file}.js`, import.meta.url), 'utf8'), ctx);
   }
   ctx.nowJst = () => new Date('2026-09-10T00:00:00Z');
@@ -52,9 +52,24 @@ test('outcome: a low reference score goes to human approval, never auto-approved
   assert.equal(result.passed, 1);
   assert.equal(db.Stock[0].score, 25);
   assert.equal(db.Stock[0].status, 'ready');
+  assert.equal(JSON.parse(db.Stock[0].editorial_review).scorer, 'openai/gpt-6-luna/medium');
   assert.equal(db.Stock[0].axes, '');
   assert.equal(db.Stock[0].score_version, 'outcome-v1');
   assert.equal(calls, 1);
+});
+
+test('outcome: a model or effort change during scoring cannot label the result as the new scorer', () => {
+  const properties = { OPENAI_MODEL_SCORE: 'first-model' };
+  const { ctx, db } = setup(properties);
+  db.Interviews.push({ session_id: 's', idx: 1, theme: '試作', answer: '自分で確認した', answered_at: 'now' });
+  db.Stock.push({ id: 'd', session_id: 's', source_idx: '1', theme: '試作', text: '自分で確認した', status: 'draft' });
+  ctx.askClaudeJsonSalvageable = () => {
+    properties.OPENAI_MODEL_SCORE = 'second-model';
+    return { d: review(ctx, 2) };
+  };
+  ctx.runOutcomeQualityGate();
+  assert.equal(db.Stock[0].status, 'draft');
+  assert.equal(db.Stock[0].editorial_review, undefined);
 });
 
 test('outcome: missing source, privacy and retired topic cannot be compensated by high scores', () => {
