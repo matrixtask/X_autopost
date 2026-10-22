@@ -50,31 +50,27 @@ test('OpenAI: interview and writing use Responses with separate reasoning budget
   assert.equal(h.requests[1].payload.reasoning.effort, 'medium');
 });
 
-test('OpenAI: scoring and untagged background analysis retain Claude', () => {
-  const response = { body: { content: [{ type: 'text', text: 'claude-result' }], stop_reason: 'end_turn' } };
-  const h = harness({ CLAUDE_MODEL_SCORE: 'existing-scoring-model' }, [response, response]);
+test('OpenAI: scoring and untagged background analysis use Responses even with old Claude settings', () => {
+  const h = harness({ ANTHROPIC_API_KEY: '', RESPONSE_PROVIDER: 'claude', CLAUDE_MODEL_SCORE: 'old-score', CLAUDE_MODEL: 'old-analysis' });
   h.ctx.askClaude('score', 'text', 2000, { purpose: 'score' });
   h.ctx.askClaude('analysis', 'text', 2000);
-  assert.ok(h.requests.every((r) => r.url === 'https://api.anthropic.com/v1/messages'));
-  assert.equal(h.requests[0].payload.model, 'existing-scoring-model');
-  assert.equal(h.requests[0].headers.Authorization, undefined);
+  h.ctx.askClaude('analysis', 'text', 2000, { purpose: 'analysis' });
+  assert.ok(h.requests.every(r => r.url === 'https://api.openai.com/v1/responses'));
+  assert.ok(h.requests.every(r => r.payload.model === 'gpt-6-luna' && r.payload.reasoning.effort === 'medium'));
+  assert.ok(h.requests.every(r => r.headers['x-api-key'] === undefined));
+  assert.equal(h.ctx.openAIScorerId(), 'openai/gpt-6-luna/medium');
 });
 
-test('Claude: scoring and analysis default to Opus 5.5 while explicit model settings win', () => {
-  const response = { body: { content: [{ type: 'thinking', thinking: '' }, { type: 'text', text: 'OK' }], stop_reason: 'end_turn' } };
-  const h = harness({}, [response, response]);
-  assert.equal(h.ctx.testClaudeScoringConnection(), 'Claude採点接続OK / model=claude-opus-5-5 / 応答=OK');
-  h.ctx.askClaude('analysis', 'input', 4000);
-  for (const r of h.requests) {
-    assert.equal(r.payload.model, 'claude-opus-5-5');
-    assert.equal(r.payload.thinking, undefined);
-    assert.equal(r.payload.temperature, undefined);
-    assert.equal(r.payload.fallbacks, 'default');
-    assert.equal(r.headers['anthropic-beta'], 'server-side-fallback-2026-07-01');
-  }
-  const overridden = harness({ CLAUDE_MODEL: 'custom-base', CLAUDE_MODEL_SCORE: 'custom-score' }, [response]);
-  assert.match(overridden.ctx.testClaudeScoringConnection(), /model=custom-score/);
-  assert.equal(overridden.ctx.claudeModelFor(), 'custom-base');
+test('OpenAI: old Claude helper names and direct calls cannot contact Anthropic', () => {
+  const h = harness({ CLAUDE_MODEL: 'old-base', CLAUDE_MODEL_SCORE: 'old-score', CLAUDE_FALLBACKS: 'on',
+    OPENAI_MODEL: 'base-model', OPENAI_MODEL_SCORE: 'score-model' });
+  assert.equal(h.ctx.testClaudeScoringConnection(), 'OpenAI採点接続OK / model=score-model / 応答=OK');
+  assert.equal(h.ctx.claudeModelFor('score'), 'score-model');
+  assert.equal(h.ctx.claudeModelFor(), 'base-model');
+  assert.equal(h.ctx.claudeUsesFallbacks('old-model'), false);
+  h.ctx.claudeMessage('analysis', 'input', 4000);
+  assert.ok(h.requests.every(r => r.url === 'https://api.openai.com/v1/responses'));
+  assert.ok(h.requests.every(r => r.payload.fallbacks === undefined));
 });
 
 test('OpenAI: both connection checks show the actual model including existing overrides', () => {
@@ -84,18 +80,22 @@ test('OpenAI: both connection checks show the actual model including existing ov
     const writingModel = props.OPENAI_MODEL_GENERATE || interviewModel;
     assert.equal(h.ctx.testOpenAIConnection(), `OpenAI接続OK / model=${interviewModel} / 応答=OK`);
     assert.equal(h.ctx.testOpenAIGenerationConnection(), `OpenAI生成接続OK / model=${writingModel} / 応答=OK`);
+    assert.equal(h.ctx.testOpenAIScoringConnection(), `OpenAI採点接続OK / model=${interviewModel} / 応答=OK`);
+    assert.equal(h.ctx.testOpenAIAnalysisConnection(), `OpenAI分析接続OK / model=${interviewModel} / 応答=OK`);
     assert.deepEqual(h.requests.map(r => [r.payload.model, r.payload.reasoning.effort]),
-      [[interviewModel, 'low'], [writingModel, 'medium']]);
+      [[interviewModel, 'low'], [writingModel, 'medium'], [interviewModel, 'medium'], [interviewModel, 'medium']]);
   }
 });
 
-test('OpenAI: explicit Claude rollback retains existing writing model', () => {
-  const h = harness({ RESPONSE_PROVIDER: 'claude', CLAUDE_MODEL_GENERATE: 'existing-writing-model' }, [
-    { body: { content: [{ type: 'text', text: 'OK' }], stop_reason: 'end_turn' } },
-  ]);
-  h.ctx.askClaude('style', 'draft', 2000, { purpose: 'generate' });
-  assert.equal(h.requests[0].payload.model, 'existing-writing-model');
-  assert.match(h.requests[0].url, /anthropic/);
+test('OpenAI: retired provider settings cannot route any workload back to Claude', () => {
+  for (const RESPONSE_PROVIDER of ['claude', 'typo']) {
+    const h = harness({ RESPONSE_PROVIDER, CLAUDE_MODEL_GENERATE: 'old-writing' });
+    for (const purpose of ['interview', 'generate', 'score', 'analysis', undefined]) {
+      assert.equal(h.ctx.responseProviderFor(purpose), 'openai');
+      h.ctx.askClaude('system', 'input', 2000, { purpose });
+    }
+    assert.ok(h.requests.every(r => r.url === 'https://api.openai.com/v1/responses'));
+  }
 });
 
 test('OpenAI: models and efforts can be overridden without changing Claude settings', () => {
@@ -109,6 +109,15 @@ test('OpenAI: models and efforts can be overridden without changing Claude setti
   assert.equal(h.requests[1].payload.reasoning.effort, 'high');
 });
 
+test('OpenAI: scoring and analysis honor independent model and effort overrides', () => {
+  const h = harness({ OPENAI_MODEL: 'base-model', OPENAI_MODEL_SCORE: 'scoring-model', OPENAI_MODEL_ANALYSIS: 'analysis-model',
+    OPENAI_EFFORT_SCORE: 'high', OPENAI_EFFORT_ANALYSIS: 'low' });
+  h.ctx.testOpenAIScoringConnection(); h.ctx.testOpenAIAnalysisConnection();
+  assert.deepEqual(h.requests.map(r => [r.payload.model, r.payload.reasoning.effort]), [['scoring-model', 'high'], ['analysis-model', 'low']]);
+  assert.equal(h.ctx.openAIScorerId(), 'openai/scoring-model/high');
+  assert.match(h.logs.find(r => r.event === 'openai_response').detail, /purpose=score effort=high/);
+});
+
 test('OpenAI: Slack images become data URL input_image blocks', () => {
   const h = harness();
   h.ctx.askClaudeWithImages('read', 'caption', [{ base64: 'AA==', mimeType: 'image/png' }], 4000, { purpose: 'interview' });
@@ -118,10 +127,10 @@ test('OpenAI: Slack images become data URL input_image blocks', () => {
   assert.throws(() => h.ctx.openAIInput([{ type: 'unknown' }]), /未対応/);
 });
 
-test('OpenAI: missing key or invalid provider fails without network or silent Claude fallback', () => {
-  for (const props of [{ OPENAI_API_KEY: '' }, { RESPONSE_PROVIDER: 'typo' }]) {
-    const h = harness(props);
-    assert.throws(() => h.ctx.askClaudeJson('', '', 2000, { purpose: 'interview' }), (e) => h.ctx.isFatalError(e));
+test('OpenAI: missing key fails every workload without network or silent Claude fallback', () => {
+  for (const purpose of ['interview', 'generate', 'score', undefined]) {
+    const h = harness({ OPENAI_API_KEY: '' });
+    assert.throws(() => h.ctx.askClaudeJson('', '', 2000, { purpose }), (e) => h.ctx.isFatalError(e));
     assert.equal(h.requests.length, 0);
   }
 });

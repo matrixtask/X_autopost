@@ -213,6 +213,7 @@ function runOutcomeQualityGate(repairRows) {
       return { id: r.id, source_idx: batch[j].source_idx, source_chars: r.source.length };
     })));
     var compositionPrompt = batch[0].edit_meta ? compositionReviewPrompt() : '';
+    var scorer = openAIScorerId();
     var result = askClaudeJsonSalvageable(outcomeScoringPrompt() + compositionPrompt, JSON.stringify(input) + outcomeReviewSchema(),
       6000, { purpose: 'score' });
     var retry = input.filter(function (r) {
@@ -228,6 +229,10 @@ function runOutcomeQualityGate(repairRows) {
       retry.forEach(function (r) { result[r.id] = repaired && repaired[r.id]; });
     }
     batch.forEach(function (d, j) {
+      if (openAIScorerId() !== scorer) {
+        logEvent('outcome_changed', String(d.id) + ': 審査中に採点モデルまたは推論量が変更されました');
+        return;
+      }
       // API待機中の本人編集・承認を、古い本文の評価で上書きしない。
       var current = readTable(SHEET.STOCK).filter(function (r) { return String(r.id) === String(d.id); })[0];
       if (!current || current.text !== d.text || current.status !== d.status || current.editorial_review !== d.editorial_review ||
@@ -271,7 +276,7 @@ function runOutcomeQualityGate(repairRows) {
       if (input[j].quote_error) review.review_note += '\n引用元の資料: ' + input[j].quote_error;
       var quoteProblem = typeof quotePublishingProblem === 'function' ? quotePublishingProblem(d) : '';
       if (quoteProblem) { review.fidelity = 'confirm'; review.review_note += '\n引用元の確認: ' + quoteProblem; }
-      review.scorer = 'claude/' + claudeModelFor('score') + '/' + claudeEffortFor('score');
+      review.scorer = scorer;
       review.review_version = 'grounded-v2';
       if (isRetiredTopic(text + ' ' + d.theme)) {
         review.focus = 'off_topic';

@@ -24,7 +24,7 @@ function setup(properties = {}) {
   const db = { Stock: [], Interviews: [answer()] }, calls = [], requests = [], logs = [];
   let id = 0;
   const ctx = vm.createContext({ console, Date });
-  for (const file of ['Pure', 'Config', 'Editorial', 'EditorialCouncil', 'PostComposition', 'Interview', 'Drafts', 'OutcomeQuality', 'Quality', 'WebApp', 'Scheduler', 'XApi', 'Notion', 'Rewrite', 'Reach']) {
+  for (const file of ['Pure', 'Config', 'Editorial', 'EditorialCouncil', 'PostComposition', 'Interview', 'Drafts', 'OutcomeQuality', 'Quality', 'WebApp', 'Scheduler', 'XApi', 'Notion', 'Rewrite', 'Reach', 'OpenAI']) {
     vm.runInContext(readFileSync(new URL(`../gas/src/${file}.js`, import.meta.url), 'utf8'), ctx);
   }
   Object.assign(ctx, {

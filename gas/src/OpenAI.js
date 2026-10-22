@@ -1,20 +1,30 @@
 /**
- * OpenAI.js → GASの OpenAI.gs。質問・会話・下書き生成のResponses APIクライアント。
- * 既存の askClaude* から用途で振り分ける。採点・裏方分析はClaudeを維持する。
+ * OpenAI.js → GASの OpenAI.gs。全用途のResponses APIクライアント。
+ * askClaude* は呼び出し互換名として残す。旧Claude設定は使用しない。
  */
 
 function responseProviderFor(purpose) {
-  if (purpose !== 'interview' && purpose !== 'generate') return 'claude';
-  var provider = String(getProp('RESPONSE_PROVIDER', 'openai')).trim().toLowerCase();
-  if (provider !== 'openai' && provider !== 'claude') {
-    throw openAIError('RESPONSE_PROVIDER は openai または claude を指定してください', 'fatal');
-  }
-  return provider;
+  // 2026-10-22: 全用途をOpenAIへ統一。残存するRESPONSE_PROVIDER=claudeでも戻さない。
+  return 'openai';
 }
 
 function openAIModelFor(purpose) {
   var base = getProp('OPENAI_MODEL', 'gpt-6-luna');
-  return purpose === 'generate' ? getProp('OPENAI_MODEL_GENERATE', base) : base;
+  if (purpose === 'generate') return getProp('OPENAI_MODEL_GENERATE', base);
+  if (purpose === 'score') return getProp('OPENAI_MODEL_SCORE', base);
+  if (purpose === 'interview') return base;
+  return getProp('OPENAI_MODEL_ANALYSIS', base);
+}
+
+function openAIEffortFor(purpose) {
+  if (purpose === 'interview') return getProp('OPENAI_EFFORT_INTERVIEW', 'low');
+  if (purpose === 'generate') return getProp('OPENAI_EFFORT_GENERATE', 'medium');
+  if (purpose === 'score') return getProp('OPENAI_EFFORT_SCORE', 'medium');
+  return getProp('OPENAI_EFFORT_ANALYSIS', 'medium');
+}
+
+function openAIScorerId() {
+  return 'openai/' + openAIModelFor('score') + '/' + openAIEffortFor('score');
 }
 
 function openAIError(message, kind) {
@@ -48,8 +58,7 @@ function openAIMessage(systemPrompt, content, maxTokens, opts) {
   var apiKey = String(getProp('OPENAI_API_KEY', '')).trim();
   if (!apiKey) throw openAIError('OPENAI_API_KEY をGASのスクリプトプロパティに設定してください', 'fatal');
   var model = openAIModelFor(o.purpose);
-  var effort = o.effort || (o.purpose === 'generate'
-    ? getProp('OPENAI_EFFORT_GENERATE', 'medium') : getProp('OPENAI_EFFORT_INTERVIEW', 'low'));
+  var effort = o.effort || openAIEffortFor(o.purpose);
   var payload = {
     model: model,
     instructions: systemPrompt,
@@ -97,7 +106,7 @@ function openAIMessage(systemPrompt, content, maxTokens, opts) {
   }
   var text = parts.join('\n');
   var usage = json.usage || {};
-  logEvent('openai_response', 'model=' + model + ' purpose=' + String(o.purpose || '') +
+  logEvent('openai_response', 'model=' + model + ' purpose=' + String(o.purpose || 'analysis') + ' effort=' + String(effort || '') +
     ' input=' + Number(usage.input_tokens || 0) + ' output=' + Number(usage.output_tokens || 0));
   if (reason === 'max_output_tokens') {
     logEvent('openai_truncated', 'max_output_tokens=' + payload.max_output_tokens);
@@ -120,6 +129,22 @@ function testOpenAIConnection() {
 function testOpenAIGenerationConnection() {
   var text = openAIMessage('接続確認です。OK とだけ返してください。', 'OK', 4000, { purpose: 'generate' });
   var result = 'OpenAI生成接続OK / model=' + openAIModelFor('generate') + ' / 応答=' + text;
+  console.log(result);
+  return result;
+}
+
+/** OpenAI.gsで手動実行。投稿の採点・Slack送信・原文変更はしない。 */
+function testOpenAIScoringConnection() {
+  var text = askClaude('接続確認です。OK とだけ返してください。', 'OK', 4000, { purpose: 'score' });
+  var result = 'OpenAI採点接続OK / model=' + openAIModelFor('score') + ' / 応答=' + text;
+  console.log(result);
+  return result;
+}
+
+/** OpenAI.gsで手動実行。用途未指定のテーマ分析経路も確認する。 */
+function testOpenAIAnalysisConnection() {
+  var text = askClaude('接続確認です。OK とだけ返してください。', 'OK', 4000);
+  var result = 'OpenAI分析接続OK / model=' + openAIModelFor() + ' / 応答=' + text;
   console.log(result);
   return result;
 }

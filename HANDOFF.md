@@ -426,3 +426,11 @@ draft（生成直後）→ 採点 → ready（合格・承認待ち）→ approv
 - X公式資料で `quote_tweet_id` はEnterprise限定。既定は参照リンク形式で、権限確認後に `X_NATIVE_QUOTES_ENABLED=true` とした場合のみ新規生成分がネイティブ引用になる。短文がリンク追加で上限を超えたら長文化し、切断しない。設定変更だけで承認済み投稿の形式を変えない。
 - 新列は必要時に末尾へ自動追加、新トリガー・依存追加なし。次の新規インタビューから適用し、進行中の質問・既存ストックは変更しない。`reach_meta` に取材仮説・参照実績・出典との接点を記録。詳細は `docs/reach-driven-interviews.md`。
 - 検証: 全190テスト通過、引用元の提示・保存・生成・審査・投稿前確認、広告/欠測/古い値の除外、API障害、引用元の変更・欠落、従来経路を確認。`git diff --check` と `Reach.js` 構文チェックも通過。実APIの検索権限・実モデルの新規インタビュー・本番での投稿品質/表示数向上は未検証。
+
+### 2026-10-22 — Codex（全モデルをOpenAIへ統一）
+
+- ユーザーがClaudeからの全面変更を指定。`Claude.js` のAnthropic送信処理を除去し、`askClaude*` / `claudeMessage` の旧互換名もOpenAI Responses APIへ統一。用途未指定のテーマ分析、採点、画像説明まで含む。`RESPONSE_PROVIDER=claude` や `CLAUDE_*` が残っていても戻さず、Anthropicキーは不要。既存キー・スクリプトプロパティの削除は行わない。
+- 既存OpenAIの基本/生成モデルを継承。採点は `OPENAI_MODEL_SCORE`、分析は `OPENAI_MODEL_ANALYSIS`（どちらも未設定なら基本モデル）を追加。推論量は会話low、生成/採点/分析mediumが既定。採点・分析のモデル指定を推測で上位モデルへ書き換えない。
+- **OpenAI.gs** の `testOpenAIScoringConnection` と `testOpenAIAnalysisConnection` を追加（各1回、OKのみを求め、投稿・Slack送信・本人原文変更なし）。旧 **Claude.gs** の `testClaudeScoringConnection` もOpenAI採点の実モデルを表示する。
+- `OutcomeQuality.js` は `openai/model/effort` を新規採点の履歴へ記録。審査中に設定が変われば保存せず再評価待ち。旧Claude履歴は保持して採点官別の成果検証を維持。3人格・ミア・リナ・原文引用・出典検証・本人承認は変更しない。
+- 検証: 全192テスト、OpenAI.js/Claude.js構文チェック、差分チェック成功。旧設定・Anthropicキーなしの全用途OpenAI接続、用途別上書き、拒否/HTTP/画像/打ち切り/再試行、採点履歴と設定変更競合を確認。実モデルの品質改善や成果向上は未検証。反映手順・設定は `docs/openai-responses.md`。
