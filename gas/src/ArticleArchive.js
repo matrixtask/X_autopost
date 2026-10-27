@@ -72,7 +72,7 @@ function archiveInterviewSources(rows, origin) {
         var hash = articleSnapshotHash(snapshot);
         if (!previous || previous.content_hash !== hash) {
           var record = Object.assign({}, snapshot, {
-            revision_id: articleRevisionId('src'), source_id: key, source_kind: 'interview_raw',
+            revision_id: articleRevisionId('src'), source_id: key, source_kind: String(r.source_kind || 'interview_raw'),
             session_id: String(r.session_id), source_idx: String(r.idx), source_field: field,
             channel_id: getProp('SLACK_CHANNEL_ID', ''), observed_at: fmtDateTime(new Date()),
             content_hash: hash, supersedes_revision_id: previous ? previous.revision_id : '',
