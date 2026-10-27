@@ -1,5 +1,7 @@
 # セットアップガイド（Google Apps Script版）
 
+**2026-10-27 ChatGPT音声取材:** 毎日7時JSTのChatGPT通知から本人が音声を開始し、終了した質問と回答だけSlackに記録。GASが編集して同じスレッドへ下書きを返します。ChatGPT通知の作成後、GASエディタ **ChatGPTInterview.gs** の `setupChatGPTVoiceInterview` を一度実行すると、既存データを保持してSlack定期質問を停止し、記録の取込workerを追加します。音声→Slack連携は初回取材で確認し、使えなければ終了後のテキスト会話または本人の貼り付けで渡します。[保存形式・長文分割・復旧](../docs/chatgpt-voice-interview.md)。
+
 **2026-10-22 全用途OpenAIへ統一:** 質問・画像説明・投稿生成に加え、採点・編集審査・分析もOpenAI Responses APIへ変更。既存のOpenAIモデル設定を引き継ぎ、採点/分析は用途別モデル・推論量を指定可能です。古いClaude設定が残っていても使用しません。保存済み回答・評価・本人承認は保持。接続確認は **OpenAI.gs** の `testOpenAIScoringConnection` / `testOpenAIAnalysisConnection`（各1回のAPI呼び出し、投稿・Slack送信なし）。[設定と検証手順](../docs/openai-responses.md)。
 
 **2026-10-10 実績を使った質問・参照投稿:** 新しいインタビューから、広告を除外した過去投稿の上位例と比較例を質問の参考に使います。関連する外部投稿を1日最大2リクエスト・最大40件取得し、表示数と観測間の増分を保存。接点があれば最大1問で本人の見方を聞き、回答から参照リンク付きの下書きを作ります。会議・ミア・リナ・審査・本人承認は維持。X APIのネイティブ引用は公式資料ではEnterprise限定のため既定無効です。新規トリガー・列の手動作成は不要。次の新規インタビューから適用され、回答途中の問いは変わりません。[詳細・設定](../docs/reach-driven-interviews.md)。

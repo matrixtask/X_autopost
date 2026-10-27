@@ -115,6 +115,25 @@ function doPost(e) {
     // GASはリクエストヘッダを読めないため署名検証ができない。
     // 代わりにチャンネルIDの一致を確認し、event_idで重複排除する。
     var event = payload.event || {};
+    // 音声取材はSlackの読みやすい完了記録が一次受け口。保存前のcache排除をせず、
+    // 永続化に失敗した再配送を取りこぼさない。LLM/画像処理はここで実行しない。
+    if (acceptsVoiceRecordEvent(event)) {
+      try { enqueueVoiceInterviewRecord(event); }
+      catch (error) {
+        logEvent('voice_record_receive_error', String(error));
+        // 入力違反だけACKして原因を返す。一時的な保存失敗は再配送できるよう例外を残す。
+        if (!error.voiceRecordInput) throw error;
+        var rejectedCache = CacheService.getScriptCache();
+        var rejectedKey = 'voice_rejected_' + String(event.ts);
+        if (!rejectedCache.get(rejectedKey)) {
+          notifySlack(':warning: 取材記録はSlackに残っていますが、編集へ取り込めませんでした。' + error.message +
+            '\nChatGPTで保存形式を直して再送してください。回答し直す必要はありません。', event.thread_ts || event.ts);
+          rejectedCache.put(rejectedKey, '1', 3600);
+        }
+        return ContentService.createTextOutput('voice record rejected');
+      }
+      return ContentService.createTextOutput('voice record saved');
+    }
     var eventId = payload.event_id;
     var cache = CacheService.getScriptCache();
     if (eventId) {

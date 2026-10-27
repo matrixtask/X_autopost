@@ -15,6 +15,7 @@
 var INTERVIEW_STATUS = { OPEN: 'open', DONE: 'done', EXPIRED: 'expired', NO_MATERIAL: 'no_material' };
 
 function startDailyInterview() {
+  if (typeof usesChatGPTInterview === 'function' && usesChatGPTInterview()) return '入口はChatGPT音声取材です。Slack定期質問は停止中です。';
   var today = fmtDate(nowJst());
   // 追加インタビュー（_ivx_）は数に入れず、毎朝の定期分だけ1日1回に制限する
   var existing = readTable(SHEET.INTERVIEWS).filter(function (r) {
@@ -53,6 +54,7 @@ function startDailyInterview() {
 /** 朝のインタビューが失敗したときの1回だけの再試行 */
 function retryDailyInterview() {
   clearInterviewRetry();
+  if (typeof usesChatGPTInterview === 'function' && usesChatGPTInterview()) return;
   try {
     startInterviewSession('iv', ':microphone: 今日のインタビュー（再試行）');
   } catch (e) {
@@ -80,10 +82,12 @@ function clearInterviewRetry() {
  * 書き込むと開始される。
  */
 function startExtraInterview() {
+  if (typeof usesChatGPTInterview === 'function' && usesChatGPTInterview()) return '追加取材もChatGPTで音声会話を開始してください。';
   startInterviewSession('ivx', ':microphone: 追加インタビュー');
 }
 
 function startInterviewSession(kind, title) {
+  if (typeof usesChatGPTInterview === 'function' && usesChatGPTInterview()) return;
   var themes = pickThemesForToday();
   if (typeof refreshQuoteSources === 'function') refreshQuoteSources();
   var headlines = themes.some(function (t) { return t.category === 'news'; })
@@ -564,6 +568,7 @@ function handleInterviewReplyLocked(threadTs, text, imageRef) {
     var storedTs = [];
     all.forEach(function (r) {
       if (String(r.status) !== INTERVIEW_STATUS.OPEN) return;
+      if (String(r.source_kind) === 'chatgpt_voice_transcript') return;
       if (!openIds[String(r.session_id)]) storedTs.push(String(r.thread_ts));
       openIds[String(r.session_id)] = true;
     });

@@ -30,6 +30,8 @@
  *   SLOT_TIMES          予約枠 "08:00,12:30,19:30"（既定）
  *   MAX_POSTS_PER_DAY   1日の最大投稿数（既定: 3）
  *   INTERVIEW_QUESTIONS 1回のインタビューの質問数（既定: 4）
+ *   INTERVIEW_ENTRYPOINT slack（既定）/ chatgpt_voice。ChatGPTInterview.gsで切り替える
+ *   CHATGPT_SLACK_BOT_ID 音声記録を送る連携がbotの場合だけ、そのbot IDを明示許可
  *   QUOTE_DISCOVERY_ENABLED 関連投稿の検索・再観測（既定 true、1日最大2読取リクエスト）
  *   QUOTE_SEARCH_QUERY 外部投稿検索条件。既定は製造・設計・移動・チーム・採用
  *   QUOTE_MIN_IMPRESSIONS 引用候補の最低公開表示数（既定 1000、広告を含みうる）

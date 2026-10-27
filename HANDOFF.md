@@ -434,3 +434,11 @@ draft（生成直後）→ 採点 → ready（合格・承認待ち）→ approv
 - **OpenAI.gs** の `testOpenAIScoringConnection` と `testOpenAIAnalysisConnection` を追加（各1回、OKのみを求め、投稿・Slack送信・本人原文変更なし）。旧 **Claude.gs** の `testClaudeScoringConnection` もOpenAI採点の実モデルを表示する。
 - `OutcomeQuality.js` は `openai/model/effort` を新規採点の履歴へ記録。審査中に設定が変われば保存せず再評価待ち。旧Claude履歴は保持して採点官別の成果検証を維持。3人格・ミア・リナ・原文引用・出典検証・本人承認は変更しない。
 - 検証: 全192テスト、OpenAI.js/Claude.js構文チェック、差分チェック成功。旧設定・Anthropicキーなしの全用途OpenAI接続、用途別上書き、拒否/HTTP/画像/打ち切り/再試行、採点履歴と設定変更競合を確認。実モデルの品質改善や成果向上は未検証。反映手順・設定は `docs/openai-responses.md`。
+
+### 2026-10-27 — Codex（ChatGPT音声取材とSlackの結果記録）
+
+- ユーザーが専用音声アプリではなく、毎日7時JSTのChatGPT通知→本人が音声開始の試行を選択。終了した質問・回答の書き起こしをSlackへ記録し、生成結果も同じスレッドへ返す。音声UIとSlackツールの併用可否は環境依存のため、終了後のテキスト会話からの送信・本人の貼り付けも用意する。音声の自動開始/停止や、未取得の会話復元はしない。
+- `ChatGPTInterview.js`（GAS上は **ChatGPTInterview.gs**）を追加。`setupChatGPTVoiceInterview` はVoiceImports表/Interviews出典列/5分workerを追加し、ChatGPTスケジュールの作成後に入口を切り替える。既存の途中回答・投稿・品質ゲートは保持。`restoreSlackInterviewEntry` で入口だけ切り戻せる。ChatGPT通知の停止は別途ChatGPT画面で行う。
+- Slack完了記録を保存してからworkerへ渡す。30パート/20質問まで、全分割到着待ち、同一質問の続きだけ結合、記録IDと分割番号による重複排除。AIメモ/聞き返しは原文資料に混ぜない。原文種別はchatgpt_voice_transcriptで、音声ファイル原本とは区別する。botは明示許可ID以外拒否。記録形式は `docs/chatgpt-voice-interview.md`。
+- 生成中はOPENとして旧回復バッチから除外し、LLM待ち中に保存ロックを保持しない。完了/材料不足/失敗を記録し、中断は7分後に保留。既存の3人格→ミア→リナ→文脈補完/検証を使い、採点は夜、公開は本人承認後。未生成の失敗は従来の再生成関数から救済できる。
+- 検証: 全204テスト通過。分割欠落/重複/別スレッド/質問番号不一致、原文保持、要約分離、Webhook受信順序、入力不正の説明と一時保存障害の再配送、排他/期限切れ、既存Stockの二重生成防止、入口の切替と従来経路の回帰を確認。本番音声→Slackの実到達と出力品質は最初の本人取材で確認する。専用音声Siteは未公開、使用しない。

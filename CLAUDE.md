@@ -47,6 +47,8 @@ GASエディタの関数プルダウンは、開いているファイルの関�
 
 ## 実装上の注意
 
+- **2026-10-27 ChatGPT音声取材:** `docs/chatgpt-voice-interview.md`。毎日7時JSTのChatGPT通知→本人が音声開始→完了した質問/回答だけSlackに保存→既存GASが編集・審査。**ChatGPTInterview.gs** の `setupChatGPTVoiceInterview` は新表/列/5分workerを追加し、Slack定期・追加質問を止める（ChatGPTスケジュール作成後に実行）。完了記録の全パートが揃うまで生成せず、再配送/二重生成を防止。AIメモ/聞き返しは回答に混ぜない。bot記録は明示許可IDだけ。音声UI→Slackの実機連携は初回取材で確認し、使えなければ終了後のテキスト会話または本人の貼り付けで渡す。
+
 - **2026-10-22 全用途OpenAI:** `docs/openai-responses.md`。採点・分析もOpenAIへ統一し、Anthropic送信を除去。`RESPONSE_PROVIDER` と `CLAUDE_*` は無視し、OpenAIの基本モデル（既定Luna）を継承。採点/分析は `OPENAI_MODEL_SCORE/ANALYSIS` と `OPENAI_EFFORT_SCORE/ANALYSIS`（既定medium）で指定。`review.scorer` は実際のOpenAIモデル/推論量を記録。旧採点履歴は変更しない。**OpenAI.gs** の `testOpenAIScoringConnection` / `testOpenAIAnalysisConnection` を追加。下の9/26時点のClaude採点設定は過去仕様。
 
 - **2026-10-10 実績を使う質問・外部引用:** `docs/reach-driven-interviews.md`。`Reach.js` は広告除外・由来/計測経過帯を分けた実測事例を質問だけへ渡し、採点に人気を渡さない。外部投稿は1日最大2リクエスト・40件の観測、引用候補最大5件、質問最大1問。Interviews/Stock/記事資料へ外部原文を本人回答と別に保存。既定は参照リンク形式。ネイティブ引用はEnterprise API権限を確認した場合だけ `X_NATIVE_QUOTES_ENABLED=true`。通常の会議・審査・本人承認を通し、引用元削除/編集/確認不能なら投稿を止める。新規トリガー不要、次の新規セッションから適用。
