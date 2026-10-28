@@ -47,6 +47,8 @@ GASエディタの関数プルダウンは、開いているファイルの関�
 
 ## 実装上の注意
 
+- **2026-10-28 音声記録のSlack署名:** `ChatGPTInterview.js` は完了マーカー後にSlack連携が付けるChatGPTの送信署名だけを除いて構文検証する。署名込みの受信本文はraw_textへ保持し、本文を一般的なtrim/正規化で改変しない。署名差だけは同一パートとして重複排除する。任意の後書き・記録未完了・複数記録は引き続き拒否。内部ヘルパー `voiceRecordPayload` の手動実行は不要。
+
 - **2026-10-27 ChatGPT音声取材:** `docs/chatgpt-voice-interview.md`。毎日7時JSTのChatGPT通知→本人が音声開始→完了した質問/回答だけSlackに保存→既存GASが編集・審査。**ChatGPTInterview.gs** の `setupChatGPTVoiceInterview` は新表/列/5分workerを追加し、Slack定期・追加質問を止める（ChatGPTスケジュール作成後に実行）。完了記録の全パートが揃うまで生成せず、再配送/二重生成を防止。AIメモ/聞き返しは回答に混ぜない。bot記録は明示許可IDだけ。音声UI→Slackの実機連携は初回取材で確認し、使えなければ終了後のテキスト会話または本人の貼り付けで渡す。
 
 - **2026-10-22 全用途OpenAI:** `docs/openai-responses.md`。採点・分析もOpenAIへ統一し、Anthropic送信を除去。`RESPONSE_PROVIDER` と `CLAUDE_*` は無視し、OpenAIの基本モデル（既定Luna）を継承。採点/分析は `OPENAI_MODEL_SCORE/ANALYSIS` と `OPENAI_EFFORT_SCORE/ANALYSIS`（既定medium）で指定。`review.scorer` は実際のOpenAIモデル/推論量を記録。旧採点履歴は変更しない。**OpenAI.gs** の `testOpenAIScoringConnection` / `testOpenAIAnalysisConnection` を追加。下の9/26時点のClaude採点設定は過去仕様。

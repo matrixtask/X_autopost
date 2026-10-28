@@ -20,12 +20,18 @@ function voiceRecordText(text) {
     .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
 }
 
+/** Slack連携が完了マーカーの後に付ける署名だけを除く。原文内の同じ文字列は残す。 */
+function voiceRecordPayload(text) {
+  return text.replace(/(\n【記録完了】)[ \t]*\n(?:[ \t]*\n)*\*使用して送信されました\* <@[A-Z0-9]+(?:\|ChatGPT)?>[ \t\n]*$/, '$1');
+}
+
 /** 全文一致する、完結した1パートだけ受け付ける。AIメモは回答に入れない。 */
 function parseVoiceInterviewRecord(raw) {
   var text = voiceRecordText(raw);
   if (text.indexOf(VOICE_RECORD_MARKER) !== 0) return null;
-  if (text.length > 4500) throw voiceRecordInputError('取材記録は1メッセージ4500文字以内に分割してください。');
-  var match = text.match(/^【音声インタビュー記録 v1】\n記録ID: ([A-Za-z0-9_-]{8,64})\n分割: ([1-9][0-9]?)\/([1-9][0-9]?)\n質問番号: ([1-9][0-9]?)\n【質問】\n([\s\S]+?)\n【回答】\n([\s\S]+?)\n(?:【確認会話・原文】\n([\s\S]*?)\n)?(?:【AIメモ・原文ではない】\n([\s\S]*?)\n)?【記録完了】\s*$/);
+  var payload = voiceRecordPayload(text);
+  if (payload.length > 4500) throw voiceRecordInputError('取材記録は1メッセージ4500文字以内に分割してください。');
+  var match = payload.match(/^【音声インタビュー記録 v1】\n記録ID: ([A-Za-z0-9_-]{8,64})\n分割: ([1-9][0-9]?)\/([1-9][0-9]?)\n質問番号: ([1-9][0-9]?)\n【質問】\n([\s\S]+?)\n【回答】\n([\s\S]+?)\n(?:【確認会話・原文】\n([\s\S]*?)\n)?(?:【AIメモ・原文ではない】\n([\s\S]*?)\n)?【記録完了】\s*$/);
   if (!match) throw voiceRecordInputError('取材記録の見出し、分割番号、質問・回答、記録完了の形式を確認してください。');
   var result = { record_id: match[1], part: Number(match[2]), total: Number(match[3]),
     question_idx: Number(match[4]), question: match[5], answer: match[6],
@@ -94,7 +100,9 @@ function enqueueVoiceInterviewRecord(event) {
     var records = all.filter(function (r) { return String(r.record_id) === part.record_id; });
     var existing = records.filter(function (r) { return Number(r.part) === part.part; })[0];
     if (existing) {
-      if (String(existing.raw_text) !== part.raw_text) throw voiceRecordInputError('同じ記録ID・分割番号に別の本文があります。元の記録を残しています。');
+      if (voiceRecordPayload(String(existing.raw_text)) !== voiceRecordPayload(part.raw_text)) {
+        throw voiceRecordInputError('同じ記録ID・分割番号に別の本文があります。元の記録を残しています。');
+      }
       return true;
     }
     var threadTs = String(event.thread_ts || event.ts || '');
