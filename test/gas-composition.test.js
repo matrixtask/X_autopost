@@ -250,6 +250,129 @@ test('short answers receive question context before being skipped, and the conte
   assert.equal(h.db.Stock[0].status, 'ready');
 });
 
+test('question citations: repair only the source memo, retaining body, exact answers and diagnostic location', () => {
+  const { h, g, r, quote } = contextFixture();
+  const invalid = structuredClone(g); invalid.parts[0].question_context[0].quote = '質問を言い換えた誤引用';
+  h.requests.push(debate(), r, [invalid], [g]);
+  h.ctx.generateDraftsFromInterview('s');
+  assert.equal(h.db.Stock.length, 1); assert.equal(h.db.Stock[0].text, g.parts[0].text);
+  assert.equal(h.db.Interviews[0].answer, quote);
+  assert.equal(JSON.parse(h.db.Stock[0].edit_meta).question_context[0].quote, '試験を実施するか');
+  const diagnostic = JSON.parse(h.logs.find(l => l[0] === 'question_context_invalid')[1]);
+  assert.deepEqual({ session: diagnostic.session_id, stage: diagnostic.stage, group: diagnostic.group,
+    part: diagnostic.part, context: diagnostic.context, qi: diagnostic.qi, code: diagnostic.code },
+  { session: 's', stage: 'initial', group: 1, part: 1, context: 1, qi: '1', code: 'question_quote_mismatch' });
+  assert.equal(diagnostic.quote, '質問を言い換えた誤引用');
+  assert.equal(JSON.parse(h.logs.find(l => l[0] === 'question_context_repair' && JSON.parse(l[1]).status === 'succeeded')[1]).stage, 'initial');
+  const repairs = h.calls.filter(c => String(c.system || '').includes('質問の文脈引用メタデータだけを一度修復'));
+  assert.equal(repairs.length, 1); assert.match(repairs[0].system, /メモの削除や空配列化で検証を回避しない/);
+  assert.equal(JSON.parse(repairs[0].input).drafts[0].parts[0].text, g.parts[0].text);
+});
+
+test('question citations: final context pass and a single-object memo can be repaired without changing inserted text', () => {
+  for (const phase of ['initial', 'final']) {
+    const { h, g, r } = contextFixture();
+    const invalid = structuredClone(g); invalid.parts[0].question_context = { ...g.parts[0].question_context[0], answer_quote: '言い換えた回答' };
+    h.requests.push(debate(), r, phase === 'initial' ? [invalid] : [g]);
+    if (phase === 'final') h.requests.push([invalid]);
+    h.requests.push([g]); h.ctx.generateDraftsFromInterview('s');
+    assert.equal(h.db.Stock[0].text, g.parts[0].text);
+    const repaired = h.logs.filter(l => l[0] === 'question_context_repair').map(l => JSON.parse(l[1]));
+    assert.ok(repaired.some(l => l.status === 'succeeded' && l.stage === phase));
+  }
+});
+
+test('question citations: cannot drop or reorder contexts, shrink the claimed insertion, change body, sources or evidence', () => {
+  for (const mutate of [
+    p => { p.parts[0].question_context = []; },
+    p => { p.parts[0].question_context[0].text = '試験'; },
+    p => { p.parts[0].text += '本文を勝手に変更'; },
+    p => { p.source_qis = [1, 2]; },
+    p => { p.parts[0].core_quote = '別の核'; },
+    p => { p.parts[0].evidence = []; },
+    p => { p.format = 'long'; },
+  ]) {
+    const { h, g, r, quote } = contextFixture();
+    const invalid = structuredClone(g); invalid.parts[0].question_context[0].quote = '不正引用';
+    const changed = structuredClone(g); mutate(changed);
+    h.requests.push(debate(), r, [invalid], [changed]);
+    assert.throws(() => h.ctx.generateDraftsFromInterview('s'), /修復で投稿本文・出典・補完箇所が変わりました/);
+    assert.equal(h.db.Stock.length, 0); assert.equal(h.db.Interviews[0].answer, quote);
+    assert.ok(h.logs.some(l => l[0] === 'question_context_repair' && JSON.parse(l[1]).status === 'failed'));
+  }
+  const { h, g, r } = contextFixture();
+  const first = g.parts[0].question_context[0];
+  g.parts[0].question_context.push({ ...first, text: '試験', quote: '不正引用' });
+  const changed = structuredClone(g); changed.parts[0].question_context.reverse(); changed.parts[0].question_context[0].quote = first.quote;
+  h.requests.push(debate(), r, [g], [changed]);
+  assert.throws(() => h.ctx.generateDraftsFromInterview('s'), /修復で投稿本文・出典・補完箇所が変わりました/);
+  assert.equal(h.db.Stock.length, 0);
+});
+
+test('question citations: unchanged invalid citation, invented memo and API failure all stop with original sources retained', () => {
+  for (const kind of ['unchanged', 'invented', 'api']) {
+    const { h, g, r, quote } = contextFixture();
+    const invalid = structuredClone(g); invalid.parts[0].question_context[0].quote = '原文にない';
+    const response = structuredClone(g); response.parts[0].question_context[0].answer_quote = '本人が述べていない';
+    h.requests.push(debate(), r, [invalid], kind === 'api' ? new Error('API unavailable') : [kind === 'unchanged' ? invalid : response]);
+    assert.throws(() => h.ctx.generateDraftsFromInterview('s'), /文脈引用|API unavailable/);
+    assert.equal(h.db.Stock.length, 0); assert.equal(h.db.Interviews[0].answer, quote);
+    assert.equal(h.calls.filter(c => c.system.includes('質問の文脈引用メタデータだけを一度修復')).length, 1);
+  }
+});
+
+test('question citations: a second failure in the final pass cannot start a second repair', () => {
+  const { h, g, r } = contextFixture();
+  const invalid = structuredClone(g); invalid.parts[0].question_context[0].quote = '原文にない';
+  h.requests.push(debate(), r, [invalid], [g], [invalid]);
+  assert.throws(() => h.ctx.generateDraftsFromInterview('s'), /引用が質問原文にありません/);
+  assert.equal(h.db.Stock.length, 0);
+  assert.equal(h.calls.filter(c => c.system.includes('質問の文脈引用メタデータだけを一度修復')).length, 1);
+  assert.ok(h.logs.some(l => l[0] === 'question_context_repair' && JSON.parse(l[1]).reason === 'repair_already_used'));
+});
+
+test('question citations: unsafe missing insertions, oversized lists and exhausted budget never call repair API', () => {
+  for (const kind of ['text', 'count', 'budget']) {
+    const { h, g, r, quote } = contextFixture();
+    if (kind === 'text') g.parts[0].question_context[0].text = '本文に存在しない';
+    if (kind === 'count') g.parts[0].question_context = Array.from({ length: 5 }, () => ({ ...g.parts[0].question_context[0] }));
+    if (kind === 'budget') {
+      g.parts[0].question_context[0].quote = '原文にない';
+      const request = h.ctx.askClaudeJson;
+      h.ctx.askClaudeJson = (...args) => { const result = request(...args); if (h.calls.length === 3) h.ctx.EDITORIAL_EXECUTION_DEADLINE = Date.now() + 59000; return result; };
+    }
+    h.requests.push(debate(), r, [g]);
+    assert.throws(() => h.ctx.generateDraftsFromInterview('s'), /文脈引用|時間予算/);
+    assert.equal(h.db.Stock.length, 0); assert.equal(h.db.Interviews[0].answer, quote);
+    assert.equal(h.calls.filter(c => c.system.includes('質問の文脈引用メタデータだけを一度修復')).length, 0);
+  }
+});
+
+test('question citations: reports the exact violated field with bounded diagnostics', () => {
+  for (const [key, value, code] of [
+    ['qi', 99, 'source_qi'], ['field', 'other', 'source_field'], ['field', 'followup_question', 'followup_unanswered'],
+    ['use', 'fact', 'context_use'], ['quote', 'a'.repeat(201), 'question_quote_format'],
+    ['quote', '存在しない', 'question_quote_mismatch'], ['answer_quote', '', 'answer_quote_format'],
+    ['answer_quote', '存在しない', 'answer_quote_mismatch'], ['text', '', 'context_text_format'],
+    ['text', '存在しない', 'context_text_mismatch'], ['reason', '', 'context_reason'],
+  ]) {
+    const { h, g } = contextFixture(); const c = g.parts[0].question_context[0]; c[key] = value;
+    assert.throws(() => h.ctx.validateQuestionContexts([c], h.db.Interviews, g.parts[0].text), error => {
+      assert.equal(error.code, 'QUESTION_CONTEXT_INVALID'); assert.equal(error.questionContextDiagnostic.code, code); return true;
+    });
+    const data = JSON.parse(h.logs.at(-1)[1]);
+    assert.ok(data.quote.length <= 200); assert.ok(data.answer_quote.length <= 80); assert.ok(data.text.length <= 200);
+  }
+});
+
+test('question citations: object key order has no effect on immutable metadata comparison', () => {
+  const { h, g, r } = contextFixture();
+  const invalid = structuredClone(g); invalid.parts[0].question_context[0].quote = '不正引用';
+  g.parts[0].evidence = [{ quote: g.parts[0].core_quote, qi: 1 }];
+  h.requests.push(debate(), r, [invalid], [g]); h.ctx.generateDraftsFromInterview('s');
+  assert.equal(h.db.Stock.length, 1);
+});
+
 test('several individually short answers can become one long post with every source retained for review', () => {
   const { h, g, r, first, second } = mergeFixture();
   assert.ok(h.ctx.fitsInTweet(first)); assert.ok(h.ctx.fitsInTweet(second));

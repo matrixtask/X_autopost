@@ -47,6 +47,8 @@ GASエディタの関数プルダウンは、開いているファイルの関�
 
 ## 実装上の注意
 
+- **2026-10-28 質問文脈の引用修復:** `PostComposition.js` は `question_context_invalid` に工程/質問番号/違反項目/短い引用を記録。補完textを固定できるときだけ、初稿〜最終編集を通して1回、question_contextの出典メモを修復する。本文・出典集合・核・回答evidence・補完箇所/件数/順序は固定し、削除や本文改稿で検証を回避しない。再検証/時間予算/複数人格審査/本人承認を維持。**PostComposition.gs** 内部ヘルパーの手動実行・初期化は不要。詳細 `docs/context-and-merged-posts.md`。
+
 - **2026-10-28 音声記録のSlack署名:** `ChatGPTInterview.js` は完了マーカー後にSlack連携が付けるChatGPTの送信署名だけを除いて構文検証する。署名込みの受信本文はraw_textへ保持し、本文を一般的なtrim/正規化で改変しない。署名差だけは同一パートとして重複排除する。任意の後書き・記録未完了・複数記録は引き続き拒否。内部ヘルパー `voiceRecordPayload` の手動実行は不要。
 
 - **2026-10-27 ChatGPT音声取材:** `docs/chatgpt-voice-interview.md`。毎日7時JSTのChatGPT通知→本人が音声開始→完了した質問/回答だけSlackに保存→既存GASが編集・審査。**ChatGPTInterview.gs** の `setupChatGPTVoiceInterview` は新表/列/5分workerを追加し、Slack定期・追加質問を止める（ChatGPTスケジュール作成後に実行）。完了記録の全パートが揃うまで生成せず、再配送/二重生成を防止。AIメモ/聞き返しは回答に混ぜない。bot記録は明示許可IDだけ。音声UI→Slackの実機連携は初回取材で確認し、使えなければ終了後のテキスト会話または本人の貼り付けで渡す。
