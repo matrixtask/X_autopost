@@ -52,6 +52,15 @@ test('recovery: a failure is retained once and later sessions continue', () => {
   assert.match(h.messages.at(-1), /失敗・中断 1/);
 });
 
+test('recovery: latest-only entry snapshots one completed session and leaves other candidates and reply lock alone', () => {
+  const h = setup(['s3', 's2', 's1']);
+  assert.match(h.ctx.startLatestFailedInterviewBatch(), /1セッション/);
+  assert.deepEqual(h.jobs().map(j => j.sid), ['s3']);
+  h.ctx.runFailedInterviewBatch(); h.ctx.runFailedInterviewBatch();
+  assert.deepEqual(h.calls, ['s3']); assert.equal(h.triggers.length, 0);
+  assert.deepEqual([...h.eligible], ['s2', 's1']); assert.equal(JSON.parse(h.values.INTERVIEW_RECOVERY_STATE).active, false);
+});
+
 test('recovery: a live lease prevents concurrent work, an expired lease is held without retry', () => {
   const h = setup(['s2', 's1']); h.ctx.startFailedInterviewBatch();
   h.values.INTERVIEW_RECOVERY_JOB_s2 = JSON.stringify({ sid: 's2', status: 'running', started_at: 1000000 });

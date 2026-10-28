@@ -12,6 +12,8 @@
 
 内部ヘルパー `questionContextRepairSnapshot` / `repairQuestionContextMetadata` は **PostComposition.gs** にあり、手動実行不要。初期化、新しい列/トリガー/依存の追加は不要。反映は管理UI・Slack両方のデプロイ更新。保存済み失敗分を再生成するときは、従来どおり **Interview.gs** の `regenerateFailedInterviews` を使う。新しい診断は次回の検証から記録され、過去の失敗出力を復元するものではない。
 
+ほかの取材へ回答中の場合は、**InterviewRecovery.gs**（`gas/src/InterviewRecovery.js`）の `startLatestFailedInterviewBatch` を一度実行すると、直近の未生成・完了済み1件だけを非同期で再生成する。モデル待ち中は回答保存のロックを保持しない。約5分以内に専用workerが開始し、1件の完了/失敗後に専用トリガーを除去する。全件開始の `startFailedInterviewBatch` は引数なしなら従来どおり全対象を扱う。生成と採点は分離し、採点は夜の品質ゲートで行う。
+
 ## 2026-09-26: 原文引用の形式エラーから再生成
 
 OpenAI生成のevidenceが空/不正な引用で、「回答ごとの原文引用が不正です」と下書きのStock保存前に停止する場合に限り修復を試す。実際に報告された本番応答の生JSONは未取得のため、当日どの引用制約が破られたかは未確定。
