@@ -27,7 +27,7 @@ function clearInterviewRecoveryTriggers() {
 }
 
 /** GASエディタで一度実行。新しい回答は次回の開始時に取り込む。 */
-function startFailedInterviewBatch() {
+function startFailedInterviewBatch(maxSessions) {
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(1000)) return '別の編集処理が実行中です。終了後にもう一度開始してください。';
   try {
@@ -35,6 +35,7 @@ function startFailedInterviewBatch() {
     var state = JSON.parse(props.getProperty(INTERVIEW_RECOVERY_STATE) || '{}');
     if (interviewRecoveryIsActive()) return '一括再生成は既に実行中です。';
     var sessions = failedInterviewSessions();
+    if (typeof maxSessions === 'number' && maxSessions >= 1) sessions = sessions.slice(0, Math.floor(maxSessions));
     if (!sessions.length) return '作り直す対象はありません。';
     clearInterviewRecoveryTriggers();
     Object.keys(props.getProperties()).forEach(function (key) {
@@ -51,6 +52,11 @@ function startFailedInterviewBatch() {
     notifySlack(message);
     return message;
   } finally { lock.releaseLock(); }
+}
+
+/** 直近の未生成・完了済み取材1件だけを、回答保存のロックを解放して再生成する。 */
+function startLatestFailedInterviewBatch() {
+  return startFailedInterviewBatch(1);
 }
 
 /** 専用トリガー用。実行中状態を先に保存し、強制終了した分も次回は繰り返さない。 */
