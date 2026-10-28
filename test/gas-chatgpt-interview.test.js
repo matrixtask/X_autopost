@@ -56,6 +56,39 @@ test('voice record: rejects incomplete, ambiguous, oversized and impossible fram
   }
 });
 
+test('voice record: accepts connector attribution only after completion and archives the entire Slack source', () => {
+  const h = setup(), footer = '\n*使用して送信されました* <@U123456789|ChatGPT>';
+  const body = record({ extra: '【確認会話・原文】\n本人: 終了\n【AIメモ・原文ではない】\n本人回答へ入れない\n' });
+  for (const suffix of [footer, '\n' + footer, footer.replace('|ChatGPT', '')]) {
+    const parsed = h.ctx.parseVoiceInterviewRecord(body + suffix);
+    assert.equal(parsed.answer, 'いや、そこで待ったんですよ。\n  急がなかった。');
+    assert.equal(parsed.ai_note, '本人回答へ入れない'); assert.equal(parsed.clarification, '本人: 終了');
+    assert.equal(parsed.raw_text, body + suffix);
+  }
+  const quotedAnswer = 'この表示を見ました。' + footer;
+  assert.equal(h.ctx.parseVoiceInterviewRecord(record({ answer: quotedAnswer }) + footer).answer, quotedAnswer);
+});
+
+test('voice record: attribution cannot excuse a missing end, unrelated trailing prose, or another record', () => {
+  const h = setup(), footer = '\n*使用して送信されました* <@U123456789|ChatGPT>';
+  for (const text of [record().replace('【記録完了】', '') + footer, record() + '\n別の追記' + footer,
+    record() + footer + '\n別の追記', record() + footer + footer,
+    record() + footer.replace('|ChatGPT', '|OtherApp'), record() + '\n' + record() + footer]) {
+    assert.throws(() => h.ctx.parseVoiceInterviewRecord(text));
+  }
+  const base = record({ answer: '' }), answer = 'あ'.repeat(4500 - base.length);
+  assert.equal(h.ctx.parseVoiceInterviewRecord(record({ answer }) + footer).answer, answer);
+});
+
+test('voice import: a repeated record with or without transport attribution remains one immutable source', () => {
+  const h = setup(), footer = '\n*使用して送信されました* <@U123456789|ChatGPT>';
+  h.ctx.enqueueVoiceInterviewRecord(h.event(record() + footer));
+  h.ctx.enqueueVoiceInterviewRecord(h.event(record(), { ts: '1.000002' }));
+  h.ctx.enqueueVoiceInterviewRecord(h.event(record() + footer.replace('U123456789', 'U987654321'), { ts: '1.000003' }));
+  assert.equal(h.tables.VoiceImports.length, 1); assert.equal(h.tables.VoiceImports[0].raw_text, record() + footer);
+  assert.throws(() => h.ctx.enqueueVoiceInterviewRecord(h.event(record({ answer: '回答を書き換えた' }) + footer)), /別の本文/);
+});
+
 test('voice import: persists before returning and deduplicates Slack retries and identical re-posts', () => {
   const h = setup(), event = h.event(record());
   h.ctx.enqueueVoiceInterviewRecord(event); h.ctx.enqueueVoiceInterviewRecord(event);
