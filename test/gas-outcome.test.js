@@ -74,6 +74,38 @@ test('outcome: a low reference score goes to human approval, never auto-approved
   assert.equal(calls, 1);
 });
 
+test('outcome: named axis pairs preserve scores and strict source checks across supported representations', () => {
+  const { ctx } = setup(), value = review(ctx), text = '自分で確認した。\n次に進む。';
+  const expected = ctx.validateOutcomeReview(value, text);
+  value.axes = Object.fromEntries(Object.entries(value.axes).reverse().map(([key, a]) => [key, [a.score, a.evidence]]));
+  assert.deepEqual(ctx.validateOutcomeReview(value, text), expected);
+  value.axes.clarity = [2, '自分で確認した。次に進む。'];
+  ctx.normalizeOutcomeQuoteLinebreaks(value, text);
+  assert.equal(value.axes.clarity[1], text);
+  assert.ok(ctx.validateOutcomeReview(value, text));
+  for (const bad of [[2], [2, '自分で確認', 'extra'], ['2', '自分で確認'], [null, '自分で確認'],
+    [5, '自分で確認'], [1.5, '自分で確認'], [2, '存在しない引用'], [2, '']]) {
+    assert.equal(ctx.validateOutcomeReview({ ...value, axes: { ...value.axes, relevance: bad } }, text), null);
+  }
+  const missing = structuredClone(value); delete missing.axes.follow;
+  assert.equal(ctx.validateOutcomeReview(missing, text), null);
+});
+
+test('outcome: named pairs do not turn a valid hold into a retry or approval', () => {
+  const { ctx, db, logs } = setup();
+  db.Stock.push({ id: 'd', session_id: 's', source_idx: '1', text: '自分で確認した', status: 'draft' });
+  db.Interviews.push({ session_id: 's', idx: 1, answer: '自分で確認した' });
+  const value = review(ctx, 2, { fidelity: 'confirm', issues: [{ kind: 'fidelity', quote: '自分で確認',
+    reason: '本人の説明との関係を再確認する必要がある。', action: 'この表現の意味を確認する。' }] });
+  value.axes = Object.fromEntries(Object.entries(value.axes).map(([key, a]) => [key, [a.score, a.evidence]]));
+  let calls = 0;
+  ctx.askClaudeJsonSalvageable = () => { calls++; return { d: value }; };
+  ctx.runOutcomeQualityGate();
+  assert.equal(calls, 1); assert.equal(db.Stock[0].status, 'stock'); assert.equal(db.Stock[0].score, 50);
+  assert.equal(JSON.parse(db.Stock[0].editorial_review).fidelity, 'confirm');
+  assert.equal(logs.some(r => r[0] === 'outcome_review_retry' || r[0] === 'outcome_invalid'), false);
+});
+
 test('outcome: a model or effort change during scoring cannot label the result as the new scorer', () => {
   const properties = { OPENAI_MODEL_SCORE: 'first-model' };
   const { ctx, db } = setup(properties);

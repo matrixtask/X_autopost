@@ -111,7 +111,9 @@ function normalizeOutcomeQuoteLinebreaks(value, text) {
     if (Array.isArray(a)) a[1] = restoreReviewQuoteLinebreaks(a[1], text);
   });
   else if (value.axes && typeof value.axes === 'object') Object.keys(value.axes).forEach(function (key) {
-    var a = value.axes[key]; if (a && typeof a === 'object') a.evidence = restoreReviewQuoteLinebreaks(a.evidence, text);
+    var a = value.axes[key];
+    if (Array.isArray(a)) a[1] = restoreReviewQuoteLinebreaks(a[1], text);
+    else if (a && typeof a === 'object') a.evidence = restoreReviewQuoteLinebreaks(a.evidence, text);
   });
   var entries = Array.isArray(value.issues) ? value.issues.slice() : [];
   if (value.composition) {
@@ -138,6 +140,11 @@ function validateOutcomeReview(value, text) {
   var axes = {};
   for (var i = 0; i < OUTCOME_AXES.length; i++) {
     var key = OUTCOME_AXES[i].key, a = rawAxes && rawAxes[key];
+    // 軸名付きの[点数,引用]も同じ値として読む。欠損・余分な要素・型変換は許容しない。
+    if (Array.isArray(a)) {
+      if (a.length !== 2) return null;
+      a = { score: a[0], evidence: a[1] };
+    }
     if (!a || typeof a.score !== 'number' || !Number.isInteger(a.score) || a.score < 0 || a.score > 4 ||
         typeof a.evidence !== 'string' || a.evidence.length > 80 ||
         (a.score > 0 && !a.evidence.trim()) || (a.evidence && text.indexOf(a.evidence) < 0)) return null;
