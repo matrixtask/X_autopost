@@ -187,6 +187,11 @@ function validatePostCompositionsWithEvidenceRepair(groups, qa, brief, styleProm
       return values;
     } catch (error) {
       recordCompositionFailure(values, qa, contextRepair.stage, error);
+      if (/回答ごとの原文引用が不正です/.test(String(error.message)) ||
+          (error.code === 'COMPOSITION_CONTENT_INVALID' && error.compositionDiagnostic.violations.every(function (v) { return v === 'core_not_in_post'; }))) {
+        var repairedBody = repairCompositionQuotedText(values, qa, brief, stylePrompt, allowMissingAnchors, contextRepair);
+        if (repairedBody) return repairedBody;
+      }
       if (error.code !== 'QUESTION_CONTEXT_INVALID') throw error;
       return repairQuestionContextMetadata(values, qa, brief, stylePrompt, allowMissingAnchors, contextRepair, error);
     }
@@ -231,6 +236,55 @@ function validatePostCompositionsWithEvidenceRepair(groups, qa, brief, styleProm
       }) };
   }))) throw new Error('原文引用修復で投稿本文または出典が変わりました。保存を止めました');
   return validate(repaired);
+}
+
+/** 原文で確認できる引用だけが本文から失われた場合、出典を固定して本文を一度直す。 */
+function repairCompositionQuotedText(groups, qa, brief, stylePrompt, allowMissingAnchors, state) {
+  if (state.quotedTextUsed || !Array.isArray(groups)) return null;
+  var required = [], safe = true;
+  try {
+    groups.forEach(function (g, gi) {
+      var sources = compositionSources(g.source_qis === undefined ? [g.qi] : g.source_qis, qa);
+      if (!Array.isArray(g.parts)) throw new Error('parts');
+      g.parts.forEach(function (p, pi) {
+        var evidence = sources.length === 1 ? [{ qi: g.qi, quote: p.core_quote }] : p.evidence;
+        if (typeof p.text !== 'string' || !Array.isArray(evidence) || evidence.length !== sources.length) throw new Error('evidence');
+        sources.forEach(function (r) {
+          var matches = evidence.filter(function (e) { return e && String(e.qi) === String(r.idx); });
+          if (matches.length !== 1 || !councilText(matches[0].quote, 80) || compositionRawAnswer(r).indexOf(matches[0].quote) < 0 ||
+              (String(r.idx) === String(g.qi) && matches[0].quote !== p.core_quote)) throw new Error('source');
+          if (p.text.indexOf(matches[0].quote) < 0) required.push({ group: gi + 1, part: pi + 1, qi: r.idx, quote: matches[0].quote });
+        });
+      });
+    });
+  } catch (e) { safe = false; }
+  if (!safe || !required.length) return null;
+  function frozen(values) {
+    return JSON.stringify(values.map(function (g) {
+      return { qi: g.qi, source_qis: g.source_qis, format: g.format, reason: g.reason, tradeoff: g.tradeoff, omitted: g.omitted,
+        parts: g.parts.map(function (p) { return { core_quote: p.core_quote, evidence: p.evidence, question_context: p.question_context }; }) };
+    }));
+  }
+  state.quotedTextUsed = true;
+  assertEditorialExecutionBudget();
+  logEvent('composition_quote_text_repair', JSON.stringify({ session_id: String(qa[0].session_id), stage: state.stage, status: 'started', missing: required }));
+  var repaired = askClaudeJson(stylePrompt + editorialCouncilInstructions(brief) + '\n' + postCompositionInstructions() + '\n' + [
+    '原文で確認済みだが投稿本文では言い換えられてしまった引用を戻す、一度だけの本文修復。',
+    '変更してよいのは各partのtextだけ。全グループ/partの数・順序・qi・source_qis・format・reason・tradeoff・omitted・core_quote・evidence・question_contextは完全に保持。',
+    'missingのquoteを対応する本文の自然な位置へ一字一句そのまま戻す。意味の同じ言い換え箇所を置き換え、末尾に証拠として羅列しない。元からある核と他の引用、question_context.textも本文に保持する。',
+    '回答にない事実や因果を足さない。聞いた説明と本人の推測を区別し、留保・否定を削らない。各本文4000字以内、splitは各280重み以内。全グループのJSON配列だけ返す。',
+  ].join('\n'), JSON.stringify({ answers: qa.map(function (r) { return { qi: r.idx, question: r.question, answer: compositionRawAnswer(r) }; }),
+    drafts: groups, missing: required }), 12000, { purpose: 'generate' });
+  try {
+    if (!Array.isArray(repaired) || frozen(repaired) !== frozen(groups)) throw new Error('原文引用の本文修復で出典・核・編集判断が変わりました。保存を止めました');
+    normalizeCompositionFormats(repaired);
+    validatePostCompositions(repaired, qa, brief, allowMissingAnchors, state.stage + '_quote_text_repair');
+    logEvent('composition_quote_text_repair', JSON.stringify({ session_id: String(qa[0].session_id), stage: state.stage, status: 'succeeded' }));
+    return repaired;
+  } catch (error) {
+    recordCompositionFailure(repaired, qa, state.stage + '_quote_text_repair', error);
+    throw error;
+  }
 }
 
 /** 本文を切らず、1本の投稿の形式だけを実際の長さから確定する。splitの構成判断は変更しない。 */
