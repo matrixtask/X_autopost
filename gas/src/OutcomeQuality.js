@@ -91,6 +91,36 @@ function outcomeReviewSchema() {
     '\nissuesの各要素: {"kind":"fidelityまたはprivacyまたはfocus","quote":"本文の該当箇所","reason":"具体的な照合結果","action":"具体的な対応"}。問題なしはissues=[]。';
 }
 
+/** 引用の改行だけが省略された場合、本文内の一意な実在箇所へ戻す。言葉や空白は補正しない。 */
+function restoreReviewQuoteLinebreaks(quote, text) {
+  if (typeof quote !== 'string' || !quote || quote.length > 80 || text.indexOf(quote) >= 0) return quote;
+  var needle = quote.replace(/[\r\n]/g, ''), flat = '', positions = [];
+  if (!needle) return quote;
+  for (var i = 0; i < text.length; i++) {
+    if (text[i] !== '\r' && text[i] !== '\n') { flat += text[i]; positions.push(i); }
+  }
+  var at = flat.indexOf(needle);
+  if (at < 0 || flat.indexOf(needle, at + 1) >= 0) return quote;
+  var exact = text.slice(positions[at], positions[at + needle.length - 1] + 1);
+  return exact.length <= 80 ? exact : quote;
+}
+
+function normalizeOutcomeQuoteLinebreaks(value, text) {
+  if (!value || typeof value !== 'object') return;
+  if (Array.isArray(value.axes)) value.axes.forEach(function (a) {
+    if (Array.isArray(a)) a[1] = restoreReviewQuoteLinebreaks(a[1], text);
+  });
+  else if (value.axes && typeof value.axes === 'object') Object.keys(value.axes).forEach(function (key) {
+    var a = value.axes[key]; if (a && typeof a === 'object') a.evidence = restoreReviewQuoteLinebreaks(a.evidence, text);
+  });
+  var entries = Array.isArray(value.issues) ? value.issues.slice() : [];
+  if (value.composition) {
+    if (Array.isArray(value.composition.opinions)) entries = entries.concat(value.composition.opinions);
+    entries.push(value.composition.mia);
+  }
+  entries.forEach(function (entry) { if (entry && typeof entry === 'object') entry.quote = restoreReviewQuoteLinebreaks(entry.quote, text); });
+}
+
 /** 欠損やnullを0点に変換しない。根拠引用の捏造も保存しない。 */
 function validateOutcomeReview(value, text) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -216,6 +246,7 @@ function runOutcomeQualityGate(repairRows) {
     var scorer = openAIScorerId();
     var result = askClaudeJsonSalvageable(outcomeScoringPrompt() + compositionPrompt, JSON.stringify(input) + outcomeReviewSchema(),
       6000, { purpose: 'score' });
+    input.forEach(function (r) { normalizeOutcomeQuoteLinebreaks(result && result[r.id], r.text); });
     var retry = input.filter(function (r) {
       var value = result && result[r.id], review = validateOutcomeReview(value, r.text);
       return !review || !validateOutcomeIssues(review, value, r) || (r.edit && !validateCompositionReview(value.composition, r.text));
@@ -228,7 +259,10 @@ function runOutcomeQualityGate(repairRows) {
         '\n前回の評価は形式または引用の検証に失敗した。axesは整数0〜4と本文の完全一致引用80字以内を5組。fidelity/privacy/focusの値と、要確認ならissuesの本文引用・理由・具体的修正指示を確認する。編集済み稿は3人格とミアのcompositionを全員分返す。回答と本文を再照合し、合格に寄せず実際の判断で評価全体を返す。' + outcomeReviewSchema(),
         6000, { purpose: 'score' });
       if (!result || typeof result !== 'object' || Array.isArray(result)) result = {};
-      retry.forEach(function (r) { result[r.id] = repaired && repaired[r.id]; });
+      retry.forEach(function (r) {
+        result[r.id] = repaired && repaired[r.id];
+        normalizeOutcomeQuoteLinebreaks(result[r.id], r.text);
+      });
     }
     batch.forEach(function (d, j) {
       if (openAIScorerId() !== scorer) {
