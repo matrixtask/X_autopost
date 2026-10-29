@@ -218,14 +218,16 @@ function runOutcomeQualityGate(repairRows) {
       6000, { purpose: 'score' });
     var retry = input.filter(function (r) {
       var value = result && result[r.id], review = validateOutcomeReview(value, r.text);
-      return review && (!validateOutcomeIssues(review, value, r) || (r.edit && !validateCompositionReview(value.composition, r.text)));
+      return !review || !validateOutcomeIssues(review, value, r) || (r.edit && !validateCompositionReview(value.composition, r.text));
     });
     // JSON再試行とは別に、説明の欠損を一度だけ修復。本人には追加回答を求めない。
     if (retry.length && Date.now() - started < 180000) {
       logEvent('outcome_review_retry', retry.map(function (r) { return r.id; }).join(','));
       var repaired = askClaudeJsonSalvageable(outcomeScoringPrompt() + compositionPrompt,
-        JSON.stringify(retry) + '\n前回は要確認フラグに具体的な指摘がなく不受理。回答と本文を再照合し、問題がなければsupported/clear/aligned、問題があれば該当箇所と理由と対応を返す。' + outcomeReviewSchema(),
+        JSON.stringify(retry) + '\n前回の評価（事実の根拠ではない）: ' + JSON.stringify(retry.map(function (r) { return { id: r.id, review: result && result[r.id] }; })) +
+        '\n前回の評価は形式または引用の検証に失敗した。axesは整数0〜4と本文の完全一致引用80字以内を5組。fidelity/privacy/focusの値と、要確認ならissuesの本文引用・理由・具体的修正指示を確認する。編集済み稿は3人格とミアのcompositionを全員分返す。回答と本文を再照合し、合格に寄せず実際の判断で評価全体を返す。' + outcomeReviewSchema(),
         6000, { purpose: 'score' });
+      if (!result || typeof result !== 'object' || Array.isArray(result)) result = {};
       retry.forEach(function (r) { result[r.id] = repaired && repaired[r.id]; });
     }
     batch.forEach(function (d, j) {
@@ -265,7 +267,11 @@ function runOutcomeQualityGate(repairRows) {
         // 再実行可能なdraftのまま。以前の本文の点数を表示しない。
         updateStockById(d.id, { score: '', score_reason: '評価形式が不正。再評価待ち', score_version: OUTCOME_SCORE_VERSION,
           axes: '', outcome_axes: '', outcome_text: '', outcome_scored_at: '', outcome_metrics: '', editorial_review: '', edit_review: '', status: STATUS.DRAFT });
+        var invalidValue = result && result[String(d.id)];
+        var invalidJson = JSON.stringify(invalidValue === undefined ? null : invalidValue);
         logEvent('outcome_invalid', String(d.id));
+        logEvent('outcome_invalid_detail', JSON.stringify({ id: String(d.id), basic_valid: !!review,
+          composition_valid: !d.edit_meta || !!composition, review_json: invalidJson.slice(0, 10000), truncated: invalidJson.length > 10000 }));
         return;
       }
       // システム側で保留にする場合も、判定を上書きするだけで理由を空にしない。

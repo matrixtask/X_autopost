@@ -758,18 +758,49 @@ test('a merged post can retain Mia\'s anchor from a secondary source without inv
   assert.equal(h.calls.filter(c => String(c.system || '').includes('ミアが選んだ回答の核を本文に残すため')).length, 0);
 });
 
-test('body quote repair cannot change provenance, remove context metadata or run twice across editing stages', () => {
-  for (const mutation of ['source', 'evidence', 'context', 'repeat']) {
+test('body quote repair cannot change provenance or remove context metadata', () => {
+  for (const mutation of ['source', 'evidence', 'context']) {
     const { h, g, r } = mergeFixture(), invalid = structuredClone(g), repaired = structuredClone(g);
     invalid.parts[0].text = invalid.parts[0].text.replace('記録がない試験は次に使えません。', '記録なしでは次に生かせない。');
     if (mutation === 'source') repaired.source_qis = [1];
     if (mutation === 'evidence') repaired.parts[0].evidence = [];
     if (mutation === 'context') repaired.parts[0].question_context = [{text:'新しい補完'}];
     h.requests.push(debate(), r, [invalid], [repaired]);
-    if (mutation === 'repeat') h.requests.push([invalid]);
     assert.throws(() => h.ctx.generateDraftsFromInterview('s'));
     assert.equal(h.db.Stock.length, 0);
     assert.equal(h.calls.filter(c => String(c.system || '').includes('一度だけの本文修復')).length, 1);
+  }
+});
+
+test('initial and final edits each get at most one quote-body repair', () => {
+  for (const succeeds of [true, false]) {
+    const { h, g, r } = mergeFixture(), invalid = structuredClone(g);
+    invalid.parts[0].text = invalid.parts[0].text.replace('記録がない試験は次に使えません。', '記録なしでは次に生かせない。');
+    h.requests.push(debate(), r, [invalid], [g], [invalid], succeeds ? [g] : [invalid]);
+    if (succeeds) {
+      h.ctx.generateDraftsFromInterview('s');
+      assert.equal(h.db.Stock.length, 1);
+    } else {
+      assert.throws(() => h.ctx.generateDraftsFromInterview('s'));
+      assert.equal(h.db.Stock.length, 0);
+    }
+    assert.equal(h.calls.filter(c => String(c.system || '').includes('一度だけの本文修復')).length, 2);
+  }
+});
+
+test('malformed base scoring gets one retry and cannot silently turn into approval', () => {
+  for (const succeeds of [true, false]) {
+    const h = setup(); generate(h);
+    let attempts = 0;
+    h.ctx.askClaudeJsonSalvageable = () => {
+      attempts++;
+      return attempts === 1 || !succeeds ? null : { [h.db.Stock[0].id]: review() };
+    };
+    h.ctx.runOutcomeQualityGate();
+    assert.equal(attempts, 2);
+    assert.equal(h.db.Stock[0].status, succeeds ? h.ctx.STATUS.READY : h.ctx.STATUS.DRAFT);
+    assert.equal(h.db.Stock[0].posted_at, undefined);
+    if (!succeeds) assert.equal(JSON.parse(h.logs.find(l => l[0] === 'outcome_invalid_detail')[1]).review_json, 'null');
   }
 });
 
