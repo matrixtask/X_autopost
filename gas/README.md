@@ -1,5 +1,7 @@
 # セットアップガイド（Google Apps Script版）
 
+**未採点稿をまとめて審査する:** GASエディタで **OutcomeReviewQueue.gs** を開き、`startPendingReviewBatch` を一度実行します。開始時点の未採点稿を最大100件登録し、1分ごとに1件ずつ既存の編集審査へ渡します。登録後は画面を閉じて構いません。失敗稿は未採点のまま保持して次へ進み、同じバッチ内では再試行しません。Logの `outcome_batch_complete` で承認待ち・内容保留・失敗・対象外の件数を確認できます。`stopPendingReviewBatch` は次の審査を停止し、実行中の1件と保存済み結果を保持します。100件を超える場合は完了後に再度開始してください。承認や公開は行わず、夜の通常処理は変更しません。リポジトリ: [gas/src/OutcomeReviewQueue.js](src/OutcomeReviewQueue.js)。
+
 **2026-10-27 ChatGPT音声取材:** 毎日7時JSTのChatGPT通知から本人が音声を開始し、終了した質問と回答だけSlackに記録。GASが編集して同じスレッドへ下書きを返します。ChatGPT通知の作成後、GASエディタ **ChatGPTInterview.gs** の `setupChatGPTVoiceInterview` を一度実行すると、既存データを保持してSlack定期質問を停止し、記録の取込workerを追加します。音声→Slack連携は初回取材で確認し、使えなければ終了後のテキスト会話または本人の貼り付けで渡します。[保存形式・長文分割・復旧](../docs/chatgpt-voice-interview.md)。
 
 **2026-10-22 全用途OpenAIへ統一:** 質問・画像説明・投稿生成に加え、採点・編集審査・分析もOpenAI Responses APIへ変更。既存のOpenAIモデル設定を引き継ぎ、採点/分析は用途別モデル・推論量を指定可能です。古いClaude設定が残っていても使用しません。保存済み回答・評価・本人承認は保持。接続確認は **OpenAI.gs** の `testOpenAIScoringConnection` / `testOpenAIAnalysisConnection`（各1回のAPI呼び出し、投稿・Slack送信なし）。[設定と検証手順](../docs/openai-responses.md)。
