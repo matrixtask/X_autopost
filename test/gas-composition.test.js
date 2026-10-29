@@ -720,6 +720,53 @@ test('verified source quotes paraphrased out of the body get one text repair wit
   assert.equal(h.db.Stock[0].status, h.ctx.STATUS.DRAFT);
 });
 
+test('supplemental evidence can use a long common source/body excerpt without rewriting the post or calling repair', () => {
+  const { h, g, r } = mergeFixture();
+  const originalQuote = 'でも記録がない試験は次の判断にそのまま使えません。';
+  h.db.Interviews[1].answer = originalQuote;
+  g.parts[0].text = h.db.Interviews[0].answer + '\nでも、記録がない試験は次の判断にそのまま使えません。';
+  g.parts[0].evidence[1].quote = originalQuote;
+  const body = g.parts[0].text, answers = structuredClone(h.db.Interviews);
+  h.requests.push(debate(), r, [g]);
+  h.ctx.generateDraftsFromInterview('s');
+  assert.equal(h.db.Stock[0].text, body);
+  const meta = JSON.parse(h.db.Stock[0].edit_meta);
+  assert.equal(meta.evidence[1].quote, originalQuote.slice(2));
+  assert.equal(meta.core_quote, g.parts[0].core_quote);
+  assert.deepEqual(h.db.Interviews, answers);
+  assert.equal(h.calls.filter(c => /一度だけの本文修復|原文引用メタデータだけを修復/.test(c.system || '')).length, 0);
+});
+
+test('common-excerpt normalization cannot change primary cores, invent source quotes, or shrink to generic fragments', () => {
+  for (const kind of ['primary', 'invented', 'short', 'small_fraction']) {
+    const { h, g } = mergeFixture();
+    let e = g.parts[0].evidence[1];
+    if (kind === 'primary') e = g.parts[0].evidence[0];
+    if (kind === 'invented') e.quote = '回答原文には存在しない別の十分に長い言葉';
+    if (kind === 'short') { e.quote = 'でも待つ'; h.db.Interviews[1].answer = e.quote; }
+    if (kind === 'small_fraction') { e.quote = 'あ'.repeat(40) + '記録は次の判断に必要な資料です'; h.db.Interviews[1].answer = e.quote; }
+    g.parts[0].text = kind === 'small_fraction' ? '記録は次の判断に必要な資料です' : e.quote.slice(2);
+    const before = structuredClone(g);
+    h.ctx.normalizeSupplementalEvidence([g], h.db.Interviews);
+    assert.deepEqual(g, before);
+  }
+});
+
+test('a context span with a stale prefix keeps its long existing body span and all question evidence', () => {
+  const { h, g, r } = contextFixture();
+  g.parts[0].question_context[0].text = 'まず試験を実施するか迷ったら、';
+  const before = structuredClone(g), answerBefore = structuredClone(h.db.Interviews);
+  h.requests.push(debate(), r, [g]);
+  h.ctx.generateDraftsFromInterview('s');
+  assert.equal(h.db.Stock[0].text, before.parts[0].text);
+  const memo = JSON.parse(h.db.Stock[0].edit_meta).question_context[0];
+  assert.equal(memo.text, '試験を実施するか迷ったら、');
+  assert.equal(memo.quote, before.parts[0].question_context[0].quote);
+  assert.equal(memo.answer_quote, before.parts[0].question_context[0].answer_quote);
+  assert.deepEqual(h.db.Interviews, answerBefore);
+  assert.equal(h.calls.filter(c => /質問の文脈引用メタデータだけを一度修復/.test(c.system || '')).length, 0);
+});
+
 test('body quote repair also restores a verified core, but cannot invent a core absent from the source', () => {
   const h = setup(), invalid = group();
   invalid.parts[0].text = invalid.parts[0].text.replace(core, '壊れる条件を先に確かめたい');

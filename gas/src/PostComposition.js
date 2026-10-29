@@ -185,6 +185,8 @@ function validatePostCompositionsWithEvidenceRepair(groups, qa, brief, styleProm
   function validate(values) {
     try {
       normalizeCompositionFormats(values);
+      normalizeSupplementalEvidence(values, qa);
+      normalizeCompositionContextSpans(values);
       validatePostCompositions(values, qa, brief, allowMissingAnchors, contextRepair.stage);
       return values;
     } catch (error) {
@@ -240,6 +242,57 @@ function validatePostCompositionsWithEvidenceRepair(groups, qa, brief, styleProm
   return validate(repaired);
 }
 
+/** 補助引用だけを、原文・本文の双方に実在する十分な長さの連続抜粋へ確定する。 */
+function normalizeSupplementalEvidence(groups, qa) {
+  if (!Array.isArray(groups)) return;
+  groups.forEach(function (g) {
+    if (!g || !Array.isArray(g.source_qis) || g.source_qis.length < 2 || !Array.isArray(g.parts)) return;
+    var sources;
+    try { sources = compositionSources(g.source_qis, qa); } catch (e) { return; }
+    g.parts.forEach(function (part) {
+      if (!part || typeof part.text !== 'string' || !Array.isArray(part.evidence)) return;
+      part.evidence.forEach(function (e) {
+        if (!e || String(e.qi) === String(g.qi) || !councilText(e.quote, 80) || part.text.indexOf(e.quote) >= 0) return;
+        var source = sources.filter(function (r) { return String(r.idx) === String(e.qi); })[0];
+        if (!source || compositionRawAnswer(source).indexOf(e.quote) < 0) return;
+        var original = e.quote, excerpt = compositionCommonExcerpt(original, part.text, 80);
+        if (excerpt !== original) {
+          e.quote = excerpt;
+          logEvent('composition_evidence_excerpt', JSON.stringify({ session_id: String(source.session_id || ''),
+            qi: String(e.qi), original: original, quote: excerpt }));
+        }
+      });
+    });
+  });
+}
+
+/** 元指定の70%以上かつ12字以上。語句を生成せず、両方に存在する連続部分だけ選ぶ。 */
+function compositionCommonExcerpt(original, text, max) {
+  if (!councilText(original, max) || typeof text !== 'string' || text.indexOf(original) >= 0) return original;
+  var chars = Array.from(original), minimum = Math.max(12, Math.ceil(chars.length * 0.7));
+  for (var length = chars.length - 1; length >= minimum; length--) {
+    for (var start = 0; start + length <= chars.length; start++) {
+      var excerpt = chars.slice(start, start + length).join('');
+      if (text.indexOf(excerpt) >= 0) return excerpt;
+    }
+  }
+  return original;
+}
+
+/** 本文修正後にずれた補完箇所メモを、本文の実在箇所へ合わせる。出典メモや本文は変更しない。 */
+function normalizeCompositionContextSpans(groups) {
+  if (!Array.isArray(groups)) return;
+  groups.forEach(function (g) {
+    if (!g || !Array.isArray(g.parts)) return;
+    g.parts.forEach(function (p) {
+      if (!p || !Array.isArray(p.question_context)) return;
+      p.question_context.forEach(function (c) {
+        if (c && typeof c === 'object') c.text = compositionCommonExcerpt(c.text, p.text, 200);
+      });
+    });
+  });
+}
+
 /** 原文で確認できる引用だけが本文から失われた場合、出典を固定して本文を一度直す。 */
 function repairCompositionQuotedText(groups, qa, brief, stylePrompt, allowMissingAnchors, state) {
   state.quotedTextStages = state.quotedTextStages || {};
@@ -284,6 +337,7 @@ function repairCompositionQuotedText(groups, qa, brief, stylePrompt, allowMissin
   try {
     if (!Array.isArray(repaired) || frozen(repaired) !== frozen(groups)) throw new Error('原文引用の本文修復で出典・核・編集判断が変わりました。保存を止めました');
     normalizeCompositionFormats(repaired);
+    normalizeCompositionContextSpans(repaired);
     validatePostCompositions(repaired, qa, brief, allowMissingAnchors, state.stage + '_quote_text_repair');
     logEvent('composition_quote_text_repair', JSON.stringify({ session_id: String(qa[0].session_id), stage: state.stage, status: 'succeeded' }));
     return repaired;
