@@ -249,6 +249,21 @@ test('final context editing cannot lose a split part core, a contributing source
   }
 });
 
+test('final editing can reselect secondary evidence while retaining the core and every original source', () => {
+  const { h, g, r } = mergeFixture(), final = structuredClone(g);
+  final.parts[0].text = final.parts[0].text.replace('記録がない試験は次に使えません。', '記録がない試験は次に使えませんから。');
+  final.parts[0].evidence[1].quote = '記録がない試験';
+  h.requests.push(debate(), r, [g], [final]);
+  h.ctx.generateDraftsFromInterview('s');
+  assert.equal(h.db.Stock[0].text, final.parts[0].text);
+  const meta = JSON.parse(h.db.Stock[0].edit_meta);
+  assert.deepEqual(meta.source_qis, ['1', '2']);
+  assert.equal(meta.core_quote, g.parts[0].core_quote);
+  assert.equal(meta.evidence[1].quote, '記録がない試験');
+  h.ctx.runOutcomeQualityGate();
+  assert.equal(h.db.Stock[0].status, h.ctx.STATUS.READY);
+});
+
 test('invented question context or API failure in the final edit cannot save the provisional draft', () => {
   for (const kind of ['quote', 'api']) {
     const { h, g, r } = contextFixture();
@@ -715,6 +730,32 @@ test('body quote repair also restores a verified core, but cannot invent a core 
   bad.requests.push(debate(), reflection(), [invented]);
   assert.throws(() => bad.ctx.generateDraftsFromInterview('s'), /core_not_in_answer/);
   assert.equal(bad.calls.filter(c => String(c.system || '').includes('一度だけの本文修復')).length, 0);
+});
+
+test('body quote repair updates a changed context span while keeping its exact question and answer sources', () => {
+  const { h, g, r, quote } = contextFixture();
+  g.parts[0].text = '試験を実施するか迷ったら、条件が揃うまで待つ。';
+  g.parts[0].question_context[0].text = g.parts[0].text;
+  const repaired = structuredClone(g);
+  repaired.parts[0].text = '試験を実施するか迷ったら、' + quote;
+  repaired.parts[0].question_context[0].text = repaired.parts[0].text;
+  h.requests.push(debate(), r, [g], [repaired]);
+  h.ctx.generateDraftsFromInterview('s');
+  const saved = JSON.parse(h.db.Stock[0].edit_meta).question_context[0];
+  assert.equal(saved.quote, g.parts[0].question_context[0].quote);
+  assert.equal(saved.answer_quote, quote);
+  assert.equal(saved.text, repaired.parts[0].text);
+  assert.equal(h.db.Stock[0].status, h.ctx.STATUS.DRAFT);
+});
+
+test('a merged post can retain Mia\'s anchor from a secondary source without inventing a main-source anchor', () => {
+  const { h, g, r } = mergeFixture();
+  r.anchors = [{qi:2, quote:'記録がない試験は次に使えません。', reason:'記録を次に生かす判断', hiring_signal:'現場の判断'}];
+  h.requests.push(debate(), r, [g]);
+  h.ctx.generateDraftsFromInterview('s');
+  assert.equal(h.db.Stock[0].source_idx, '1');
+  assert.ok(h.db.Stock[0].text.includes(r.anchors[0].quote));
+  assert.equal(h.calls.filter(c => String(c.system || '').includes('ミアが選んだ回答の核を本文に残すため')).length, 0);
 });
 
 test('body quote repair cannot change provenance, remove context metadata or run twice across editing stages', () => {
