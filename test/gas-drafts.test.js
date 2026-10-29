@@ -83,8 +83,9 @@ test('drafts: 未回答・スキップ・別セッション・不正qiの案は�
   }
 });
 
-test('drafts: 材料不足の空配列は正常終了しストックを増やさない', () => {
+test('drafts: 会議が材料不足と判定した場合だけ正常終了しストックを増やさない', () => {
   const { context, state } = harness([answer({ answer: 'わからない' })], []);
+  context.prepareEditorialCouncil = () => ({ reflection: { no_material: true, anchors: [] } });
   assert.equal(context.generateDraftsFromInterview('session-1').length, 0);
   assert.equal(state.stock.length, 0);
 });
@@ -124,7 +125,7 @@ test('drafts: 本人の追問回答を実helper経由で渡し、スキップし
       idx: 2, followup_question: '別の追問', followup_answer: skipped,
       followup_answered_at: 'skipped',
     }),
-  ]);
+  ], [{ qi: 1, text: '重量を3kg落とした' }]);
 
   context.generateDraftsFromInterview('session-1');
   assert.ok(state.prompts[0].user.includes(followup));

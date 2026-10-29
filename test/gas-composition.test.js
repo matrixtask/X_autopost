@@ -73,6 +73,37 @@ test('single-post format is selected from actual text length without changing an
   }
 });
 
+test('empty initial output contradicting an adopted council anchor is retried once and fully reviewed before stock', () => {
+  const h = setup();
+  h.requests.push(debate(), reflection(), [], [group()]);
+  h.ctx.generateDraftsFromInterview('s');
+  assert.equal(h.db.Stock.length, 1);
+  assert.equal(h.db.Stock[0].status, h.ctx.STATUS.DRAFT);
+  assert.equal(h.db.Interviews[0].answer, longText);
+  assert.equal(h.calls.filter(c => String(c.system || '').includes('前回の編集結果は空配列')).length, 1);
+  assert.ok(h.calls.some(c => String(c.system || '').includes('保存前の文脈・口調の最終編集')));
+  h.ctx.runOutcomeQualityGate();
+  assert.equal(h.db.Stock[0].status, h.ctx.STATUS.READY);
+  assert.equal(h.db.Stock[0].posted_at, undefined);
+});
+
+test('repeated empty output remains a generation failure, never a silent no-material success', () => {
+  const h = setup();
+  h.requests.push(debate(), reflection(), [], []);
+  assert.throws(() => h.ctx.generateDraftsFromInterview('s'), /材料不足には変更せず/);
+  assert.equal(h.db.Stock.length, 0);
+  assert.equal(h.calls.filter(c => String(c.system || '').includes('前回の編集結果は空配列')).length, 1);
+  assert.deepEqual(h.logs.filter(l => l[0] === 'composition_failed_draft').map(l => JSON.parse(l[1]).stage), ['initial_empty', 'initial_empty_retry']);
+  assert.equal(h.db.Interviews[0].answer, longText);
+});
+
+test('empty-output recovery respects remaining execution budget', () => {
+  const h = setup();
+  h.ctx.askClaudeJson = () => { h.ctx.EDITORIAL_EXECUTION_DEADLINE = Date.now() + 1000; return []; };
+  assert.throws(() => h.ctx.generateEditedDrafts('s', h.db.Interviews, {reflection: reflection()}), /時間予算/);
+  assert.equal(h.db.Stock.length, 0);
+});
+
 test('failed initial draft records exact recoverable JSON and distinct content violations without saving a post', () => {
   const h = setup(), g = group('long');
   g.parts[0].core_quote = '原文にも本文にもない';
@@ -610,6 +641,20 @@ test('Mia-anchor repair cannot alter citations or editorial structure and saves 
   h.requests.push(debate(), r, [initial], [changed]);
   assert.throws(() => h.ctx.generateDraftsFromInterview('s'), /ミアの核の修復で出典・編集判断が変わりました/);
   assert.equal(h.db.Stock.length, 0);
+});
+
+test('anchor insertion that crosses the short-post limit changes format without cutting the body', () => {
+  const h = setup(), initial = group('single');
+  initial.parts[0].text = core + '。' + 'あ'.repeat(114);
+  const repaired = structuredClone(initial);
+  repaired.parts[0].text += other + '。';
+  const r = reflection(); r.anchors = [{qi: 1, quote: other, reason: '判断', hiring_signal: '仕事'}];
+  assert.ok(h.ctx.fitsInTweet(initial.parts[0].text));
+  assert.equal(h.ctx.fitsInTweet(repaired.parts[0].text), false);
+  h.requests.push(debate(), r, [initial], [repaired]);
+  h.ctx.generateDraftsFromInterview('s');
+  assert.equal(h.db.Stock[0].post_format, 'long');
+  assert.equal(h.db.Stock[0].text, repaired.parts[0].text);
 });
 
 test('invalid evidence on a merge gets one metadata-only repair before saving', () => {
