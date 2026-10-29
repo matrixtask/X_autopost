@@ -184,6 +184,35 @@ test('voice import: no-material is final, and bot/channel edits are not implicit
   assert.equal(h.calls.length, 1); assert.equal(h.tables.Interviews[0].status, 'no_material');
 });
 
+test('voice recovery: externally saved drafts reconcile failed imports and notify the original thread once without generation', () => {
+  const h = setup(); h.ctx.enqueueVoiceInterviewRecord(h.event(record()));
+  h.ctx.generateDraftsFromInterview = () => { throw new Error('generation failed'); };
+  h.ctx.processVoiceInterviewRecords();
+  const original = JSON.stringify(h.tables.Interviews), raw = h.tables.VoiceImports[0].raw_text;
+  h.tables.Stock.push({ session_id: h.tables.VoiceImports[0].session_id, text: '回復バッチで保存した稿', status: 'draft' });
+  h.ctx.generateDraftsFromInterview = () => { assert.fail('must not regenerate'); };
+  h.messages.length = 0;
+  h.ctx.processVoiceInterviewRecords(); h.ctx.processVoiceInterviewRecords();
+  assert.equal(h.tables.VoiceImports[0].status, 'done'); assert.equal(h.tables.VoiceImports[0].error, '');
+  assert.equal(h.tables.VoiceImports[0].raw_text, raw); assert.equal(JSON.stringify(h.tables.Interviews), original);
+  assert.equal(h.tables.Stock.length, 1); assert.equal(h.tables.Stock[0].status, 'draft');
+  assert.equal(h.messages.length, 1); assert.equal(h.messages[0][3], '1.000001');
+  assert.deepEqual(Array.from(h.messages[0][1]), ['回復バッチで保存した稿']);
+});
+
+test('voice recovery: missing stock, open answers or mismatched source record cannot turn a failure into success', () => {
+  for (const variant of ['no-stock', 'open', 'other-record']) {
+    const h = setup(); h.ctx.enqueueVoiceInterviewRecord(h.event(record()));
+    h.ctx.generateDraftsFromInterview = () => { throw new Error('generation failed'); };
+    h.ctx.processVoiceInterviewRecords(); h.messages.length = 0;
+    if (variant !== 'no-stock') h.tables.Stock.push({ session_id: h.tables.VoiceImports[0].session_id, text: '保存稿' });
+    if (variant === 'open') h.tables.Interviews[0].status = 'open';
+    if (variant === 'other-record') h.tables.Interviews[0].source_record_id = 'other';
+    h.ctx.processVoiceInterviewRecords();
+    assert.equal(h.tables.VoiceImports[0].status, 'failed'); assert.equal(h.messages.length, 0);
+  }
+});
+
 test('voice setup: preserves other triggers, is idempotent and only then switches entry', () => {
   const h = setup(); h.triggers.push({ getHandlerFunction: () => 'postTick' });
   assert.equal(h.ctx.usesChatGPTInterview(), false); h.ctx.setupChatGPTVoiceInterview(); h.ctx.setupChatGPTVoiceInterview();

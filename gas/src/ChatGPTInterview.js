@@ -148,7 +148,7 @@ function updateVoiceRecord(recordId, values) {
 
 /** GAS最大6分を超えた処理は失敗として保持し、無限に再生成しない。 */
 function processVoiceInterviewRecords() {
-  var lock = LockService.getScriptLock(), job, questions;
+  var lock = LockService.getScriptLock(), job, questions, recovered = false;
   if (!lock.tryLock(1000)) return;
   try {
     ensureVoiceImportSheet();
@@ -157,13 +157,23 @@ function processVoiceInterviewRecords() {
     var groups = Object.create(null);
     records.forEach(function (r) { (groups[r.record_id] || (groups[r.record_id] = [])).push(r); });
     Object.keys(groups).some(function (id) {
+      recovered = false;
       var parts = groups[id], first = parts[0];
       if (parts.some(function (r) { return r.status === 'running'; })) {
         updateVoiceRecord(id, { status: 'failed', error: '前回の実行が中断しました。原文とStockを確認して再生成してください。' });
         updateRowsWhere(SHEET.INTERVIEWS, 'session_id', String(first.session_id), { status: INTERVIEW_STATUS.DONE });
         return false;
       }
-      if (!parts.every(function (r) { return r.status === 'received'; })) return false;
+      if (!parts.every(function (r) { return r.status === 'received'; })) {
+        // 一括回復で保存された稿を元スレッドへ返す。生成失敗そのものは自動再試行しない。
+        if (!parts.every(function (r) { return r.status === 'failed'; })) return false;
+        var saved = readTable(SHEET.STOCK).some(function (r) { return String(r.session_id) === String(first.session_id); });
+        var answers = readTable(SHEET.INTERVIEWS).filter(function (r) { return String(r.session_id) === String(first.session_id); });
+        if (!saved || !answers.length || !answers.every(function (r) {
+          return r.status === INTERVIEW_STATUS.DONE && String(r.source_record_id) === String(id);
+        })) return false;
+        recovered = true;
+      }
       try { questions = assembleVoiceInterviewRecords(parts); }
       catch (e) { updateVoiceRecord(id, { status: 'failed', error: String(e) }); return false; }
       if (!questions) return false;
@@ -188,6 +198,7 @@ function processVoiceInterviewRecords() {
   var resultStatus = 'done', error = '';
   try {
     var rows = readTable(SHEET.STOCK).filter(function (r) { return String(r.session_id) === String(job.session_id); });
+    if (recovered && !rows.length) throw new Error('回復済み下書きが見つかりません。再生成せず記録を保持しました。');
     if (!rows.length) {
       var drafts = generateDraftsFromInterview(String(job.session_id));
       if (!drafts.length) resultStatus = 'no_material';
