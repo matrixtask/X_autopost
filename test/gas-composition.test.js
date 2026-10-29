@@ -691,6 +691,47 @@ test('evidence repair cannot alter draft text and an irreparable merge saves not
   }
 });
 
+test('verified source quotes paraphrased out of the body get one text repair with provenance fixed', () => {
+  const { h, g, r } = mergeFixture();
+  const original = structuredClone(h.db.Interviews), invalid = structuredClone(g);
+  invalid.parts[0].text = invalid.parts[0].text.replace('記録がない試験は次に使えません。', '記録なしでは次に生かせない。');
+  h.requests.push(debate(), r, [invalid], [g]);
+  h.ctx.generateDraftsFromInterview('s');
+  assert.equal(h.db.Stock[0].text, g.parts[0].text);
+  assert.deepEqual(h.db.Interviews, original);
+  assert.deepEqual(JSON.parse(h.db.Stock[0].edit_meta).source_qis, ['1', '2']);
+  assert.equal(h.calls.filter(c => String(c.system || '').includes('一度だけの本文修復')).length, 1);
+  assert.equal(h.calls.filter(c => String(c.system || '').includes('原文引用メタデータだけを修復')).length, 0);
+  assert.equal(h.db.Stock[0].status, h.ctx.STATUS.DRAFT);
+});
+
+test('body quote repair also restores a verified core, but cannot invent a core absent from the source', () => {
+  const h = setup(), invalid = group();
+  invalid.parts[0].text = invalid.parts[0].text.replace(core, '壊れる条件を先に確かめたい');
+  h.requests.push(debate(), reflection(), [invalid], [group()]);
+  h.ctx.generateDraftsFromInterview('s');
+  assert.equal(h.db.Stock[0].text, longText);
+  const bad = setup(), invented = group(); invented.parts[0].core_quote = '回答にない核';
+  bad.requests.push(debate(), reflection(), [invented]);
+  assert.throws(() => bad.ctx.generateDraftsFromInterview('s'), /core_not_in_answer/);
+  assert.equal(bad.calls.filter(c => String(c.system || '').includes('一度だけの本文修復')).length, 0);
+});
+
+test('body quote repair cannot change provenance, remove context metadata or run twice across editing stages', () => {
+  for (const mutation of ['source', 'evidence', 'context', 'repeat']) {
+    const { h, g, r } = mergeFixture(), invalid = structuredClone(g), repaired = structuredClone(g);
+    invalid.parts[0].text = invalid.parts[0].text.replace('記録がない試験は次に使えません。', '記録なしでは次に生かせない。');
+    if (mutation === 'source') repaired.source_qis = [1];
+    if (mutation === 'evidence') repaired.parts[0].evidence = [];
+    if (mutation === 'context') repaired.parts[0].question_context = [{text:'新しい補完'}];
+    h.requests.push(debate(), r, [invalid], [repaired]);
+    if (mutation === 'repeat') h.requests.push([invalid]);
+    assert.throws(() => h.ctx.generateDraftsFromInterview('s'));
+    assert.equal(h.db.Stock.length, 0);
+    assert.equal(h.calls.filter(c => String(c.system || '').includes('一度だけの本文修復')).length, 1);
+  }
+});
+
 test('truncated JSON is never partially salvaged into a split series; a repeated generation does not duplicate stock', () => {
   const h = setup(); h.requests.push(debate(), reflection(), { parts: 'incomplete' });
   assert.throws(() => h.ctx.generateDraftsFromInterview('s'), /出力が不正/); assert.equal(h.db.Stock.length, 0);
