@@ -181,9 +181,11 @@ function validatePostCompositionsWithEvidenceRepair(groups, qa, brief, styleProm
   contextRepair = contextRepair || { used: false, stage: 'validation' };
   function validate(values) {
     try {
+      normalizeCompositionFormats(values);
       validatePostCompositions(values, qa, brief, allowMissingAnchors, contextRepair.stage);
       return values;
     } catch (error) {
+      recordCompositionFailure(values, qa, contextRepair.stage, error);
       if (error.code !== 'QUESTION_CONTEXT_INVALID') throw error;
       return repairQuestionContextMetadata(values, qa, brief, stylePrompt, allowMissingAnchors, contextRepair, error);
     }
@@ -228,6 +230,32 @@ function validatePostCompositionsWithEvidenceRepair(groups, qa, brief, styleProm
       }) };
   }))) throw new Error('原文引用修復で投稿本文または出典が変わりました。保存を止めました');
   return validate(repaired);
+}
+
+/** 本文を切らず、1本の投稿の形式だけを実際の長さから確定する。splitの構成判断は変更しない。 */
+function normalizeCompositionFormats(groups) {
+  if (!Array.isArray(groups)) return;
+  groups.forEach(function (g) {
+    if (!g || ['single', 'long'].indexOf(g.format) < 0 || !Array.isArray(g.parts) || g.parts.length !== 1) return;
+    var p = g.parts[0];
+    if (!p || typeof p.text !== 'string' || !p.text.trim() || Array.from(p.text.trim()).length > 4000) return;
+    g.format = fitsInTweet(p.text.trim()) ? 'single' : 'long';
+  });
+}
+
+/** 失敗したAI稿を原文や公開ストックと分けてLogへ保持する。秘密やAPIレスポンス全体は保存しない。 */
+function recordCompositionFailure(groups, qa, stage, error) {
+  var draft = JSON.stringify(groups);
+  if (typeof draft !== 'string') draft = 'null';
+  var snapshotId = 'composition_' + Date.now() + '_' + Math.floor(Math.random() * 1000000);
+  var limit = 120000, size = 12000, saved = draft.slice(0, limit), total = Math.ceil(saved.length / size);
+  for (var i = 0; i < total; i++) {
+    logEvent('composition_failed_draft', JSON.stringify({ snapshot_id: snapshotId,
+      session_id: String(qa[0] && qa[0].session_id || ''), stage: stage, part: i + 1, total: total,
+      truncated: draft.length > limit, error: String(error.message || error),
+      diagnostic: error.compositionDiagnostic || error.questionContextDiagnostic || null,
+      draft_chunk: saved.slice(i * size, (i + 1) * size) }));
+  }
 }
 
 /** ミアの核が抜けた場合は本文だけを一度修復し、根拠メタデータや編集判断は固定する。 */
@@ -286,9 +314,20 @@ function validatePostCompositions(groups, qa, brief, allowMissingAnchors, valida
       if (!part || typeof part.text !== 'string') throw new Error('編集本文が不正です');
       var text = part.text.trim();
       var key = text.normalize('NFKC').replace(/\s/g, '');
-      if (!fitsStockText({ post_format: g.format }, text) || (g.format === 'long' && fitsInTweet(text)) ||
-          seenTexts[key] || !councilText(part.core_quote, 80) || answer.indexOf(part.core_quote) < 0 || text.indexOf(part.core_quote) < 0) {
-        throw new Error('編集本文の長さ・重複・原文の核が不正です。機械切断はしません');
+      var violations = [];
+      if (!fitsStockText({ post_format: g.format }, text)) violations.push('text_length');
+      if (g.format === 'long' && fitsInTweet(text)) violations.push('long_but_short');
+      if (seenTexts[key]) violations.push('duplicate_text');
+      if (!councilText(part.core_quote, 80)) violations.push('core_quote_format');
+      if (typeof part.core_quote === 'string' && answer.indexOf(part.core_quote) < 0) violations.push('core_not_in_answer');
+      if (typeof part.core_quote === 'string' && text.indexOf(part.core_quote) < 0) violations.push('core_not_in_post');
+      if (violations.length) {
+        var error = new Error('編集本文の長さ・重複・原文の核が不正です（Q' + g.qi + ' / 投稿' + (partIndex + 1) + ': ' + violations.join(', ') + '）。機械切断はしません');
+        error.code = 'COMPOSITION_CONTENT_INVALID';
+        error.compositionDiagnostic = { session_id: String(source.session_id || ''), stage: validationStage || 'validation',
+          group: groupIndex + 1, part: partIndex + 1, qi: String(g.qi), format: g.format,
+          characters: Array.from(text).length, weighted_length: weightedTweetLength(text), violations: violations };
+        throw error;
       }
       seenTexts[key] = true;
       count++; chars += Array.from(text).length;

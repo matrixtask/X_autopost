@@ -60,6 +60,44 @@ function attachQuote(h) {
   return source;
 }
 
+test('single-post format is selected from actual text length without changing any text or citations', () => {
+  for (const format of ['single', 'long']) {
+    const h = setup(), g = group(format);
+    g.parts[0].text = format === 'single' ? longText : core + '。';
+    const before = structuredClone(g.parts);
+    h.requests.push(debate(), reflection(), [g]);
+    h.ctx.generateDraftsFromInterview('s');
+    assert.equal(h.db.Stock[0].post_format, format === 'single' ? 'long' : 'single');
+    assert.equal(h.db.Stock[0].text, before[0].text);
+    assert.equal(JSON.parse(h.db.Stock[0].edit_meta).core_quote, before[0].core_quote);
+  }
+});
+
+test('failed initial draft records exact recoverable JSON and distinct content violations without saving a post', () => {
+  const h = setup(), g = group('long');
+  g.parts[0].core_quote = '原文にも本文にもない';
+  h.requests.push(debate(), reflection(), [g]);
+  assert.throws(() => h.ctx.generateDraftsFromInterview('s'), /core_not_in_answer, core_not_in_post/);
+  const chunks = h.logs.filter(l => l[0] === 'composition_failed_draft').map(l => JSON.parse(l[1]));
+  assert.equal(chunks.length, 1);
+  assert.equal(chunks[0].session_id, 's'); assert.equal(chunks[0].stage, 'initial');
+  assert.equal(chunks[0].truncated, false);
+  assert.equal(JSON.parse(chunks.map(c => c.draft_chunk).join(''))[0].parts[0].text, g.parts[0].text);
+  assert.deepEqual(chunks[0].diagnostic.violations, ['core_not_in_answer', 'core_not_in_post']);
+  assert.equal(h.db.Stock.length, 0); assert.equal(h.db.Interviews[0].answer, longText);
+});
+
+test('failed draft snapshots can reconstruct a multipart payload while recording oversized truncation explicitly', () => {
+  const h = setup(), data = [{text: 'あ'.repeat(14000)}];
+  h.ctx.recordCompositionFailure(data, h.db.Interviews, 'test', new Error('test'));
+  const chunks = h.logs.map(l => JSON.parse(l[1]));
+  assert.equal(chunks.length, 2);
+  assert.deepEqual(JSON.parse(chunks.map(c => c.draft_chunk).join('')), data);
+  assert.equal(new Set(chunks.map(c=>c.snapshot_id)).size, 1);
+  h.ctx.recordCompositionFailure([{text:'あ'.repeat(130000)}], h.db.Interviews, 'test', new Error('test'));
+  assert.ok(h.logs.slice(2).every(l=>JSON.parse(l[1]).truncated));
+});
+
 test('quote generation preserves external source separately through council, editor, review and human approval', () => {
   const h = setup(), source = attachQuote(h);
   const initial = group('single'); initial.parts[0].text = core + 'あ'.repeat(140 - core.length);
@@ -414,7 +452,6 @@ test('merging rejects unknown, duplicate, cross-session, reused or uncited answe
     ({ h }) => { h.db.Interviews[1].answered_at = 'skipped'; },
     ({ g }) => { g.parts[0].evidence.pop(); },
     ({ g }) => { g.parts[0].evidence[1].quote = '本人が言っていない理由'; },
-    ({ g }) => { g.format = 'single'; },
   ]) {
     const f = mergeFixture(); mutate(f); f.h.requests.push(debate(), f.r, [f.g]);
     assert.throws(() => f.h.ctx.generateDraftsFromInterview('s'), /不正/);

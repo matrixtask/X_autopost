@@ -159,11 +159,11 @@ test('council: draft core must survive verbatim, with its uncertainty and correc
   assert.equal(stock[0].text, quote + '。まだ試す前です。');
 });
 
-test('council: a long draft is rejected whole, never cut through its ending', () => {
+test('council: a draft beyond the long-post limit is rejected whole, never cut through its ending', () => {
   const { ctx, qa, stock, responses } = setup();
   qa.push({ session_id: 's', idx: 1, answer: 'まだ試す前です', theme: '試作', category: 'evergreen' });
   responses.push(debate(), reflection([{ qi: 1, quote: 'まだ試す前です', reason: '未実施の留保を守る', hiring_signal: '仕事の実像' }]),
-    [{ qi: 1, format: 'single', reason: '判断を短く伝える', tradeoff: '長文は不要', omitted: '', parts: [{ core_quote: 'まだ試す前です', text: 'あ'.repeat(141) + 'まだ試す前です' }] }]);
+    [{ qi: 1, format: 'single', reason: '判断を短く伝える', tradeoff: '長文は不要', omitted: '', parts: [{ core_quote: 'まだ試す前です', text: 'あ'.repeat(4001) + 'まだ試す前です' }] }]);
   ctx.truncateForTweet = () => { throw new Error('must not truncate'); };
   assert.throws(() => ctx.generateDraftsFromInterview('s'), /長さ/);
   assert.equal(stock.length, 0);
