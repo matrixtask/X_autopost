@@ -35,6 +35,22 @@ function review(ctx, score = 2, overrides = {}) {
     fidelity: 'supported', privacy: 'clear', focus: 'aligned', review_note: '', ...overrides };
 }
 
+test('review citations restore omitted line breaks only when the matching body span is unique and bounded', () => {
+  const { ctx } = setup();
+  assert.equal(ctx.restoreReviewQuoteLinebreaks('自分で確認した。次に進む。', '自分で確認した。\n次に進む。'), '自分で確認した。\n次に進む。');
+  assert.equal(ctx.restoreReviewQuoteLinebreaks('違う話', '自分で確認した。\n次に進む。'), '違う話');
+  assert.equal(ctx.restoreReviewQuoteLinebreaks('AB', 'A B'), 'AB');
+  assert.equal(ctx.restoreReviewQuoteLinebreaks('AB', 'A\nB A\nB'), 'AB');
+  assert.equal(ctx.restoreReviewQuoteLinebreaks('あ'.repeat(80), 'あ'.repeat(40) + '\n' + 'あ'.repeat(40)), 'あ'.repeat(80));
+  const value = { axes: [[2, '自分で確認した。次に進む。']], issues: [{quote:'自分で確認した。次に進む。'}],
+    composition: {opinions: [{quote:'自分で確認した。次に進む。'}], mia: {quote:'自分で確認した。次に進む。'}} };
+  ctx.normalizeOutcomeQuoteLinebreaks(value, '自分で確認した。\n次に進む。');
+  assert.equal(value.axes[0][1], '自分で確認した。\n次に進む。');
+  assert.equal(value.issues[0].quote, value.axes[0][1]);
+  assert.equal(value.composition.opinions[0].quote, value.axes[0][1]);
+  assert.equal(value.composition.mia.quote, value.axes[0][1]);
+});
+
 test('outcome: a low reference score goes to human approval, never auto-approved or rewritten', () => {
   const { ctx, db } = setup({ AUTO_APPROVE: 'true' });
   db.Interviews.push({ session_id: 's', idx: 2, theme: '試作', answer: '自分で確認した', answered_at: 'now' });

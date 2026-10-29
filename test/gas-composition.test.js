@@ -804,6 +804,19 @@ test('malformed base scoring gets one retry and cannot silently turn into approv
   }
 });
 
+test('a real review objection spanning a line break is retained as a hold rather than invalid or approved', () => {
+  const h = setup(), g = group('single'); g.parts[0].text = core + '\n' + other;
+  h.requests.push(debate(), reflection(), [g]); h.ctx.generateDraftsFromInterview('s');
+  const comp = composition(); comp.mia = {persona:'mia', verdict:'revise', reason:'二つの判断の関係が本文だけでは伝わりにくい', quote:core + other, action:'二つの判断の関係を回答に基づいて補ってください'};
+  let calls = 0;
+  h.ctx.askClaudeJsonSalvageable = () => { calls++; return {[h.db.Stock[0].id]:review(g.parts[0].text, comp)}; };
+  h.ctx.runOutcomeQualityGate();
+  assert.equal(calls, 1);
+  assert.equal(h.db.Stock[0].status, h.ctx.STATUS.STOCK);
+  assert.equal(JSON.parse(h.db.Stock[0].edit_review).mia.quote, g.parts[0].text);
+  assert.match(h.db.Stock[0].score_reason, /二つの判断の関係/);
+});
+
 test('truncated JSON is never partially salvaged into a split series; a repeated generation does not duplicate stock', () => {
   const h = setup(); h.requests.push(debate(), reflection(), { parts: 'incomplete' });
   assert.throws(() => h.ctx.generateDraftsFromInterview('s'), /出力が不正/); assert.equal(h.db.Stock.length, 0);
