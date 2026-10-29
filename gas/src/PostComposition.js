@@ -19,6 +19,7 @@ function postCompositionInstructions() {
     '各partにevidenceを置く。使った回答それぞれから本文にも残した80字以内の原文quoteとqiを1組ずつ記録し、主回答のquoteはcore_quoteと同じにする。question_contextは質問から補った箇所ごとにqi,field(question/followup_question),quote(質問の原文200字以内),answer_quote(同じ回答の原文80字以内),text(補った本文箇所200字以内),use(topic/referent),reason(250字以内)を記録。補わなければ[]。最大4件。',
     '同じ論点の言い換えを複数ストックしない。全体で最大6グループ/8ポスト、本文合計6000文字以内。reason/tradeoff/omittedは各500字以内。省いた材料があればomittedへ正直に記録する。',
     '回答に固有な公開材料がないものは出力しない。完成稿に人格名や編集理由は混ぜない。',
+    '会議のno_material=falseでanchorsがある場合、その核を使う案を最低1グループ返す。未確認の技術的理由を省いて本人が見たこと・驚いたことだけに絞ってよい。推測は推測のまま残し、公開可否や追加確認は後段の審査へ渡す。空配列で材料不足へ変更しない。',
     'quote_sourceがある回答は、引用元に対する本人の専門的な見方・経験を加える1本のsingle/longにする。splitにせず、違う引用元を結合しない。単なる要約や「同意」だけなら見送る。外部の主張は「この投稿の〜」など出典を明確にし、本人が経験した事実へ置換しない。本人の賛否・留保を変えず、原文の大量転載をしない。引用URLはシステムが付けるため本文に作らない。',
   ].join('\n');
 }
@@ -288,6 +289,7 @@ function repairMissingEditorialAnchors(groups, qa, brief, stylePrompt) {
   if (!Array.isArray(repaired) || repaired.length !== groups.length || immutableShape(repaired) !== immutableShape(groups)) {
     throw new Error('ミアの核の修復で出典・編集判断が変わりました。保存を止めました');
   }
+  normalizeCompositionFormats(repaired);
   validatePostCompositions(repaired, qa, brief);
   return repaired;
 }
@@ -363,6 +365,19 @@ function generateEditedDrafts(sessionId, qa, brief) {
   var output = askClaudeJson(stylePrompt + editorialCouncilInstructions(brief) + '\n' + postCompositionInstructions(),
     JSON.stringify({ answers: answers }) + '\nJSON配列: [{"qi":1,"source_qis":[1],"format":"singleまたはsplitまたはlong","reason":"形式や結合を選ぶ具体的理由","tradeoff":"他の形式で失われる内容","omitted":"省いた材料。なければ空文字","parts":[{"text":"完成稿の全文","core_quote":"主回答の核","evidence":[{"qi":1,"quote":"本文に残した回答原文"}],"question_context":[]}]}]',
     12000, { purpose: 'generate' });
+  if (Array.isArray(output) && !output.length && !brief.reflection.no_material) {
+    var emptyError = new Error('会議で投稿の核を選んだのに編集者が0件を返しました。材料不足には変更せず再生成対象として残します');
+    recordCompositionFailure(output, qa, 'initial_empty', emptyError);
+    assertEditorialExecutionBudget();
+    output = askClaudeJson(stylePrompt + editorialCouncilInstructions(brief) + '\n' + postCompositionInstructions() + '\n' +
+      '前回の編集結果は空配列で、確定した会議の判断と食い違った。回答とanchorsを照合し、同じJSON形式で最低1グループの草稿を返す。' +
+      '工場の説明と本人の推測を混同せず、未確認の理由を足さない。観察と驚きだけでもよい。非公開の情報は使わず、原文を捏造して穴埋めしない。',
+      JSON.stringify({ answers: answers, previous_drafts: [] }), 12000, { purpose: 'generate' });
+    if (Array.isArray(output) && !output.length) {
+      recordCompositionFailure(output, qa, 'initial_empty_retry', emptyError);
+      throw emptyError;
+    }
+  }
   var groups = completePostContext(output, qa, brief, stylePrompt, answers);
   var rows = [];
   groups.forEach(function (g) {
