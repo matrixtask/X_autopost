@@ -95,7 +95,7 @@ test('outcome: unexplained holds are retried and a supported answer is released 
   let calls = 0;
   ctx.askClaudeJsonSalvageable = (_system, input) => {
     calls++;
-    if (calls === 2) assert.match(input, /前回は要確認フラグ/);
+    if (calls === 2) assert.match(input, /前回の評価は形式または引用の検証に失敗/);
     return { d: review(ctx, 2, { fidelity: calls === 1 ? 'confirm' : 'supported' }) };
   };
   assert.equal(ctx.runOutcomeQualityGate().passed, 1);

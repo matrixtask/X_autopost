@@ -242,7 +242,8 @@ function validatePostCompositionsWithEvidenceRepair(groups, qa, brief, styleProm
 
 /** 原文で確認できる引用だけが本文から失われた場合、出典を固定して本文を一度直す。 */
 function repairCompositionQuotedText(groups, qa, brief, stylePrompt, allowMissingAnchors, state) {
-  if (state.quotedTextUsed || !Array.isArray(groups)) return null;
+  state.quotedTextStages = state.quotedTextStages || {};
+  if (state.quotedTextStages[state.stage] || Object.keys(state.quotedTextStages).length >= 2 || !Array.isArray(groups)) return null;
   var required = [], safe = true;
   try {
     groups.forEach(function (g, gi) {
@@ -270,7 +271,7 @@ function repairCompositionQuotedText(groups, qa, brief, stylePrompt, allowMissin
           }) : p.question_context }; }) };
     }));
   }
-  state.quotedTextUsed = true;
+  state.quotedTextStages[state.stage] = true; // 初稿と最終編集で各1回。各工程内では繰り返さない。
   assertEditorialExecutionBudget();
   logEvent('composition_quote_text_repair', JSON.stringify({ session_id: String(qa[0].session_id), stage: state.stage, status: 'started', missing: required }));
   var repaired = askClaudeJson(stylePrompt + editorialCouncilInstructions(brief) + '\n' + postCompositionInstructions() + '\n' + [
