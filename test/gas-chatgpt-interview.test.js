@@ -59,14 +59,17 @@ test('voice record: rejects incomplete, ambiguous, oversized and impossible fram
 test('voice record: accepts connector attribution only after completion and archives the entire Slack source', () => {
   const h = setup(), footer = '\n*使用して送信されました* <@U123456789|ChatGPT>';
   const body = record({ extra: '【確認会話・原文】\n本人: 終了\n【AIメモ・原文ではない】\n本人回答へ入れない\n' });
-  for (const suffix of [footer, '\n' + footer, footer.replace('|ChatGPT', '')]) {
+  const englishFooter = footer.replace('使用して送信されました', 'Sent using');
+  for (const suffix of [footer, '\n' + footer, footer.replace('|ChatGPT', ''), englishFooter, '\n' + englishFooter, englishFooter.replace('|ChatGPT', '')]) {
     const parsed = h.ctx.parseVoiceInterviewRecord(body + suffix);
     assert.equal(parsed.answer, 'いや、そこで待ったんですよ。\n  急がなかった。');
     assert.equal(parsed.ai_note, '本人回答へ入れない'); assert.equal(parsed.clarification, '本人: 終了');
     assert.equal(parsed.raw_text, body + suffix);
   }
-  const quotedAnswer = 'この表示を見ました。' + footer;
-  assert.equal(h.ctx.parseVoiceInterviewRecord(record({ answer: quotedAnswer }) + footer).answer, quotedAnswer);
+  for (const suffix of [footer, englishFooter]) {
+    const quotedAnswer = 'この表示を見ました。' + suffix;
+    assert.equal(h.ctx.parseVoiceInterviewRecord(record({ answer: quotedAnswer }) + suffix).answer, quotedAnswer);
+  }
 });
 
 test('voice record: attribution cannot excuse a missing end, unrelated trailing prose, or another record', () => {
@@ -85,8 +88,26 @@ test('voice import: a repeated record with or without transport attribution rema
   h.ctx.enqueueVoiceInterviewRecord(h.event(record() + footer));
   h.ctx.enqueueVoiceInterviewRecord(h.event(record(), { ts: '1.000002' }));
   h.ctx.enqueueVoiceInterviewRecord(h.event(record() + footer.replace('U123456789', 'U987654321'), { ts: '1.000003' }));
+  h.ctx.enqueueVoiceInterviewRecord(h.event(record() + footer.replace('使用して送信されました', 'Sent using'), { ts: '1.000004' }));
   assert.equal(h.tables.VoiceImports.length, 1); assert.equal(h.tables.VoiceImports[0].raw_text, record() + footer);
   assert.throws(() => h.ctx.enqueueVoiceInterviewRecord(h.event(record({ answer: '回答を書き換えた' }) + footer)), /別の本文/);
+});
+
+test('voice webhook: English connector attribution queues all parts without entering ordinary memo handling', () => {
+  const h = setup();
+  Object.assign(h.ctx, { CacheService: { getScriptCache() { throw new Error('ordinary handling must not run'); } },
+    ContentService: { createTextOutput: text => text },
+  });
+  vm.runInContext(readFileSync(new URL('../gas/src/WebApp.js', import.meta.url), 'utf8'), h.ctx);
+  for (let part = 1; part <= 5; part++) {
+    const text = record({ part, total: 5, qi: part, extra: part === 1 ? '【AIメモ・原文ではない】\n書き起こしです。\n' : '' }) + '\n*Sent using* <@U123456789|ChatGPT>';
+    const event = h.event(text, { ts: `1.00000${part}`, ...(part > 1 ? { thread_ts: '1.000001' } : {}) });
+    assert.equal(h.ctx.doPost({ postData: { contents: JSON.stringify({ type: 'event_callback', event }) } }), 'voice record saved');
+  }
+  assert.equal(h.tables.VoiceImports.length, 5);
+  h.ctx.processVoiceInterviewRecords();
+  assert.equal(h.tables.Interviews.length, 5); assert.equal(h.calls.length, 1);
+  assert.ok(h.tables.VoiceImports.every(r => r.status === 'done' && r.raw_text.endsWith('|ChatGPT>')));
 });
 
 test('voice import: persists before returning and deduplicates Slack retries and identical re-posts', () => {

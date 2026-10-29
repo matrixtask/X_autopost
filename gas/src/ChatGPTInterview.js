@@ -22,7 +22,7 @@ function voiceRecordText(text) {
 
 /** Slack連携が完了マーカーの後に付ける署名だけを除く。原文内の同じ文字列は残す。 */
 function voiceRecordPayload(text) {
-  return text.replace(/(\n【記録完了】)[ \t]*\n(?:[ \t]*\n)*\*使用して送信されました\* <@[A-Z0-9]+(?:\|ChatGPT)?>[ \t\n]*$/, '$1');
+  return text.replace(/(\n【記録完了】)[ \t]*\n(?:[ \t]*\n)*\*(?:使用して送信されました|Sent using)\* <@[A-Z0-9]+(?:\|ChatGPT)?>[ \t\n]*$/, '$1');
 }
 
 /** 全文一致する、完結した1パートだけ受け付ける。AIメモは回答に入れない。 */
