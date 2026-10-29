@@ -15,7 +15,7 @@ function postCompositionInstructions() {
     '長文の冒頭は回答にある意外な判断・具体的な場面・未解決の違和感から始め、続きでその理由や結末を回収する。冒頭だけで逆の意味にならないよう必要な留保を先に置く。',
     '「さらに表示」の位置は制御できない。空行の水増し、文の機械切断、結論の出し惜しみ、根拠のない煽り、定型の「実は」で引っ張らない。段落は意味の切れ目に置く。',
     '根拠は本人回答。質問は文脈の補助資料。回答がその問いに答えている範囲で、質問から話題や対象を補って自然な投稿にする。本人が肯定・説明していない質問の前提（成果・数字・経験・因果・感情）を事実として採用しない。否定や訂正を優先。文体見本を事実にせず、非公開・迷い・代償を尊重し、一般論や採用CTAを足さない。',
-    '各partのcore_quoteは同じqiの回答に完全一致する80字以内の固有な核で、本文にもそのまま残す。各グループにはミアが選んだ同じqiのanchorを少なくとも一つ本文に残す。',
+    '各partのcore_quoteは同じqiの回答に完全一致する80字以内の固有な核で、本文にもそのまま残す。各グループはsource_qisの中にミアが選んだanchorのqiを含み、そのanchorを少なくとも一つ本文に残す。ミアが核を選んでいない回答だけで別グループを追加しない。全回答を投稿にする必要はない。',
     '各partにevidenceを置く。使った回答それぞれから本文にも残した80字以内の原文quoteとqiを1組ずつ記録し、主回答のquoteはcore_quoteと同じにする。question_contextは質問から補った箇所ごとにqi,field(question/followup_question),quote(質問の原文200字以内),answer_quote(同じ回答の原文80字以内),text(補った本文箇所200字以内),use(topic/referent),reason(250字以内)を記録。補わなければ[]。最大4件。',
     '同じ論点の言い換えを複数ストックしない。全体で最大6グループ/8ポスト、本文合計6000文字以内。reason/tradeoff/omittedは各500字以内。省いた材料があればomittedへ正直に記録する。',
     '回答に固有な公開材料がないものは出力しない。完成稿に人格名や編集理由は混ぜない。',
@@ -38,7 +38,7 @@ function completePostContext(output, qa, brief, stylePrompt, answers) {
     '補足の口調は今回の本人回答を最優先し、同じVoiceサンプルを使う。本人が「〜かな」と迷っているなら補足も断定へ変えず、説明文だけ「重要です」「〜と考えられます」のような広報・評論調にしない。元の固有の表現、笑い、留保、テンポを残す。',
     'quote_sourceがあるときは、リンクを開かない読者にも本人が何に意見を述べているか分かる最小限の話題・対象を補う。外部投稿の紹介と分かる書き方にし、外部の主張を本人の経験・検証済み事実へ変えない。原文の大量転載はしない。',
     '質問から補った部分はquestion_context、他の回答を使った場合はsource_qisとevidenceにも記録する。文体サンプルから出来事や理由を補わない。原文で分からない主語・原因・時点・実績を推測しない。どうしても不明なら無理に足さず、後段の審査へ残す。',
-    'グループの数・順番・主回答qiと既存の出典・核の引用は保持。必要なら同じセッションの回答を追加してよいが、別グループとの重複使用は禁止。分割の各ポストは単独で分かるようにする。文脈を入れると短文上限を超える場合はlongへ変え、末尾を切らない。形式変更の理由はreason/tradeoffを更新する。',
+    'グループの数・順番・主回答qi・source_qis・各partのcore_quoteとミアのanchorは本文に保持。補助回答のevidenceは、同じ回答と完成本文の両方に完全一致する引用へ更新してよい。出典の削除は禁止。必要なら同じセッションの回答を追加してよいが、別グループとの重複使用は禁止。分割の各ポストは単独で分かるようにする。文脈を入れると短文上限を超える場合はlongへ変え、末尾を切らない。形式変更の理由はreason/tradeoffを更新する。',
     'draftsと同じJSON配列の形式で、修正後の全グループを返す。解説や人格名を投稿本文へ混ぜない。',
   ].join('\n'), JSON.stringify({ answers: answers, drafts: output }), 12000, { purpose: 'generate' });
   contextRepair.stage = 'final';
@@ -49,9 +49,11 @@ function completePostContext(output, qa, brief, stylePrompt, answers) {
     var next = result[i];
     return String(g.source.idx) !== String(next.source.idx) ||
       g.sources.some(function (r) { return !next.sources.some(function (s) { return String(s.idx) === String(r.idx); }); }) ||
-      g.parts.some(function (part) { return part.evidence.some(function (e) {
-        return !next.parts.some(function (p) { return p.text.indexOf(e.quote) >= 0; });
-      }); });
+      // 核は固定。補助回答の照合用抜粋は上の全出典検証で再確認済み。
+      // 原文と本文に実在する別の抜粋まで「核の喪失」と取り違えない。
+      g.parts.some(function (part) {
+        return !next.parts.some(function (p) { return p.text.indexOf(part.core_quote) >= 0; });
+      });
   })) throw new Error('文脈補完で元の出典・核・グループが失われました。保存を止めました');
   return result;
 }
@@ -262,7 +264,10 @@ function repairCompositionQuotedText(groups, qa, brief, stylePrompt, allowMissin
   function frozen(values) {
     return JSON.stringify(values.map(function (g) {
       return { qi: g.qi, source_qis: g.source_qis, format: g.format, reason: g.reason, tradeoff: g.tradeoff, omitted: g.omitted,
-        parts: g.parts.map(function (p) { return { core_quote: p.core_quote, evidence: p.evidence, question_context: p.question_context }; }) };
+        parts: g.parts.map(function (p) { return { core_quote: p.core_quote, evidence: p.evidence,
+          question_context: Array.isArray(p.question_context) ? p.question_context.map(function (c) {
+            return { qi: c.qi, field: c.field, quote: c.quote, answer_quote: c.answer_quote, use: c.use, reason: c.reason };
+          }) : p.question_context }; }) };
     }));
   }
   state.quotedTextUsed = true;
@@ -270,8 +275,8 @@ function repairCompositionQuotedText(groups, qa, brief, stylePrompt, allowMissin
   logEvent('composition_quote_text_repair', JSON.stringify({ session_id: String(qa[0].session_id), stage: state.stage, status: 'started', missing: required }));
   var repaired = askClaudeJson(stylePrompt + editorialCouncilInstructions(brief) + '\n' + postCompositionInstructions() + '\n' + [
     '原文で確認済みだが投稿本文では言い換えられてしまった引用を戻す、一度だけの本文修復。',
-    '変更してよいのは各partのtextだけ。全グループ/partの数・順序・qi・source_qis・format・reason・tradeoff・omitted・core_quote・evidence・question_contextは完全に保持。',
-    'missingのquoteを対応する本文の自然な位置へ一字一句そのまま戻す。意味の同じ言い換え箇所を置き換え、末尾に証拠として羅列しない。元からある核と他の引用、question_context.textも本文に保持する。',
+    '変更してよいのは各partのtextと、その変更に伴うquestion_context.textだけ。全グループ/partの数・順序・qi・source_qis・format・reason・tradeoff・omitted・core_quote・evidenceは完全に保持。質問補完メモの件数・順序・qi・field・quote・answer_quote・use・reasonも完全に保持し、削除しない。',
+    'missingのquoteを対応する本文の自然な位置へ一字一句そのまま戻す。意味の同じ言い換え箇所を置き換え、末尾に証拠として羅列しない。元からある核と他の引用を本文に保持する。補完箇所の文言を変えた場合はquestion_context.textも新本文の完全一致箇所へ更新し、質問から補った対象・意味は変えない。',
     '回答にない事実や因果を足さない。聞いた説明と本人の推測を区別し、留保・否定を削らない。各本文4000字以内、splitは各280重み以内。全グループのJSON配列だけ返す。',
   ].join('\n'), JSON.stringify({ answers: qa.map(function (r) { return { qi: r.idx, question: r.question, answer: compositionRawAnswer(r) }; }),
     drafts: groups, missing: required }), 12000, { purpose: 'generate' });
@@ -318,14 +323,15 @@ function repairMissingEditorialAnchors(groups, qa, brief, stylePrompt) {
   function missing(values) {
     return values.some(function (g) {
       return !brief.reflection.anchors.some(function (a) {
-        return String(a.qi) === String(g.qi) && (g.parts || []).some(function (p) { return String(p.text || '').indexOf(a.quote) >= 0; });
+        return (g.source_qis || [g.qi]).some(function (qi) { return String(a.qi) === String(qi); }) &&
+          (g.parts || []).some(function (p) { return String(p.text || '').indexOf(a.quote) >= 0; });
       });
     });
   }
   if (!missing(groups)) return groups;
   assertEditorialExecutionBudget();
   var repaired = askClaudeJson(stylePrompt + editorialCouncilInstructions(brief) + '\n' + postCompositionInstructions() + '\n' + [
-    'ミアが選んだ回答の核を本文に残すための一度だけの修復。各該当グループの主回答qiに対応するanchor.quoteを、句読点も含め一字一句そのまま、同じpartの本文textに含める。引用を分割・言い換えしない。',
+    'ミアが選んだ回答の核を本文に残すための一度だけの修復。各該当グループのsource_qisのいずれかに対応するanchor.quoteを、句読点も含め一字一句そのまま、本文textに含める。引用を分割・言い換えしない。',
     'anchor以外の内容は最小限の変更にする。回答にない事実・理由・口調を足さない。',
     'qi、source_qis、format、reason、tradeoff、omitted、part数、各partのcore_quote/evidence/question_contextは元JSONと完全に同一に保つ。変更してよいのは各partのtextだけ。',
     'JSON配列のみ返す。正しく修復できない場合も元draftsを返し、検証側で保存を止める。',
@@ -400,7 +406,7 @@ function validatePostCompositions(groups, qa, brief, allowMissingAnchors, valida
           { stage: validationStage || 'validation', group: groupIndex + 1, part: partIndex + 1 }) };
     });
     if (!allowMissingAnchors && !brief.reflection.anchors.some(function (a) {
-      return String(a.qi) === String(g.qi) && parts.some(function (p) { return p.text.indexOf(a.quote) >= 0; });
+      return sources.some(function (s) { return String(s.idx) === String(a.qi); }) && parts.some(function (p) { return p.text.indexOf(a.quote) >= 0; });
     })) throw new Error('ミアが選んだ回答の核が編集本文にありません');
     if (count > 8 || chars > 6000) throw new Error('編集全体の量が上限を超えています');
     var quote = sources.some(function (r) { return r.quote_tweet_id || r.quote_source; }) ? compositionQuoteSource(sources) : null;
