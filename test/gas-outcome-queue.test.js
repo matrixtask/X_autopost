@@ -85,3 +85,46 @@ test('review queue: registration failure and lock contention leave no active bat
   assert.throws(() => h.ctx.startPendingReviewBatch(), /quota/); assert.equal(h.state().active, undefined);
   h.rows.length = 0; assert.match(h.ctx.startPendingReviewBatch(), /ありません/);
 });
+
+test('web edits: enqueue only edited draft; append and deduplicate without replacing a running batch', () => {
+  const h = setup();
+  h.ctx.enqueueOutcomeReview_('b'); h.ctx.enqueueOutcomeReview_('b');
+  assert.deepEqual(h.state().pending, ['b']); assert.equal(h.triggers.length, 1);
+  h.ctx.runOutcomeQualityGate = selected => {
+    h.calls.push(selected[0].id);
+    if (h.calls.length === 1) {
+      h.ctx.enqueueOutcomeReview_('b'); // Edited while old text is being reviewed.
+      h.ctx.enqueueOutcomeReview_('c'); h.ctx.enqueueOutcomeReview_('c');
+      // The gate rejects its old snapshot, leaving the edited row draft.
+    } else h.rows.find(r => r.id === selected[0].id).status = 'ready';
+  };
+  h.ctx.runPendingReviewBatch();
+  assert.deepEqual(h.state().pending, ['b', 'c']); assert.equal(h.state().active, true);
+  h.ctx.runPendingReviewBatch(); h.ctx.runPendingReviewBatch();
+  assert.deepEqual(h.calls, ['b', 'b', 'c']); assert.equal(h.state().active, false);
+  assert.equal(h.rows[0].status, 'draft'); assert.equal(h.triggers.length, 0);
+  h.ctx.enqueueOutcomeReview_('a'); assert.equal(h.triggers.length, 1);
+});
+
+test('web edits: trigger failure and busy lock do not falsely report a queued review', () => {
+  const h = setup(); h.lock.tryLock();
+  assert.throws(() => h.ctx.enqueueOutcomeReview_('a'), /混雑/); h.lock.releaseLock();
+  h.ctx.ScriptApp.newTrigger = () => { throw new Error('quota'); };
+  assert.throws(() => h.ctx.enqueueOutcomeReview_('a'), /quota/);
+  assert.equal(h.state().active, undefined); assert.equal(h.rows[0].text, 'a');
+});
+
+test('web edits after stop keep the active lease but do not restart the stopped backlog', () => {
+  const h = setup(); h.ctx.startPendingReviewBatch();
+  h.ctx.runOutcomeQualityGate = selected => {
+    h.ctx.stopPendingReviewBatch();
+    h.ctx.enqueueOutcomeReview_('new');
+    assert.equal(h.state().running.id, selected[0].id);
+    assert.deepEqual(h.state().pending, ['new']);
+    h.rows[0].status = 'ready';
+  };
+  h.ctx.runPendingReviewBatch();
+  assert.equal(h.state().running, null); assert.equal(h.state().active, true);
+  assert.deepEqual(h.state().pending, ['new']);
+  assert.equal(h.rows[1].status, 'draft'); assert.equal(h.rows[2].status, 'draft');
+});
