@@ -139,11 +139,12 @@ function postTick() {
     if (isDryRun()) {
       updateStockById(post.id, { status: STATUS.POSTED, posted_at: now, tweet_id: 'dry-run' });
       logEvent('post_dry_run', post.id + ': ' + text.slice(0, 60));
-      notifySlack(':sparkles: [DRY RUN] 投稿予定の内容です（実際には投稿していません）:\n' + text +
+      notifyPostSafely_(':sparkles: [DRY RUN] 投稿予定の内容です（実際には投稿していません）:\n' + text +
         (hasMedia ? '\n（画像1枚を添付予定）' : ''));
       syncSafe(post.id);
       return;
     }
+    var tweet = null;
     try {
       if (post.quote_tweet_id) verifyQuoteBeforePosting(post);
       // 画像の準備に失敗しても本文だけは出す。予約枠を落とすより、
@@ -153,23 +154,33 @@ function postTick() {
         media = prepareMediaForPost(post);
         if (media.problem) {
           logEvent('media_failed', post.id + ': ' + media.problem);
-          notifySlack(':warning: 画像を添付できませんでした（' + post.id + '）: ' + media.problem +
+          notifyPostSafely_(':warning: 画像を添付できませんでした（' + post.id + '）: ' + media.problem +
             '\n本文だけを投稿します。');
         }
       }
-      var tweet = postTweet(text, media.ids, post.quote_mode === 'native' ? String(post.quote_tweet_id) : '');
+      tweet = postTweet(text, media.ids, post.quote_mode === 'native' ? String(post.quote_tweet_id) : '');
+      if (!tweet || !/^\d+$/.test(String(tweet.id || ''))) throw new Error('Xの投稿IDを取得できませんでした。公開状況を確認してください');
       updateStockById(post.id, { status: STATUS.POSTED, posted_at: now, tweet_id: tweet.id });
       logEvent('posted', post.id + ' tweet_id=' + tweet.id + (media.ids.length ? ' media=1' : ''));
-      notifySlack(':bird: 投稿しました' + (media.ids.length ? '（画像つき）' : '') + ':\n' + text +
+      notifyPostSafely_(':bird: 投稿しました' + (media.ids.length ? '（画像つき）' : '') + ':\n' + text +
         '\nhttps://x.com/i/web/status/' + tweet.id);
     } catch (e) {
-      updateStockById(post.id, { status: STATUS.FAILED });
+      var failed = { status: STATUS.FAILED };
+      // XからIDを受け取った後の記録失敗でも、再送防止のためIDを保持する。
+      if (tweet && /^\d+$/.test(String(tweet.id || ''))) { failed.tweet_id = String(tweet.id); failed.posted_at = now; }
+      updateStockById(post.id, failed);
       logEvent('post_failed', post.id + ': ' + e);
-      notifySlack(':rotating_light: 投稿に失敗しました（' + post.id + '）: ' + e);
+      notifyPostSafely_(':rotating_light: 投稿に失敗しました（' + post.id + '）: ' + e);
     }
     syncSafe(post.id);
   });
   return due.length;
+}
+
+/** 通知の失敗をX投稿の失敗として扱わず、後続の予約投稿も止めない。 */
+function notifyPostSafely_(message) {
+  try { notifySlack(message); }
+  catch (e) { try { logEvent('post_notification_failed', String(e).slice(0, 300)); } catch (ignored) { /* 投稿結果を保持 */ } }
 }
 
 function syncSafe(id) {

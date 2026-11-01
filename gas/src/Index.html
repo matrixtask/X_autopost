@@ -113,6 +113,7 @@
   var posts = [];
   var activeTab = 'ready';
   var PAGE_SIZE = 30, page = 0, query = '', editors = Object.create(null);
+  var failureDetails = Object.create(null);
   var busy = false, busyId = '', loading = false, loadVersion = 0, toastTimer;
 
   function activity(message, error) {
@@ -392,6 +393,19 @@
         p.posted_at ? '<span>投稿 ' + esc(p.posted_at) + '</span>' : '',
       ].filter(Boolean).join('');
       var actions = '';
+      var failure = failureDetails[p.id];
+      var publishNote = failure ? failure.publish_note : p.publish_note;
+      if (p.status === 'failed') {
+        actions += '<button class="edit" data-mutation onclick="showFailure(' + arg + ')">失敗理由・次の操作</button>';
+        if (p.tweet_url) {
+          actions += '<a class="tab" href="' + esc(p.tweet_url) + '" target="_blank" rel="noopener noreferrer">Xの投稿を見る</a>';
+          actions += '<button class="save" data-mutation onclick="resolveFailure(' + arg + ', \'posted\')">投稿済みに戻す</button>';
+        } else if (failure) {
+          actions += '<button class="save" data-mutation onclick="resolveFailure(' + arg + ', \'ready\')">未投稿を確認して承認待ちへ</button>';
+          actions += '<button class="edit" data-mutation onclick="toggleEdit(' + arg + ')">編集して再審査</button>';
+        }
+        actions += '<button class="reject" data-mutation onclick="resolveFailure(' + arg + ', \'rejected\')">今回は見送る</button>';
+      }
       if (p.status === 'ready' || p.status === 'stock') {
         actions += '<button class="approve" data-mutation onclick="setStatus(' + arg + ', \'approved\')">承認して予約へ</button>';
       }
@@ -399,15 +413,20 @@
         actions += '<button class="edit" data-mutation onclick="toggleEdit(' + arg + ')">編集</button>';
         actions += '<button class="reject" data-mutation onclick="setStatus(' + arg + ', \'rejected\')">捨てる</button>';
       }
-      if (p.status === 'rejected') {
+      if (p.status === 'rejected' && !p.tweet_url) {
         actions += '<button class="edit" data-mutation onclick="setStatus(' + arg + ', \'stock\')">ストックに戻す</button>';
       }
       var editing = editors[p.id] && editors[p.id].open;
       return (
         '<div class="card" id="card-' + id + '" aria-busy="' + (busy && busyId === p.id) + '">' +
         '<div class="meta">' + meta + '</div>' +
+        (p.status === 'failed' ? '<div class="reason" role="note">' + (failure
+          ? '<strong>' + esc(failure.title) + '</strong><br>' + esc(failure.next) +
+            (failure.failed_at ? '<br>失敗日時: ' + esc(failure.failed_at) : '') +
+            (failure.error ? '<details class="review"><summary>エラー詳細</summary><div class="reason">' + esc(failure.error) + '</div></details>' : '')
+          : '投稿失敗は、内容の不合格とは別です。「失敗理由・次の操作」で原因を確認できます。') + '</div>' : '') +
         (p.edit_reason ? '<div class="reason">編集判断: ' + esc(p.edit_reason) + '</div>' : '') +
-        (p.publish_note ? '<div class="reason">予約前の確認: ' + esc(p.publish_note) + '</div>' : '') +
+        (publishNote ? '<div class="reason">予約前の確認: ' + esc(publishNote) + '</div>' : '') +
         (p.quote_preview ? '<div class="reason" style="white-space:pre-wrap">' + esc(p.quote_preview) + '</div>' : '') +
         '<div class="body-text" id="text-' + id + '"' + (editing ? ' hidden' : '') + '>' + esc(p.text) +
         (p.has_media ? ' <span title="投稿時に画像が添付されます">🖼</span>' : '') + '</div>' +
@@ -432,7 +451,7 @@
     google.script.run
       .withSuccessHandler(function (json) {
         if (version !== loadVersion) return;
-        loading = false; posts = JSON.parse(json);
+        loading = false; posts = JSON.parse(json); failureDetails = Object.create(null);
         analyticsCache = {}; analyticsRequests = {}; analyticsGeneration++;
         activity('更新済み。本文の変更は保存後にバックグラウンドで再審査します。');
         renderTabs(); renderCurrent(); updateControls();
@@ -460,10 +479,36 @@
       .api_setStatus(TOKEN, id, status, '', { includePost: true });
   }
 
+  function showFailure(id) {
+    if (!beginMutation('失敗理由を確認しています…', id)) return;
+    google.script.run.withSuccessHandler(function (json) {
+      failureDetails[id] = JSON.parse(json);
+      finishMutation('原因と次の操作を表示しました'); renderCurrent();
+    }).withFailureHandler(function (e) { finishMutation(e.message, true); }).api_postFailure(TOKEN, id);
+  }
+
+  function resolveFailure(id, action) {
+    if (busy || loading) return;
+    if (hasUnsaved(id)) { activity('編集した本文を先に保存してください。', true); return; }
+    var message = action === 'ready' ? 'X上でこの投稿がまだ公開されていないことを確認しましたか？承認待ちに戻します。再投稿には改めて承認が必要です。'
+      : action === 'posted' ? 'Xで公開済みと確認できましたか？保存済みの投稿IDを使い、投稿済みに戻します。'
+      : '今回は見送りますか？本文・履歴は残ります。';
+    if (!confirm(message) || !beginMutation('判断を保存しています…', id)) return;
+    google.script.run.withSuccessHandler(function (json) {
+      delete editors[id]; delete failureDetails[id]; applyMutation(id, json);
+    }).withFailureHandler(function (e) { finishMutation(e.message, true); })
+      .api_resolveFailedPost(TOKEN, id, action, action === 'ready');
+  }
+
   function toggleEdit(id) {
     if (busy || loading) return;
     var post = posts.filter(function (p) { return p.id === id; })[0];
+    if (post.status === 'failed' && !(editors[id] && editors[id].open)) {
+      if (post.tweet_url) { activity('投稿IDが保存されています。Xの投稿を先に確認してください。', true); return; }
+      if (!confirm('Xでまだ公開されていないことを確認しましたか？編集した本文は保存後に再審査します。')) return;
+    }
     if (!editors[id]) editors[id] = { text: post.text, open: false };
+    if (post.status === 'failed') editors[id].confirmedNotPublished = true;
     editors[id].open = !editors[id].open;
     document.getElementById('card-' + id).outerHTML = renderCard(post);
     if (editors[id].open) document.getElementById('ta-' + id).focus();
@@ -485,7 +530,7 @@
     google.script.run
       .withSuccessHandler(function (json) { delete editors[id]; applyMutation(id, json); })
       .withFailureHandler(function (e) { finishMutation('保存を確認できませんでした: ' + e.message + '。入力内容は画面に残しています。', true); })
-      .api_updateText(TOKEN, id, value, '', { includePost: true });
+      .api_updateText(TOKEN, id, value, '', { includePost: true, confirmedNotPublished: editors[id].confirmedNotPublished === true });
   }
 
   function canBatch() {
