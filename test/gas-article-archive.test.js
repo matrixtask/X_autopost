@@ -127,12 +127,14 @@ test('archive: future source bundle requires per-version consent, excludes AI an
 test('archive: human editing and approval preserve model text but do not label AI scoring as human preference', () => {
   const h = fixture(); h.db.Stock.push(post());
   h.ctx.archiveEditorialRows(h.db.Stock, 'model', 'generated');
-  h.ctx.runQualityGate = () => { h.db.Stock[0].status = 'ready'; };
+  h.ctx.runQualityGate = () => { throw new Error('save must not wait for scoring'); };
   h.ctx.api_updateText('token', 'p', '本人が直した表現', '一般論を消した');
   const edit = h.db.EditorialHistory.at(-1);
   assert.equal(edit.actor_type, 'user'); assert.equal(edit.event_type, 'text_edited');
   assert.equal(edit.text, '本人が直した表現'); assert.equal(edit.reason, '一般論を消した');
   assert.equal(h.db.EditorialHistory[0].text, 'AIが書いた草稿');
+  assert.equal(h.db.Stock[0].status, 'draft');
+  h.db.Stock[0].status = 'ready'; // Later background review is not a human preference.
   h.ctx.api_setStatus('token', 'p', 'approved');
   assert.equal(h.db.EditorialHistory.at(-2).actor_type, 'unknown'); // observed ready from scoring
   assert.equal(h.db.EditorialHistory.at(-1).actor_type, 'user');

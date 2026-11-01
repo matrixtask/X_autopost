@@ -203,34 +203,43 @@ function doPost(e) {
 
 function api_listPosts(token) {
   assertAccess(token);
-  var rows = readTable(SHEET.STOCK).map(function (r) {
-    return {
-      id: String(r.id),
-      created_at: String(r.created_at),
-      theme: String(r.theme),
-      category: String(r.category),
-      text: String(r.text),
-      post_format: String(r.post_format || 'single'),
-      format_label: stockFormatLabel(r),
-      edit_group: String(r.edit_group || ''),
-      source_idx: String(r.source_idx || ''),
-      edit_reason: String(r.edit_reason || ''),
-      publish_note: stockPublishingProblem(r),
-      quote_preview: r.quote_tweet_id ? quotePreview(r) : '',
-      score: r.score === '' ? null : Number(r.score),
-      score_version: String(r.score_version || ''),
-      score_reason: r.score_version === OUTCOME_SCORE_VERSION ? outcomeReviewFeedback(r) : String(r.score_reason || ''),
-      status: String(r.status),
-      scheduled_at: String(r.scheduled_at || ''),
-      posted_at: String(r.posted_at || ''),
-      has_media: String(r.media_url || '').trim() !== '',
-    };
-  });
+  var rows = readTable(SHEET.STOCK).map(webPostView_);
   rows.sort(function (a, b) { return a.created_at < b.created_at ? 1 : -1; });
   return JSON.stringify(rows);
 }
 
-function api_setStatus(token, id, status, reason) {
+function webPostView_(r) {
+  return {
+    id: String(r.id),
+    created_at: String(r.created_at),
+    theme: String(r.theme),
+    category: String(r.category),
+    text: String(r.text),
+    post_format: String(r.post_format || 'single'),
+    format_label: stockFormatLabel(r),
+    edit_group: String(r.edit_group || ''),
+    source_idx: String(r.source_idx || ''),
+    edit_reason: String(r.edit_reason || ''),
+    publish_note: stockPublishingProblem(r),
+    quote_preview: r.quote_tweet_id ? quotePreview(r) : '',
+    score: r.score === '' ? null : Number(r.score),
+    score_version: String(r.score_version || ''),
+    score_reason: r.score_version === OUTCOME_SCORE_VERSION ? outcomeReviewFeedback(r) : String(r.score_reason || ''),
+    status: String(r.status),
+    scheduled_at: String(r.scheduled_at || ''),
+    posted_at: String(r.posted_at || ''),
+    has_media: String(r.media_url || '').trim() !== '',
+  };
+}
+
+/** 既存クライアントには文字列、新UIには変更した1件だけを返す。 */
+function webMutationResult_(id, message, options) {
+  if (!options || !options.includePost) return message;
+  var row = readTable(SHEET.STOCK).filter(function (r) { return String(r.id) === String(id); })[0];
+  return JSON.stringify({ message: message, post: row ? webPostView_(row) : null });
+}
+
+function api_setStatus(token, id, status, reason, options) {
   assertAccess(token);
   var allowed = [STATUS.APPROVED, STATUS.REJECTED, STATUS.READY, STATUS.STOCK];
   if (allowed.indexOf(status) < 0) throw new Error('不正なステータス: ' + status);
@@ -241,10 +250,10 @@ function api_setStatus(token, id, status, reason) {
   if (typeof archiveWebStock === 'function') archiveWebStock(id, 'user', 'status_changed', reason);
   logEvent('webapp_status', id + ' -> ' + status);
   try { syncStockRowToNotion(id); } catch (e) { logEvent('notion_error', id + ': ' + e); }
-  return 'ok';
+  return options && options.includePost ? webMutationResult_(id, '更新しました', options) : 'ok';
 }
 
-function api_updateText(token, id, text, reason) {
+function api_updateText(token, id, text, reason, options) {
   assertAccess(token);
   var t = String(text || '').trim();
   if (!t) throw new Error('本文が空です');
@@ -267,13 +276,11 @@ function api_updateText(token, id, text, reason) {
   var message = '保存しました';
   if (shouldRescore) {
     try {
-      runQualityGate(); // 編集直後に即再採点（リライトはかけず、あなたの文をそのまま採点）
-      var updated = readTable(SHEET.STOCK).filter(function (r) { return String(r.id) === String(id); })[0];
-      if (updated && updated.score !== '') {
-        var passed = [STATUS.READY, STATUS.APPROVED].indexOf(String(updated.status)) >= 0;
-        message = (updated.score_version === OUTCOME_SCORE_VERSION ? '新5軸・参考値: ' : '再採点: ') +
-          updated.score + '点（' + (passed ? '承認待ち' : '保留') + '）' +
-          (updated.score_reason ? ' / ' + updated.score_reason : '');
+      if (useOutcomeQuality() || row.edit_meta) {
+        enqueueOutcomeReview_(id);
+        message = '保存しました。再審査はバックグラウンドで順次実行します。結果は再読込で確認できます。';
+      } else {
+        message = '保存しました（旧方式の再採点は次回品質ゲートで実行）';
       }
     } catch (e) {
       logEvent('rescore_error', id + ': ' + e);
@@ -281,7 +288,7 @@ function api_updateText(token, id, text, reason) {
     }
   }
   try { syncStockRowToNotion(id); } catch (e) { logEvent('notion_error', id + ': ' + e); }
-  return message;
+  return webMutationResult_(id, message, options);
 }
 
 /**

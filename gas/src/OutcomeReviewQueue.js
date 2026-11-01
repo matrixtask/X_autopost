@@ -3,6 +3,31 @@ var OUTCOME_QUEUE_KEY = 'OUTCOME_REVIEW_QUEUE';
 var OUTCOME_QUEUE_HANDLER = 'runPendingReviewBatch';
 var OUTCOME_QUEUE_LEASE_MS = 7 * 60000;
 
+/** Web保存から1件だけ追加。審査中の同じ稿も、変更後の本文で再審査する。 */
+function enqueueOutcomeReview_(id) {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(1000)) throw new Error('審査予約が混雑しています');
+  try {
+    var props = PropertiesService.getScriptProperties();
+    var state = JSON.parse(props.getProperty(OUTCOME_QUEUE_KEY) || '{}');
+    var live = state.running && Date.now() - state.running.started_at < OUTCOME_QUEUE_LEASE_MS;
+    if (!state.active) {
+      // 本人が停止した旧バッチの残りは再開せず、実行中の1件だけを引き継ぐ。
+      state = { active: true, pending: [], running: live ? state.running : null, total: live ? 1 : 0,
+        counts: { ready: 0, held: 0, failed: 0, skipped: 0 } };
+    }
+    var exists = ScriptApp.getProjectTriggers().some(function (t) {
+      return t.getHandlerFunction() === OUTCOME_QUEUE_HANDLER;
+    });
+    // 登録失敗時は保存済み本文を残し、呼び出し元が次回品質ゲート待ちと表示する。
+    if (!exists) ScriptApp.newTrigger(OUTCOME_QUEUE_HANDLER).timeBased().everyMinutes(1).create();
+    id = String(id);
+    if (state.pending.indexOf(id) < 0) { state.pending.push(id); state.total++; }
+    state.active = true;
+    props.setProperty(OUTCOME_QUEUE_KEY, JSON.stringify(state));
+  } finally { lock.releaseLock(); }
+}
+
 /** GASから一度実行。開始時点の未採点稿を最大100件、各1回ずつ審査する。 */
 function startPendingReviewBatch() {
   var lock = LockService.getScriptLock();

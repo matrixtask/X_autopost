@@ -8,9 +8,10 @@
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text); font-family: -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; }
-  header { position: sticky; top: 0; background: var(--card); border-bottom: 1px solid var(--line); padding: 12px 16px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  header { position: sticky; z-index: 2; top: 0; background: var(--card); border-bottom: 1px solid var(--line); padding: 12px 16px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   header h1 { font-size: 16px; margin: 0 auto 0 0; }
-  .tabs { display: flex; gap: 6px; overflow-x: auto; padding: 10px 12px; }
+  .tabs { display: flex; gap: 6px; overflow-x: auto; padding: 10px 12px; scrollbar-width: none; }
+  .tabs::-webkit-scrollbar { display: none; }
   .tab { border: 1px solid var(--line); background: var(--card); color: var(--sub); border-radius: 999px; padding: 6px 12px; font-size: 13px; white-space: nowrap; cursor: pointer; }
   .tab.active { border-color: var(--accent); color: var(--accent); font-weight: 600; }
   main { padding: 0 12px 40px; max-width: 640px; margin: 0 auto; }
@@ -59,19 +60,40 @@
   .atable th, .atable td { padding: 4px 8px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
   .atable th { color: var(--sub); font-weight: 600; }
   .atable td.tx, .atable th:first-child { text-align: left; }
+  button:disabled { opacity: .5; cursor: wait; }
+  button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  .toolbar { max-width: 640px; margin: auto; padding: 0 12px 12px; }
+  #search { width: 100%; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--text); font: inherit; }
+  #activity { min-height: 2.5em; padding: 10px 0 0; font-size: 13px; color: var(--sub); line-height: 1.5; overflow-wrap: anywhere; }
+  #activity.error { color: var(--ng); }
+  .batch-menu { position: relative; }
+  summary { cursor: pointer; }
+  .batch-menu summary { padding: 10px; font-size: 13px; color: var(--sub); }
+  .batch-actions { position: absolute; right: 0; top: 100%; width: 230px; padding: 10px; display: grid; gap: 8px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 8px 24px #0002; }
+  .body-text, .reason { overflow-wrap: anywhere; }
+  .review { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; font-size: 13px; color: var(--sub); }
+  .review .reason { white-space: pre-wrap; }
+  .list-count { font-size: 12px; color: var(--sub); margin: 0 0 10px; }
+  .pager { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 20px 0; font-size: 13px; }
+  .card[aria-busy="true"] { border-color: var(--accent); }
+  #toast { max-width: calc(100vw - 24px); width: max-content; border-radius: 12px; z-index: 3; }
+  @media (max-width: 480px) { header { padding: 10px 12px; } header h1 { font-size: 14px; } .actions button { min-height: 44px; } }
 </style>
 
 <header>
-  <h1>X Autopost ストック</h1>
-  <button class="ghost" onclick="load()">再読込</button>
-  <button class="ghost" onclick="refineNow()">リライト</button>
-  <button class="ghost" onclick="approveAll()">全承認</button>
-  <button class="ghost" onclick="scheduleNow()">予約実行</button>
-  <button class="ghost" onclick="forceApproveStock()">ストック全承認→予約</button>
+  <h1>X Autopost</h1>
+  <button class="ghost" id="reload" onclick="load()">再読込</button>
+  <details class="batch-menu"><summary>一括操作</summary><div class="batch-actions">
+    <button class="ghost" data-mutation onclick="refineNow()">リライト・再審査</button>
+    <button class="ghost" data-mutation onclick="approveAll()">承認待ちを全承認</button>
+    <button class="ghost" data-mutation onclick="scheduleNow()">承認済みを予約</button>
+    <button class="reject" data-mutation onclick="forceApproveStock()">保留も全承認して予約</button>
+  </div></details>
 </header>
 <div class="tabs" id="tabs"></div>
+<div class="toolbar"><input type="search" id="search" aria-label="投稿を検索" placeholder="本文・テーマ・採点コメントを検索" oninput="searchPosts(this.value)"><div id="activity" role="status" aria-live="polite"></div></div>
 <main id="list"><div class="empty">読み込み中…</div></main>
-<div id="toast"></div>
+<div id="toast" role="status" aria-live="polite"></div>
 
 <script>
   var TOKEN = '<?= token ?>';
@@ -80,20 +102,53 @@
     { key: 'scheduled', label: '予約済み' },
     { key: 'approved', label: '承認済み' },
     { key: 'stock', label: 'ストック' },
+    { key: 'draft', label: '審査待ち' },
+    { key: 'failed', label: '投稿失敗' },
     { key: 'posted', label: '投稿済み' },
     { key: 'all', label: 'すべて' },
     { key: 'analytics', label: '分析' },
   ];
-  var STATUS_LABEL = { draft: '未採点', stock: '保留', ready: '承認待ち', approved: '承認済み', scheduled: '予約済み', posted: '投稿済み', rejected: '却下', failed: '失敗' };
+  var STATUS_LABEL = { draft: '審査待ち', stock: '保留', ready: '承認待ち', approved: '承認済み', scheduled: '予約済み', posted: '投稿済み', rejected: '却下', failed: '失敗' };
   var CATEGORY_LABEL = { evergreen: '定番', news: '時事', neta: 'ネタ', manual: '手動' };
   var posts = [];
   var activeTab = 'ready';
+  var PAGE_SIZE = 30, page = 0, query = '', editors = Object.create(null);
+  var busy = false, busyId = '', loading = false, loadVersion = 0, toastTimer;
+
+  function activity(message, error) {
+    var el = document.getElementById('activity');
+    el.textContent = message; el.className = error ? 'error' : '';
+  }
+
+  function updateControls() {
+    document.getElementById('reload').disabled = busy || loading;
+    document.getElementById('reload').textContent = loading ? '読込中…' : '再読込';
+    document.querySelectorAll('[data-mutation]').forEach(function (el) { el.disabled = busy || loading; });
+    document.querySelectorAll('textarea').forEach(function (el) { el.disabled = busy && el.id === 'ta-' + busyId; });
+  }
+
+  function beginMutation(message, id) {
+    if (busy || loading) return false;
+    busy = true; busyId = id || ''; loadVersion++;
+    activity(message); updateControls();
+    var card = document.getElementById('card-' + busyId);
+    if (card) card.setAttribute('aria-busy', 'true');
+    return true;
+  }
+
+  function finishMutation(message, error) {
+    var card = document.getElementById('card-' + busyId);
+    if (card) card.setAttribute('aria-busy', 'false');
+    busy = false; busyId = ''; activity(message, error); updateControls();
+    if (!error) toast(message);
+  }
 
   function toast(msg) {
     var el = document.getElementById('toast');
     el.textContent = msg;
     el.classList.add('show');
-    setTimeout(function () { el.classList.remove('show'); }, 2200);
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { el.classList.remove('show'); }, 4500);
   }
 
   function renderTabs() {
@@ -104,9 +159,10 @@
     }).join('');
   }
 
-  var analyticsData = null;
+  var analyticsData = null, analyticsLoading = false;
   function setTab(key) {
-    activeTab = key;
+    activeTab = key; page = 0;
+    document.getElementById('search').hidden = key === 'analytics';
     renderTabs();
     if (key === 'analytics') { renderAnalytics(); } else { renderList(); }
   }
@@ -115,9 +171,14 @@
     var el = document.getElementById('list');
     if (!analyticsData) {
       el.innerHTML = '<div class="empty">集計中…</div>';
+      if (analyticsLoading) return;
+      analyticsLoading = true;
       google.script.run
-        .withSuccessHandler(function (json) { analyticsData = JSON.parse(json); renderAnalytics(); })
-        .withFailureHandler(function (e) { el.innerHTML = '<div class="empty">' + esc(e.message) + '</div>'; })
+        .withSuccessHandler(function (json) { analyticsLoading = false; analyticsData = JSON.parse(json); if (activeTab === 'analytics') renderAnalytics(); })
+        .withFailureHandler(function (e) {
+          analyticsLoading = false;
+          if (activeTab === 'analytics') el.innerHTML = '<div class="empty">' + esc(e.message) + '<p><button class="ghost" onclick="renderAnalytics()">再試行</button></p></div>';
+        })
         .api_analytics(TOKEN);
       return;
     }
@@ -278,9 +339,24 @@
 
   function renderList() {
     var items = sortForTab(activeTab === 'all' ? posts : posts.filter(function (p) { return p.status === activeTab; }), activeTab);
+    if (query) items = items.filter(function (p) {
+      return [p.text, p.theme, p.score_reason].join(' ').toLowerCase().indexOf(query) >= 0;
+    });
+    page = Math.min(page, Math.max(0, Math.ceil(items.length / PAGE_SIZE) - 1));
+    var start = page * PAGE_SIZE;
     var el = document.getElementById('list');
-    if (!items.length) { el.innerHTML = '<div class="empty">ここにはまだ何もありません</div>'; return; }
-    el.innerHTML = items.map(function (p) {
+    if (!items.length) { el.innerHTML = '<div class="empty">' + (query ? '一致する投稿がありません' : 'ここにはまだ何もありません') + '</div>'; updateControls(); return; }
+    el.innerHTML = '<p class="list-count">' + items.length + '件中 ' + (start + 1) + '–' + Math.min(start + PAGE_SIZE, items.length) + '件</p>' + items.slice(start, start + PAGE_SIZE).map(renderCard).join('') +
+      (items.length > PAGE_SIZE ? '<div class="pager"><button class="ghost" onclick="changePage(-1)"' + (page === 0 ? ' disabled' : '') + '>前へ</button><span>' + (page + 1) + ' / ' + Math.ceil(items.length / PAGE_SIZE) + '</span><button class="ghost" onclick="changePage(1)"' + (start + PAGE_SIZE >= items.length ? ' disabled' : '') + '>次へ</button></div>' : '');
+    updateControls();
+  }
+
+  function searchPosts(value) { query = value.trim().toLowerCase(); page = 0; renderList(); }
+  function changePage(delta) { page += delta; renderList(); window.scrollTo(0, 0); }
+
+  function renderCard(p) {
+      // IDは属性・JS文字列の両方で安全な形にする。
+      var id = esc(p.id), arg = esc(JSON.stringify(p.id));
       var meta = [
         '<span class="badge b-' + p.status + '">' + (STATUS_LABEL[p.status] || p.status) + '</span>',
         p.category ? '<span>' + (CATEGORY_LABEL[p.category] || esc(p.category)) + '</span>' : '',
@@ -292,107 +368,148 @@
       ].filter(Boolean).join('');
       var actions = '';
       if (p.status === 'ready' || p.status === 'stock') {
-        actions += '<button class="approve" onclick="setStatus(\'' + p.id + '\', \'approved\')">承認して予約へ</button>';
+        actions += '<button class="approve" data-mutation onclick="setStatus(' + arg + ', \'approved\')">承認して予約へ</button>';
       }
       if (['ready', 'stock', 'approved', 'scheduled', 'draft'].indexOf(p.status) >= 0) {
-        actions += '<button class="edit" onclick="toggleEdit(\'' + p.id + '\')">編集</button>';
-        actions += '<button class="reject" onclick="setStatus(\'' + p.id + '\', \'rejected\')">捨てる</button>';
+        actions += '<button class="edit" data-mutation onclick="toggleEdit(' + arg + ')">編集</button>';
+        actions += '<button class="reject" data-mutation onclick="setStatus(' + arg + ', \'rejected\')">捨てる</button>';
       }
       if (p.status === 'rejected') {
-        actions += '<button class="edit" onclick="setStatus(\'' + p.id + '\', \'stock\')">ストックに戻す</button>';
+        actions += '<button class="edit" data-mutation onclick="setStatus(' + arg + ', \'stock\')">ストックに戻す</button>';
       }
+      var editing = editors[p.id] && editors[p.id].open;
       return (
-        '<div class="card" id="card-' + p.id + '">' +
+        '<div class="card" id="card-' + id + '" aria-busy="' + (busy && busyId === p.id) + '">' +
         '<div class="meta">' + meta + '</div>' +
         (p.edit_reason ? '<div class="reason">編集判断: ' + esc(p.edit_reason) + '</div>' : '') +
         (p.publish_note ? '<div class="reason">予約前の確認: ' + esc(p.publish_note) + '</div>' : '') +
         (p.quote_preview ? '<div class="reason" style="white-space:pre-wrap">' + esc(p.quote_preview) + '</div>' : '') +
-        '<div class="body-text" id="text-' + p.id + '">' + esc(p.text) +
+        '<div class="body-text" id="text-' + id + '"' + (editing ? ' hidden' : '') + '>' + esc(p.text) +
         (p.has_media ? ' <span title="投稿時に画像が添付されます">🖼</span>' : '') + '</div>' +
-        '<div id="editor-' + p.id + '" style="display:none">' +
-        '<textarea id="ta-' + p.id + '">' + esc(p.text) + '</textarea>' +
-        '<div class="actions"><button class="save" onclick="saveText(\'' + p.id + '\')">保存</button>' +
-        '<button class="ghost" onclick="toggleEdit(\'' + p.id + '\')">やめる</button></div></div>' +
-        (p.score_reason ? '<div class="reason">採点コメント: ' + esc(p.score_reason) + '</div>' : '') +
+        (editing ? '<div id="editor-' + id + '"><textarea aria-label="投稿の本文" id="ta-' + id + '" oninput="rememberDraft(' + arg + ', this.value)">' + esc(editors[p.id].text) + '</textarea>' +
+        '<div class="reason">保存後は再審査を待ってから承認してください。</div>' +
+        '<div class="actions"><button class="save" data-mutation onclick="saveText(' + arg + ')">保存</button>' +
+        '<button class="ghost" data-mutation onclick="toggleEdit(' + arg + ')">編集を閉じる</button></div></div>' : '') +
+        (p.score_reason ? '<details class="review"><summary>採点コメントを見る</summary><div class="reason">' + esc(p.score_reason) + '</div></details>' : '') +
         (actions ? '<div class="actions">' + actions + '</div>' : '') +
         '</div>'
       );
-    }).join('');
   }
 
   function renderCurrent() {
-    if (activeTab === 'analytics') { analyticsData = null; renderAnalytics(); } else { renderList(); }
+    if (activeTab === 'analytics') { renderAnalytics(); } else { renderList(); }
   }
 
   function load() {
+    if (loading || busy) return;
+    loading = true; var version = ++loadVersion;
+    activity('最新の投稿を読み込んでいます…'); updateControls();
     google.script.run
-      .withSuccessHandler(function (json) { posts = JSON.parse(json); renderTabs(); renderCurrent(); })
-      .withFailureHandler(function (e) { toast('読み込み失敗: ' + e.message); })
+      .withSuccessHandler(function (json) {
+        if (version !== loadVersion) return;
+        loading = false; posts = JSON.parse(json); analyticsData = null;
+        activity('更新済み。本文の変更は保存後にバックグラウンドで再審査します。');
+        renderTabs(); renderCurrent(); updateControls();
+      })
+      .withFailureHandler(function (e) {
+        if (version !== loadVersion) return;
+        loading = false; activity('読み込み失敗: ' + e.message + '。再読込で再試行できます。', true); updateControls();
+      })
       .api_listPosts(TOKEN);
   }
 
+  function applyMutation(id, json) {
+    var result = JSON.parse(json);
+    if (result.post) posts = posts.map(function (p) { return p.id === id ? result.post : p; });
+    finishMutation(result.message || '保存しました');
+    renderTabs(); renderCurrent();
+  }
+
   function setStatus(id, status) {
+    if (hasUnsaved(id)) { activity('編集した本文を先に保存してください。', true); return; }
+    if (!beginMutation('状態を保存しています…', id)) return;
     google.script.run
-      .withSuccessHandler(function () { toast('更新しました'); load(); })
-      .withFailureHandler(function (e) { toast(e.message); })
-      .api_setStatus(TOKEN, id, status);
+      .withSuccessHandler(function (json) { delete editors[id]; applyMutation(id, json); })
+      .withFailureHandler(function (e) { finishMutation('状態を確認できませんでした: ' + e.message + '。再読込で確認してください。', true); })
+      .api_setStatus(TOKEN, id, status, '', { includePost: true });
   }
 
   function toggleEdit(id) {
-    var editor = document.getElementById('editor-' + id);
-    var text = document.getElementById('text-' + id);
-    var open = editor.style.display === 'none';
-    editor.style.display = open ? 'block' : 'none';
-    text.style.display = open ? 'none' : 'block';
+    if (busy || loading) return;
+    var post = posts.filter(function (p) { return p.id === id; })[0];
+    if (!editors[id]) editors[id] = { text: post.text, open: false };
+    editors[id].open = !editors[id].open;
+    document.getElementById('card-' + id).outerHTML = renderCard(post);
+    if (editors[id].open) document.getElementById('ta-' + id).focus();
   }
+
+  function rememberDraft(id, text) { editors[id].text = text; }
+  function hasUnsaved(id) {
+    return posts.some(function (p) { return (!id || p.id === id) && editors[p.id] && editors[p.id].text !== p.text; });
+  }
+  window.addEventListener('beforeunload', function (event) {
+    if (hasUnsaved() || busy) { event.preventDefault(); event.returnValue = ''; }
+  });
 
   function saveText(id) {
     var value = document.getElementById('ta-' + id).value;
-    toast('保存して再採点中…');
+    rememberDraft(id, value);
+    if (!value.trim()) { activity('本文を入力してください。', true); return; }
+    if (!beginMutation('本文を保存しています…', id)) return;
     google.script.run
-      .withSuccessHandler(function (msg) { toast(msg || '保存しました'); load(); })
-      .withFailureHandler(function (e) { toast(e.message); })
-      .api_updateText(TOKEN, id, value);
+      .withSuccessHandler(function (json) { delete editors[id]; applyMutation(id, json); })
+      .withFailureHandler(function (e) { finishMutation('保存を確認できませんでした: ' + e.message + '。入力内容は画面に残しています。', true); })
+      .api_updateText(TOKEN, id, value, '', { includePost: true });
   }
 
+  function canBatch() {
+    if (busy || loading) return false;
+    if (hasUnsaved()) { activity('編集中の本文を保存してから一括操作してください。', true); return false; }
+    return true;
+  }
+  function batchSuccess(message) { finishMutation(message); load(); activity(message); }
+  function batchFailure(e) { finishMutation('処理結果を確認できませんでした: ' + e.message + '。再読込で確認してください。', true); }
+
   function refineNow() {
-    toast('リライト＋再採点を実行中…（1分ほどかかります）');
+    if (!canBatch() || !beginMutation('リライト＋再採点を実行中…（1分以上かかる場合があります）')) return;
     google.script.run
-      .withSuccessHandler(function (msg) { toast(msg); load(); })
-      .withFailureHandler(function (e) { toast(e.message); })
+      .withSuccessHandler(batchSuccess)
+      .withFailureHandler(batchFailure)
       .api_refineNow(TOKEN);
   }
 
   function approveAll() {
+    if (!canBatch()) return;
     var n = posts.filter(function (p) { return p.status === 'ready'; }).length;
     if (!n) { toast('承認待ちが0件です'); return; }
     if (!confirm('承認待ち ' + n + '件をすべて承認しますか？')) return;
-    toast('一括承認中…');
+    if (!beginMutation('一括承認中…')) return;
     google.script.run
-      .withSuccessHandler(function (msg) { toast(msg); load(); })
-      .withFailureHandler(function (e) { toast(e.message); })
+      .withSuccessHandler(batchSuccess)
+      .withFailureHandler(batchFailure)
       .api_approveAll(TOKEN);
   }
 
   function forceApproveStock() {
+    if (!canBatch()) return;
     var n = posts.filter(function (p) { return p.status === 'stock' || p.status === 'ready'; }).length;
     if (!n) { toast('保留ストック・承認待ちが0件です'); return; }
     if (!confirm('採点に関係なく、保留ストックと承認待ちの ' + n + '件をすべて承認して予約します。よろしいですか？')) return;
-    toast('強制承認と予約を実行中…');
+    if (!beginMutation('強制承認と予約を実行中…')) return;
     google.script.run
-      .withSuccessHandler(function (msg) { toast(msg); load(); })
-      .withFailureHandler(function (e) { toast(e.message); })
+      .withSuccessHandler(batchSuccess)
+      .withFailureHandler(batchFailure)
       .api_forceApproveStock(TOKEN);
   }
 
   function scheduleNow() {
+    if (!canBatch() || !beginMutation('承認済みの投稿を予約しています…')) return;
     google.script.run
       .withSuccessHandler(function (json) {
         var n = JSON.parse(json).length;
-        toast(n ? n + '件を予約しました' : '予約対象（承認済み）がありません');
-        load();
+        batchSuccess(n ? n + '件を予約しました' : '予約対象（承認済み）がありません');
       })
-      .withFailureHandler(function (e) { toast(e.message); })
+      .withFailureHandler(batchFailure)
       .api_scheduleNow(TOKEN);
   }
 
