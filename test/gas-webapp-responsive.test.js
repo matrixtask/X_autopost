@@ -126,6 +126,24 @@ function emptyAnalytics(key) {
   return JSON.stringify({ period: { key, label: key + '日', from: '2026-10-03', through: '2026-11-01' }, total: { n: 0 } });
 }
 
+test('failed cards reveal recovery actions and require confirmation without issuing a publish request', () => {
+  const h = client(); h.ctx.posts[0].status = 'failed'; h.ctx.setTab('failed');
+  assert.match(h.element('list').innerHTML, /失敗理由・次の操作/);
+  assert.match(h.element('list').innerHTML, /今回は見送る/);
+  assert.doesNotMatch(h.element('list').innerHTML, /承認して予約へ/);
+  h.ctx.showFailure('p0'); h.calls[1].ok(JSON.stringify({ title: 'APIの利用制限', next: '解除を待ってください', error: '<script>', publish_note: '' }));
+  assert.match(h.element('list').innerHTML, /編集して再審査/);
+  assert.match(h.element('list').innerHTML, /&lt;script&gt;/);
+  h.ctx.confirm = () => false; h.ctx.resolveFailure('p0', 'ready'); assert.equal(h.calls.length, 2);
+  h.ctx.confirm = () => true; h.ctx.resolveFailure('p0', 'ready');
+  assert.equal(h.calls[2].name, 'api_resolveFailedPost'); assert.equal(h.calls[2].args[3], true);
+  h.calls[2].ok(JSON.stringify({ post: { ...h.rows[0], status: 'ready' }, message: '承認待ちに戻しました' }));
+  assert.equal(h.ctx.posts[0].status, 'ready'); assert.equal(h.calls.length, 3);
+  h.ctx.posts[0].status = 'failed'; h.ctx.posts[0].tweet_url = 'https://x.com/i/web/status/1234567890'; h.ctx.renderList();
+  assert.match(h.element('list').innerHTML, /投稿済みに戻す/);
+  assert.doesNotMatch(h.element('list').innerHTML, /編集して再審査/);
+});
+
 test('analytics switches periods during loading, caches each result, and ignores stale successes/errors', () => {
   const h = client(); h.ctx.setTab('analytics'); h.ctx.setAnalyticsPeriod('30'); h.ctx.setAnalyticsPeriod('90');
   assert.deepEqual(h.calls.slice(1).map(c => c.args[1]), ['all', '30', '90']);

@@ -228,6 +228,7 @@ function webPostView_(r) {
     status: String(r.status),
     scheduled_at: String(r.scheduled_at || ''),
     posted_at: String(r.posted_at || ''),
+    tweet_url: storedTweetUrl_(r),
     has_media: String(r.media_url || '').trim() !== '',
   };
 }
@@ -243,6 +244,13 @@ function api_setStatus(token, id, status, reason, options) {
   assertAccess(token);
   var allowed = [STATUS.APPROVED, STATUS.REJECTED, STATUS.READY, STATUS.STOCK];
   if (allowed.indexOf(status) < 0) throw new Error('不正なステータス: ' + status);
+  var current = readTable(SHEET.STOCK).filter(function (r) { return String(r.id) === String(id); })[0];
+  if (current && storedTweetUrl_(current) && status !== STATUS.REJECTED) {
+    throw new Error('投稿IDが保存されています。同じ稿を再投稿には戻せません');
+  }
+  if (current && current.status === STATUS.FAILED && status !== STATUS.REJECTED) {
+    throw new Error('投稿失敗の「失敗理由・次の操作」から公開状況を確認してください');
+  }
   var updates = { status: status };
   if (status !== STATUS.SCHEDULED) updates.scheduled_at = '';
   if (typeof archiveWebStock === 'function') archiveWebStock(id, 'unknown', 'before_user_status');
@@ -259,8 +267,12 @@ function api_updateText(token, id, text, reason, options) {
   if (!t) throw new Error('本文が空です');
   var row = readTable(SHEET.STOCK).filter(function (r) { return String(r.id) === String(id); })[0];
   if (!row) throw new Error('下書きが見つかりません');
+  if (row.status === STATUS.FAILED) {
+    if (storedTweetUrl_(row)) throw new Error('投稿IDが保存されています。再編集する前にXで投稿を確認してください');
+    if (!options || options.confirmedNotPublished !== true) throw new Error('Xで未投稿を確認してから編集してください');
+  }
   if (!fitsStockText(row, t)) throw new Error('長すぎます（' + (row.post_format === 'long' ? '長文は4000文字以内' : '短文は280重み以内') + '）');
-  var rescoreTargets = [STATUS.DRAFT, STATUS.STOCK, STATUS.READY];
+  var rescoreTargets = [STATUS.DRAFT, STATUS.STOCK, STATUS.READY, STATUS.FAILED];
   // 編集済み案は承認・予約後の本文変更でも承認を解除し、全文審査をやり直す。
   var shouldRescore = rescoreTargets.indexOf(String(row.status)) >= 0 ||
     (row.edit_meta && [STATUS.APPROVED, STATUS.SCHEDULED, STATUS.FAILED].indexOf(String(row.status)) >= 0);
@@ -289,6 +301,84 @@ function api_updateText(token, id, text, reason, options) {
   }
   try { syncStockRowToNotion(id); } catch (e) { logEvent('notion_error', id + ': ' + e); }
   return webMutationResult_(id, message, options);
+}
+
+function storedTweetUrl_(row) {
+  var id = String(row.tweet_id || '');
+  return /^\d+$/.test(id) ? 'https://x.com/i/web/status/' + id : '';
+}
+
+/** 失敗理由は必要時にログから読む。一覧の通常読込には追加しない。 */
+function api_postFailure(token, id) {
+  assertAccess(token);
+  var row = readTable(SHEET.STOCK).filter(function (r) { return String(r.id) === String(id); })[0];
+  if (!row || row.status !== STATUS.FAILED) throw new Error('投稿の状態が変わりました。再読込してください');
+  var last = null, prefix = String(id) + ': ';
+  try {
+    var logs = readTable(SHEET.LOG);
+    for (var i = logs.length - 1; i >= 0; i--) {
+      if (logs[i].event === 'post_failed' && String(logs[i].detail).indexOf(prefix) === 0) { last = logs[i]; break; }
+    }
+  } catch (e) { /* ログ未取得を「失敗理由不明」と表示し、復旧手段は残す。 */ }
+  var error = last ? String(last.detail).slice(prefix.length, prefix.length + 800) : '';
+  var result = failedPostGuidance_(row, error);
+  result.error = error;
+  result.failed_at = last ? String(last.timestamp || '') : '';
+  result.publish_note = stockPublishingProblem(row);
+  return JSON.stringify(result);
+}
+
+function failedPostGuidance_(row, error) {
+  var url = storedTweetUrl_(row), title, next;
+  if (url) {
+    title = '投稿IDが保存されています';
+    next = '投稿が成功した後の記録・通知で失敗した可能性があります。Xで確認し、公開済みなら「投稿済みに戻す」を選んでください。';
+  } else if (/duplicate|重複/i.test(error)) {
+    title = '同じ内容の投稿がある可能性があります';
+    next = 'X上の投稿を確認してください。公開済みなら再投稿せず「今回は見送る」を選べます。';
+  } else if (/spend.cap|credits|usagecap|payment|X API error 402/i.test(error)) {
+    title = 'APIの利用枠・支払い状態を確認してください';
+    next = 'Xの開発者設定で利用枠を確認・復旧してから、未投稿のものを承認待ちへ戻してください。本文を書き直す必要はありません。';
+  } else if (/X API error 429|TooManyRequests/i.test(error)) {
+    title = 'APIの一時的な利用制限です';
+    next = '制限の解除を待ち、Xで未投稿を確認してから承認待ちへ戻してください。';
+  } else if (/X API error (401|403)|未設定/.test(error)) {
+    title = '認証・投稿権限などの設定確認が必要です';
+    next = 'エラー詳細に沿って認証・投稿権限・アカウントの制限を確認してください。復旧後、未投稿を確認して承認待ちへ戻せます。';
+  } else if (/X API error (400|422)|文字数|長すぎ|引用元|参照リンク|ネイティブ引用/.test(error)) {
+    title = '投稿内容・形式・引用元の確認が必要です';
+    next = '下の詳細と予約前の確認を見て、本文を直す場合は「編集して再審査」を選んでください。';
+  } else {
+    title = error ? '通信・処理の失敗です。公開状況を確認してください' : '失敗理由の記録を取得できませんでした';
+    next = 'Xに投稿されているか先に確認してください。未投稿なら承認待ちへ、公開済み・今回は使わない場合は見送りにできます。';
+  }
+  return { title: title, next: next, tweet_url: url };
+}
+
+/** 再送しない。本人の確認後に、保存済み稿の状態だけを変更する。 */
+function api_resolveFailedPost(token, id, action, confirmedNotPublished) {
+  assertAccess(token);
+  var row = readTable(SHEET.STOCK).filter(function (r) { return String(r.id) === String(id); })[0];
+  if (!row || row.status !== STATUS.FAILED) throw new Error('投稿の状態が変わりました。再読込してください');
+  var url = storedTweetUrl_(row), status, message;
+  if (action === 'ready') {
+    if (url) throw new Error('投稿IDが保存されているため再投稿には戻せません。Xで確認してください');
+    if (confirmedNotPublished !== true) throw new Error('Xで未投稿を確認してください');
+    var problem = stockPublishingProblem(row);
+    if (problem) throw new Error(problem);
+    status = STATUS.READY; message = '承認待ちに戻しました。まだ再投稿・予約はしていません。';
+  } else if (action === 'posted') {
+    if (!url) throw new Error('保存済みの投稿IDがありません。公開済みと推定して変更はできません');
+    status = STATUS.POSTED; message = '保存済みの投稿IDを保持して、投稿済みに戻しました。';
+  } else if (action === 'rejected') {
+    status = STATUS.REJECTED; message = '今回は見送りました。本文と履歴は残しています。';
+  } else throw new Error('不正な操作です');
+  if (typeof tryArchiveEditorialRows === 'function') tryArchiveEditorialRows([row], 'unknown', 'before_failure_resolution');
+  updateStockById(id, { status: status, scheduled_at: '' });
+  if (typeof archiveWebStock === 'function') archiveWebStock(id, 'user', 'failure_resolved', action);
+  logEvent('webapp_failure_resolved', id + ': ' + action);
+  try { syncStockRowToNotion(id); } catch (e) { logEvent('notion_error', id + ': ' + e); }
+  return webMutationResult_(id, message, { includePost: true });
 }
 
 /**
