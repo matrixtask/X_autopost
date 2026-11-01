@@ -159,7 +159,17 @@
     }).join('');
   }
 
-  var analyticsData = null, analyticsLoading = false;
+  var analyticsPeriod = 'all', analyticsCache = {}, analyticsRequests = {}, analyticsGeneration = 0;
+  function setAnalyticsPeriod(key) {
+    if (['all', '30', '90'].indexOf(key) < 0) return;
+    analyticsPeriod = key; renderAnalytics();
+  }
+  function analyticsControls() {
+    return '<div class="card"><h2 class="sec">投稿の分析期間</h2><div class="actions">' +
+      [['30', '直近1か月'], ['90', '直近3か月'], ['all', '全期間']].map(function (item) {
+        return '<button class="tab' + (analyticsPeriod === item[0] ? ' active' : '') + '" aria-pressed="' + (analyticsPeriod === item[0]) + '" onclick="setAnalyticsPeriod(\'' + item[0] + '\')">' + item[1] + '</button>';
+      }).join('') + '</div><div class="reason">投稿日で絞り込みます。1か月＝今日を含む30日、3か月＝90日（日本時間）。</div></div>';
+  }
   function setTab(key) {
     activeTab = key; page = 0;
     document.getElementById('search').hidden = key === 'analytics';
@@ -169,20 +179,32 @@
 
   function renderAnalytics() {
     var el = document.getElementById('list');
-    if (!analyticsData) {
-      el.innerHTML = '<div class="empty">集計中…</div>';
-      if (analyticsLoading) return;
-      analyticsLoading = true;
+    var key = analyticsPeriod, generation = analyticsGeneration;
+    var controls = analyticsControls(), d = analyticsCache[key];
+    if (!d) {
+      el.innerHTML = controls + '<div class="empty">集計中…</div>';
+      if (analyticsRequests[key]) return;
+      analyticsRequests[key] = true;
       google.script.run
-        .withSuccessHandler(function (json) { analyticsLoading = false; analyticsData = JSON.parse(json); if (activeTab === 'analytics') renderAnalytics(); })
-        .withFailureHandler(function (e) {
-          analyticsLoading = false;
-          if (activeTab === 'analytics') el.innerHTML = '<div class="empty">' + esc(e.message) + '<p><button class="ghost" onclick="renderAnalytics()">再試行</button></p></div>';
+        .withSuccessHandler(function (json) {
+          if (generation !== analyticsGeneration) return;
+          delete analyticsRequests[key]; analyticsCache[key] = JSON.parse(json);
+          if (activeTab === 'analytics' && analyticsPeriod === key) renderAnalytics();
         })
-        .api_analytics(TOKEN);
+        .withFailureHandler(function (e) {
+          if (generation !== analyticsGeneration) return;
+          delete analyticsRequests[key];
+          if (activeTab === 'analytics' && analyticsPeriod === key) el.innerHTML = controls + '<div class="empty">' + esc(e.message) + '<p><button class="ghost" onclick="renderAnalytics()">再試行</button></p></div>';
+        })
+        .api_analytics(TOKEN, key);
       return;
     }
-    var d = analyticsData;
+    var periodNote = '<div class="list-count">' + esc(d.period.label) + ' · ' +
+      (d.period.from ? esc(d.period.from) + '〜' : '') + esc(d.period.through) + '時点 · 計測済み ' + d.total.n + '件</div>';
+    if (!d.total.n) {
+      el.innerHTML = controls + periodNote + '<div class="empty">この期間に計測済みの投稿はありません。別の期間を選んでください。</div>';
+      return;
+    }
     var catLabel = function (c) { return CATEGORY_LABEL[c] || c; };
 
     // バー(平均) + 点(個々の投稿)。点のスケールは全投稿の最大インプ
@@ -204,8 +226,8 @@
     var bestSlot = d.bySlot[0];
     var f = d.follow;
     var followTile = f
-      ? '<div class="atile hero"><div class="acap">フォロワー</div><div class="abig">' + f.current + '人</div><div class="acap">' +
-        (f.gained7 === null ? '記録開始（増減は明日から）' : '直近7日 ' + (f.gained7 >= 0 ? '+' : '') + f.gained7 + ' / 記録開始から ' + (f.gainedAll >= 0 ? '+' : '') + f.gainedAll + '（' + f.days + '日）') +
+      ? '<div class="atile hero"><div class="acap">フォロワー（期間指定の対象外）</div><div class="abig">' + f.current + '人</div><div class="acap">' +
+        (f.gained7 === null ? '記録開始（増減は明日から）' : '直近7日 ' + (f.gained7 >= 0 ? '+' : '') + f.gained7 + ' / 表示期間内 ' + (f.gainedAll >= 0 ? '+' : '') + f.gainedAll + '（' + f.days + '日）') +
         '</div></div>'
       : '<div class="atile hero"><div class="acap">フォロワー</div><div class="abig">未記録</div><div class="acap">snapshotFollowers を実行すると記録開始</div></div>';
     var tiles =
@@ -289,13 +311,8 @@
         '</div></div>';
     }).join('');
 
-    el.innerHTML =
-      tiles + followChart + axesHtml +
-      '<div class="card"><h3 class="sec">時間帯別 平均インプ（バー=平均 / 点=個々の投稿 / 👤=プロフクリック率）</h3>' + bars(d.bySlot, true) + '</div>' +
-      '<div class="card"><h3 class="sec">曜日別 平均インプ</h3>' + bars(d.byDay, false) + '</div>' +
-      '<div class="card"><h3 class="sec">カテゴリ別 平均インプ</h3>' + bars(d.byCat.map(function (x) { return { key: catLabel(x.key), n: x.n, impAvg: x.impAvg, likesAvg: x.likesAvg, engRate: x.engRate, clickRate: x.clickRate, points: x.points }; }), false) + '</div>' +
-      scatterSvg +
-      '<div class="card"><h3 class="sec">' + (d.hasClicks ? 'プロフィールクリック Top10（フォローに一番近い指標）' : 'オーガニックインプレッション Top10') + '</h3>' +
+    var rankingHtml =
+      '<div class="card"><h3 class="sec">' + esc(d.period.label) + ' · ' + (d.hasClicks ? 'プロフィールクリック Top10（フォローに一番近い指標）' : 'オーガニックインプレッション Top10') + '</h3>' +
       d.top10.map(function (p, i) {
         return '<div class="top-row"><div class="meta">' +
           '<span class="badge b-posted">' + (i + 1) + '位</span>' +
@@ -305,9 +322,17 @@
           (p.promoted ? '<span>💰広告分除外済</span>' : '') +
           '<span>' + esc(p.posted_at) + '</span></div>' +
           '<div class="body-text" style="font-size:13.5px">' + esc(p.text) + '</div></div>';
-      }).join('') + '</div>' +
+      }).join('') + '</div>';
+
+    el.innerHTML =
+      controls + periodNote + tiles + rankingHtml + followChart + axesHtml +
+      '<div class="card"><h3 class="sec">時間帯別 平均インプ（バー=平均 / 点=個々の投稿 / 👤=プロフクリック率）</h3>' + bars(d.bySlot, true) + '</div>' +
+      '<div class="card"><h3 class="sec">曜日別 平均インプ</h3>' + bars(d.byDay, false) + '</div>' +
+      '<div class="card"><h3 class="sec">カテゴリ別 平均インプ</h3>' + bars(d.byCat.map(function (x) { return { key: catLabel(x.key), n: x.n, impAvg: x.impAvg, likesAvg: x.likesAvg, engRate: x.engRate, clickRate: x.clickRate, points: x.points }; }), false) + '</div>' +
+      scatterSvg +
       tableHtml +
       '<div class="card"><h3 class="sec">読むときの注意</h3><div class="reason">' +
+      '期間は投稿日を基準にしています。数値は保存済みの最新計測値で、指定期間中だけに得たインプレッション数ではありません。フォロワー推移は期間指定にかかわらず直近30件、軸別の学習結果は全期間を選んだ場合だけ表示します。<br>' +
       '最終目的はフォロワー増ですが、<b>Xは「どのポストで何人増えたか」を返しません</b>。そのため ①フォロワー数は日次スナップショットの差分、②ポスト単位は 👤プロフィールクリック（フォローの直前行動）で代替評価しています。<br>' +
       'インプはオーガニック基準（広告分は分離済み。分離できないプロモ投稿は除外）。計測時点からの経過時間で有利不利が出るため、直近の投稿は値が育ちきっていません。プロフィールクリックはAPIの制約で直近30日程度の投稿のみ取得できます。' +
       '</div></div>';
@@ -407,7 +432,8 @@
     google.script.run
       .withSuccessHandler(function (json) {
         if (version !== loadVersion) return;
-        loading = false; posts = JSON.parse(json); analyticsData = null;
+        loading = false; posts = JSON.parse(json);
+        analyticsCache = {}; analyticsRequests = {}; analyticsGeneration++;
         activity('更新済み。本文の変更は保存後にバックグラウンドで再審査します。');
         renderTabs(); renderCurrent(); updateControls();
       })
