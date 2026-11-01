@@ -121,3 +121,23 @@ test('UI reload is single-flight and keeps a pending editor through server refre
   h.ctx.load(); h.calls[2].fail(new Error('offline'));
   assert.equal(h.ctx.loading, false); assert.match(h.element('activity').textContent, /再試行/);
 });
+
+function emptyAnalytics(key) {
+  return JSON.stringify({ period: { key, label: key + '日', from: '2026-10-03', through: '2026-11-01' }, total: { n: 0 } });
+}
+
+test('analytics switches periods during loading, caches each result, and ignores stale successes/errors', () => {
+  const h = client(); h.ctx.setTab('analytics'); h.ctx.setAnalyticsPeriod('30'); h.ctx.setAnalyticsPeriod('90');
+  assert.deepEqual(h.calls.slice(1).map(c => c.args[1]), ['all', '30', '90']);
+  h.calls[2].ok(emptyAnalytics('30')); // Late month result cannot replace selected quarter.
+  assert.match(h.element('list').innerHTML, /集計中/);
+  h.calls[1].fail(new Error('all-time failure')); assert.doesNotMatch(h.element('list').innerHTML, /all-time failure/);
+  h.calls[3].ok(emptyAnalytics('90')); assert.match(h.element('list').innerHTML, /90日/);
+  h.ctx.setAnalyticsPeriod('30'); assert.match(h.element('list').innerHTML, /この期間に計測済みの投稿はありません/);
+  assert.equal(h.calls.length, 4); // Revisiting the month does not fetch again.
+  h.ctx.setAnalyticsPeriod('all'); assert.equal(h.calls.length, 5); // Failed range can retry.
+  h.ctx.load(); h.calls[5].ok(JSON.stringify(h.rows)); // Refresh invalidates both cached and in-flight results.
+  assert.equal(h.calls.length, 7);
+  h.calls[4].ok(emptyAnalytics('old')); assert.match(h.element('list').innerHTML, /集計中/);
+  h.calls[6].ok(emptyAnalytics('all')); assert.doesNotMatch(h.element('list').innerHTML, /old日/);
+});

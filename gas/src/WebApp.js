@@ -315,11 +315,16 @@ function api_scheduleNow(token) {
  * 分析タブ用の集計。オーガニックインプ基準(広告分離不能なプロモ行は除外)で
  * 時間帯・曜日・カテゴリ別の平均と、インプレッションTop10を返す。
  */
-function api_analytics(token) {
+function api_analytics(token, period) {
   assertAccess(token);
+  var window = analyticsWindow_(period);
   var rows = readTable(SHEET.STOCK).filter(function (r) {
     if (String(r.status) !== STATUS.POSTED || !r.metrics_at) return false;
     if (String(r.promoted) === 'yes' && r.paid_impressions === '') return false;
+    if (window.days) {
+      var posted = analyticsPostedAt_(r.posted_at);
+      if (posted === null || posted < window.start || posted > window.end) return false;
+    }
     return true;
   });
 
@@ -337,10 +342,10 @@ function api_analytics(token) {
   var totalImp = 0, totalLikes = 0;
   rows.forEach(function (r) {
     var postedAt = String(r.posted_at || '');
-    var d = new Date(postedAt.replace(' ', 'T') + ':00+09:00');
-    if (postedAt.length >= 16 && !isNaN(d.getTime())) {
+    var postedMs = analyticsPostedAt_(postedAt);
+    if (postedMs !== null) {
       agg(bySlot, postedAt.slice(11, 13) + '時台', r);
-      agg(byDay, DAYS[d.getDay()], r);
+      agg(byDay, DAYS[new Date(postedMs + 9 * 3600000).getUTCDay()], r);
     }
     agg(byCat, String(r.category || '不明'), r);
     totalImp += Number(r.impressions || 0);
@@ -424,6 +429,7 @@ function api_analytics(token) {
   }
 
   return JSON.stringify({
+    period: { key: window.key, label: window.label, from: window.from, through: window.through },
     total: { n: rows.length, imp: totalImp, likes: totalLikes },
     bySlot: toList(bySlot),
     byDay: toList(byDay),
@@ -436,6 +442,8 @@ function api_analytics(token) {
     follow: follow,
     // リーチモデル（標本が多い）とフォローモデル（KGIに近い）を両方返す
     axes: (function () {
+      // 軸学習は全期間用。期間切替で採点モデルを再学習しない。
+      if (window.days) return null;
       try {
         var models = [analyzeAxes('reach')];
         var follow = analyzeAxes();
@@ -458,6 +466,30 @@ function api_analytics(token) {
       }
     })(),
   });
+}
+
+/** 日本時間の今日を含む30/90日。旧クライアントの引数省略は全期間。 */
+function analyticsWindow_(period) {
+  var key = period === undefined || period === null ? 'all' : String(period);
+  if (['all', '30', '90'].indexOf(key) < 0) throw new Error('分析期間が不正です');
+  var now = Date.now(), day = 86400000, offset = 9 * 3600000;
+  var today = Math.floor((now + offset) / day) * day - offset;
+  var days = key === 'all' ? 0 : Number(key);
+  var start = days ? today - (days - 1) * day : null;
+  return { key: key, days: days, start: start, end: now,
+    label: days ? (days === 30 ? '直近1か月（30日）' : '直近3か月（90日）') : '全期間',
+    from: start === null ? null : new Date(start + offset).toISOString().slice(0, 10),
+    through: new Date(now + offset).toISOString().slice(0, 10) };
+}
+
+/** Stockの日本時間を厳密に読む。不正日付・欠損を最近の投稿に含めない。 */
+function analyticsPostedAt_(value) {
+  var text = String(value || '');
+  if (!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/.test(text)) return null;
+  var ms = Date.parse(text.replace(' ', 'T') + '+09:00');
+  if (!isFinite(ms)) return null;
+  var roundtrip = new Date(ms + 9 * 3600000).toISOString().replace('T', ' ').slice(0, text.length);
+  return roundtrip === text ? ms : null;
 }
 
 /**
