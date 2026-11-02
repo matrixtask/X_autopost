@@ -285,7 +285,7 @@ test('themes: existing famous-person roster cannot override focus; seeding is id
   const { ctx, db } = setup();
   db.Themes.push({ theme: '堀江さんが工場に来た日の話', weight: 9999, roster: 'core' },
     { theme: ctx.FOCUSED_THEMES[0][0], weight: 0, notes: '本人が停止' });
-  assert.equal(ctx.ensureFocusedThemes(), 19);
+  assert.equal(ctx.ensureFocusedThemes(), ctx.FOCUSED_THEMES.length - 1);
   assert.equal(ctx.ensureFocusedThemes(), 0);
   assert.equal(db.Themes[0].weight, 9999);
   assert.equal(db.Themes[1].notes, '本人が停止');
@@ -295,7 +295,8 @@ test('themes: existing famous-person roster cannot override focus; seeding is id
     assert.ok(selected.every(t => !ctx.isRetiredTopic(t.theme)));
     assert.notEqual(selected[0].theme, selected[1].theme);
     assert.notEqual(selected[0].reader_bridge, selected[1].reader_bridge);
-    assert.ok(selected.every(t => t.category !== 'news'));
+    assert.ok(selected.every(t => t.category === 'news'));
+    assert.ok(selected.every(t => t.theme !== db.Themes[1].theme));
   }
 });
 
@@ -397,4 +398,27 @@ test('outcome: compact API vectors preserve axis order and reject shifted or inc
   assert.equal(ctx.validateOutcomeReview(value, '自分で確認した'), null);
   value.axes.push([4]);
   assert.equal(ctx.validateOutcomeReview(value, '自分で確認した'), null);
+});
+
+
+test('news-first themes preserve legacy data and fall back when all news is stopped', () => {
+  const { ctx, db } = setup();
+  db.Themes.push({ theme: 'テトラでやらないと決める基準', category: 'evergreen',
+    weight: 9999, focus_version: 'tetra-v1', reader_bridge: '判断', roster: 'core' });
+  ctx.ensureFocusedThemes();
+  for (const row of db.Themes) if (row.category === 'news') row.weight = 0;
+  const selected = ctx.pickThemesForToday();
+  assert.equal(selected.length, 2);
+  assert.ok(selected.every(t => t.category === 'evergreen' && t.theme !== db.Themes[0].theme));
+  assert.equal(db.Themes[0].weight, 9999);
+  assert.equal(db.Themes[0].focus_version, 'tetra-v1');
+});
+
+test('news opinion is allowed by focus review without changing reference score anchors', () => {
+  const { ctx } = setup();
+  const prompt = ctx.outcomeScoringPrompt();
+  assert.match(prompt, /ニュースへの本人の感想・期待・違和感があればfocus=aligned/);
+  assert.match(prompt, /実体験や社名との接続は必須にしない/);
+  assert.match(prompt, /decision軸の低さだけで保留にしない/);
+  assert.equal(ctx.OUTCOME_SCORE_VERSION, 'outcome-v1');
 });

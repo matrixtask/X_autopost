@@ -51,11 +51,12 @@ function newsFeeds(days) {
  *
  * @param {number} limit 返す最大件数（既定15）
  * @param {number} days 何日前までを対象にするか（既定3）
- * @returns {Array} [{title, source, area, ageHours, dup}] 話題の大きさ順
+ * @returns {Array} [{title, source, area, ageHours, publishedAt, url, dup}] 話題の大きさ順
  */
 function fetchNewsItems(limit, days) {
   var maxAgeDays = Number(days || getProp('NEWS_MAX_AGE_DAYS', '3'));
-  var cutoff = new Date().getTime() - maxAgeDays * 86400000;
+  var fetchedAt = new Date().getTime();
+  var cutoff = fetchedAt - maxAgeDays * 86400000;
   var items = [];
 
   newsFeeds(maxAgeDays).forEach(function (feed) {
@@ -70,13 +71,15 @@ function fetchNewsItems(limit, days) {
         if (!title) return;
         var pub = item.getChildText('pubDate');
         var t = pub ? new Date(pub).getTime() : NaN;
-        // 日付が読めない場合は残す（弾きすぎるより混ぜて判断させる）
-        if (isFinite(t) && t < cutoff) return;
+        // 鮮度不明・未来・古い記事は「最近のニュース」に混ぜない。
+        if (!isFinite(t) || t < cutoff || t > fetchedAt) return;
         items.push({
           title: title,
           source: (item.getChild('source') && item.getChild('source').getText()) || '',
           area: feed.area,
-          ageHours: isFinite(t) ? Math.round((new Date().getTime() - t) / 3600000) : null,
+          publishedAt: new Date(t).toISOString(),
+          url: /^https?:\/\//i.test(item.getChildText('link') || '') ? item.getChildText('link') : '',
+          ageHours: Math.round((fetchedAt - t) / 3600000),
         });
       });
     } catch (e) {
@@ -122,9 +125,9 @@ function balanceByArea(items, limit) {
   return out;
 }
 
-/** 見出しの文字列だけが欲しい呼び出し向け（従来互換） */
+/** 文字列配列の互換性を保ち、日付・出典も質問生成へ渡す。 */
 function fetchNewsHeadlines(limit, days) {
-  return fetchNewsItems(limit, days).map(function (it) { return it.title; });
+  return fetchNewsItems(limit, days).map(function (it) { return formatNewsItem(it).replace(/^- /, ''); });
 }
 
 /** 話題の大きさと鮮度を添えた1行表記（プロンプトに渡す用） */
@@ -133,5 +136,8 @@ function formatNewsItem(it) {
   if (it.dup > 1) parts.push(it.dup + '媒体が報道');
   if (it.ageHours !== null && it.ageHours !== undefined) parts.push(it.ageHours + '時間前');
   if (it.area) parts.push(it.area);
+  if (it.source) parts.push(it.source);
+  if (it.publishedAt) parts.push(it.publishedAt);
+  if (it.url) parts.push(it.url);
   return '- ' + stripHeadlineSource(it.title) + (parts.length ? '（' + parts.join(' / ') + '）' : '');
 }

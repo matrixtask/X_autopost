@@ -29,7 +29,7 @@ function seedThemesIfEmpty() {
 
 /**
  * 本人・テトラ中心のテーマから、読者との接点が異なる2つを選ぶ。
- * 1つ目は本人の経験、2つ目は別の入口。時事は必須にしない。
+ * 時事の入口を優先し、別の関心領域を2つ選ぶ。ニュース本文は生成時に確認する。
  * 旧テーマを復活させず、focus_version付きの候補だけを使う。
  * 直近3日で使ったテーマは重みを下げる。
  */
@@ -39,7 +39,7 @@ function pickThemesForToday() {
   if (!all.length) throw new Error('Themesシートが空です。setupSpreadsheet() を実行してください');
 
   var starters = all.filter(function (t) { return String(t.roster || '').trim(); });
-  var pool0 = starters.some(function (t) { return Number(t.weight) > 0 && t.category !== 'news'; }) ? starters : all;
+  var pool0 = starters.some(function (t) { return Number(t.weight) > 0 && t.category === 'news'; }) ? starters : all;
 
   var now = nowJst();
   function effectiveWeight(t) {
@@ -71,19 +71,21 @@ function pickThemesForToday() {
   }
 
   var picked = [];
-  // 1. 本人の経験を主枠にする。
-  var first = pickFrom(function (t) { return t.category !== 'news' && !usedRecently(t); }) ||
-    pickFrom(function (t) { return t.category !== 'news'; });
+  // 時事の入口を優先。直近の領域再利用より新しい領域を先に選ぶ。
+  // 同じ領域でも別ニュースは扱える。出来事の重複は質問履歴と見出しで避ける。
+  var first = pickFrom(function (t) { return t.category === 'news' && !usedRecently(t); }) ||
+    pickFrom(function (t) { return t.category === 'news'; }) ||
+    pickFrom(function (t) { return !usedRecently(t); }) || pickFrom(function () { return true; });
   if (first) picked.push(first);
 
-  // 2. 読者との接点を変える。時事は直近の再利用を避ける。
   var exclude = picked.map(function (t) { return t.theme; });
   var second = pickFrom(function (t) {
-    return (!first || t.reader_bridge !== first.reader_bridge) && !usedRecently(t);
+    return t.category === 'news' && (!first || t.reader_bridge !== first.reader_bridge) && !usedRecently(t);
   }, exclude) || pickFrom(function (t) {
-    return t.category !== 'news' && (!first || t.reader_bridge !== first.reader_bridge);
-  }, exclude) || pickFrom(function (t) { return !usedRecently(t); }, exclude) ||
-    pickFrom(function (t) { return t.category !== 'news'; }, exclude);
+    return t.category === 'news' && (!first || t.reader_bridge !== first.reader_bridge);
+  }, exclude) || pickFrom(function (t) {
+    return !first || t.reader_bridge !== first.reader_bridge;
+  }, exclude) || pickFrom(function () { return true; }, exclude);
   if (second) picked.push(second);
 
   picked.forEach(function (t) {
@@ -592,15 +594,15 @@ function draftThemes(kind, count, ctx, taken, today) {
       '上のポストと**同じ人が語れるが、まだテーマになっていない話**を' + count + '件作ってください。',
       '',
       '**必須条件**',
-      '- その人が実際に経験していそうなことに限る。' +
+      '- その場で気軽にコメントできることに限る。' +
         '経験していないと答えられないテーマ（「◯◯業界の未来予測」等）は不可',
-      '- 具体的な場面・人物・数字が1つは浮かぶこと。' +
+      '- コメントする対象が一つ浮かぶこと。' +
         '浮かばないなら抽象的すぎるので作り直す',
       '- 上のテーマ一覧の言い換え・細分化・上位下位は不可。' +
-        '**切り口そのものを変える**（例: 技術の話 → その技術を選んだときに揉めた話）',
+        '**切り口そのものを変える**（例: 新商品の仕様 → 自分なら使ってみたい場面）',
       '',
       '**面白くする方向**',
-      '- 説明ではなく、事件・揉め事・勘違い・思わぬ副作用を聞くテーマにする',
+      '- 専門的な説明や揉め事ではなく、気になる点や楽しみな点を聞くテーマにする',
       '- 本人が選んだことと、その選択が読者の仕事や暮らしにどうつながるかを聞く',
       '- 対立や失敗があったとは決めつけない。成果との関係は未検証',
     ].join('\n'),
@@ -629,15 +631,15 @@ function draftThemes(kind, count, ctx, taken, today) {
         'できるだけ多くの領域からまんべんなく選ぶ',
       '- **AI関連は' + Math.max(1, Math.round(count * 0.2)) + '件まで**。' +
         'AIの話ばかりだと読み飽きられる',
-      '- 本人・テトラとの自然な接点を説明できるニュースだけ。無関係な領域を数合わせで混ぜない',
-      '- 接点を作れないときは件数を減らす。0件でもよい',
+      '- 一文の説明で本人が感想を言えるニュースを優先。実体験やテトラの事業との接点は必須にしない',
+      '- コメントに専門知識や社内事情が必要なら使わない。適切な材料がなければ0件でもよい',
       '- 見出しに無い一般論（「AIの未来について」等）は作らない。特定の出来事に紐づける',
       '- 自治体の広報・キャンペーン告知・定例発表・株価の値動きは飛ばす。' +
         '読んだ人が「知らなかった」と思う出来事を選ぶ',
       '',
       '**書き方**',
-      '- 見出しの受け売りではなく、この経営者が当事者として一言持てる角度に落とす',
-      '- 「◯◯社が××した件、現場から見るとどう見えるか」のように、出来事＋自分の視点をセットにする',
+      '- 見出しの受け売りではなく、本人が生活者として一言コメントできる角度に落とす',
+      '- 「◯◯の新サービス、どこが気になりますか」のように、出来事＋自分の視点をセットにする',
       '- 1週間で鮮度が切れて構わない。むしろ具体的で鮮度が高いほどよい',
     ].join('\n'),
   };
@@ -654,7 +656,7 @@ function draftThemes(kind, count, ctx, taken, today) {
     '- その場で思い出して話せる粒度にする。調べないと答えられないテーマは不可',
   ].join('\n');
 
-  var user = prompts[kind] + '\nテーマ名に本人の経験またはテトラでの判断が見えるようにする。' +
+  var user = prompts[kind] + '\nテーマ名にはコメントする対象を明示する。経験や経営判断を必須にしない。' +
     '\nreader_bridge は専門外の読者の関心との接点を短く記す。protagonist は本人かテトラのみ。' +
     '\nJSON配列で出力: [{"theme":"...","category":"evergreen|news|neta","notes":"...","reader_bridge":"...","protagonist":"本人|テトラ"}]';
 

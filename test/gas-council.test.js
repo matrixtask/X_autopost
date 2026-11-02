@@ -48,6 +48,8 @@ test('council: questions wait for distinct final positions and Mia reflection, t
   assert.deepEqual(calls.map(c => c.kind), ['json', 'json', 'json']);
   assert.ok(calls.every(c => c.purpose === 'interview'));
   assert.match(calls[0].system, /hannibal（ハンニバル）.*敗北.*内省.*方針転換条件/);
+  assert.match(calls[0].system, /questions\/turnでは成立条件・資源配分・捨てた案・代償を本人に答えさせない/);
+  assert.match(calls[1].system, /本人の短い感想も十分な材料/);
   assert.equal(JSON.parse(logs[0][1]).brief.version, 'council-v6');
   assert.match(calls[1].input, /final_debate.*確定0.*確定1.*確定2/);
   assert.match(calls[2].input, /後付けの教訓は使わない/);
