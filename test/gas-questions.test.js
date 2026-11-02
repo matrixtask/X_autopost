@@ -73,3 +73,36 @@ test('turn plan survives malformed output and unavailable memory without extra A
   assert.equal(ctx.planInterviewTurn([current], current, current.answer, null, true, false).editorial_unavailable, true);
   assert.equal(calls, 1);
 });
+
+
+test('news questions pass fresh context and replace deep-decision requirements with easy comments', () => {
+  const ctx = setup();
+  const themes = [{ theme: '新しいサービス', category: 'news' }];
+  ctx.askClaudeJson = (system, user) => {
+    assert.match(system, /ニュースの背景一文/);
+    assert.match(system, /実体験・テトラの判断・他社批判を要求しない/);
+    assert.doesNotMatch(system, /1〜2問は選択・代償|捨てた案、意外な難所/);
+    assert.match(user, /4問なら3問程度/);
+    assert.match(user, /架空サービスの発表.*2026-11-03/);
+    return [{ ...themes[0], question: 'この新サービス、どこが気になりますか？' }];
+  };
+  assert.equal(ctx.generateInterviewQuestions(themes, ['架空サービスの発表（テスト資料 2026-11-03）'], 4).length, 1);
+  ctx.askClaudeJson = (_system, user) => {
+    assert.match(user, /今回確認できたニュースはありません/);
+    assert.match(user, /最新ニュースを創作せず/);
+    return [{ ...themes[0], question: '最近使って便利だったものは何ですか？' }];
+  };
+  assert.equal(ctx.generateInterviewQuestions(themes, [], 4).length, 1);
+});
+
+test('conversation permits simpler explanations without requiring tradeoffs or repeated probing', () => {
+  const ctx = setup();
+  const row = { question: 'このサービス、どこが気になる？', answer: 'まだ知らないです' };
+  ctx.askClaude = (system) => {
+    assert.match(system, /知らない、難しい.*追問しない/);
+    assert.match(system, /答えやすい感想の問いへ負担を下げる/);
+    assert.doesNotMatch(system, /論点の深さは落とさず|判断をもう一段/);
+    return JSON.stringify({ quote: '', followup: '', next_question: '' });
+  };
+  assert.equal(ctx.planInterviewTurn([row], row, row.answer, null, true, false).followup, '');
+});
