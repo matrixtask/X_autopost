@@ -8,6 +8,7 @@ function isRetiredTopic(text) {
 function editorialFocusPrompt() {
   return [
     '編集方針（過去のテーマ・メモ・成功例・人格の深掘り要求より優先）:',
+    '- 最優先の成果は本人の投稿のオーガニックインプレッション。プロフィールクリック・フォロワー増は補助指標。初見で伝わる話題、本人の率直な見方、読者が続きを読みたくなる入口を重視するが、数字を伸ばすために本人の発言を捏造しない。引用元の人気を本人の投稿の成果と混同しない。',
     '- 時事ネタへの本人の感想を主軸にする。ニュースの要約ではなく中井本人の気になる点・期待・違和感・使ってみたい気持ちを残す。堀江さん・ホリエモンの過去話は再利用しない。',
     '- AIの新機能、身近な商品・サービス、移動・旅行、働き方、暮らしや趣味など、一文の説明でコメントできる最近のニュースを優先。専門的な技術評価、経営判断の基準・資源配分・代償の言語化、機密や社内事情が必要な話題は避ける。',
     '- 本人の実体験やテトラとの接点は必須にしない。自然に出た経験は歓迎するが、社名・採用・経営の教訓へ無理に結びつけない。他社ニュースへの本人のコメントも主役は本人。',
@@ -63,12 +64,12 @@ function themeOutcomeSamples() {
     if (r.score_version === OUTCOME_SCORE_VERSION) {
       try { m = JSON.parse(r.outcome_metrics); } catch (e) { return null; }
     } else {
-      if (r.profile_clicks === '' || r.profile_clicks === undefined || r.profile_clicks === null) return null;
+      if (r.impressions === '' || r.impressions === undefined || r.impressions === null) return null;
       m = { age_h: metricsAgeHours(r), impressions: Number(r.impressions), profile_clicks: Number(r.profile_clicks) };
     }
     if (!m || typeof m.age_h !== 'number' || m.age_h < 48 || m.age_h > 168 ||
-        !isFinite(m.impressions) || m.impressions <= 0 || !isFinite(m.profile_clicks) || m.profile_clicks < 0) return null;
-    return { row: r, t: outcomeDateMs(r.posted_at), rate: 100 * m.profile_clicks / m.impressions };
+        typeof m.impressions !== 'number' || !isFinite(m.impressions) || m.impressions < 0) return null;
+    return { row: r, t: outcomeDateMs(r.posted_at), impressions: m.impressions };
   }).filter(function (x) { return x && x.t !== null; });
 }
 

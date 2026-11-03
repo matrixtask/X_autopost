@@ -298,19 +298,17 @@ function normalizeWeights(w) {
  */
 function axisWeightBreakdown(category) {
   var z = axisSignificanceZ();
-  var reachW = Number(getProp('REACH_MODEL_WEIGHT', '0.5'));
-  var follow = parseCorrStore('AXIS_CORRELATIONS');
+  // 旧クリックモデルの保存値は履歴として保持するが、採点へ混合しない。
   var reach = parseCorrStore('AXIS_CORRELATIONS_REACH');
   var bad = unreliableAxes();
 
-  // 1. 有意な分だけを残した相関を2モデルぶん合成する
+  // 1. リーチモデルの有意な相関だけを残す
   var learnedRaw = {};
   var significant = [];
   AXES.forEach(function (a) {
     if (bad[a.key]) { learnedRaw[a.key] = 0; return; }
-    var f = follow && follow[a.key] ? shrinkCorrelation(follow[a.key].c, follow[a.key].n, z) : 0;
     var r = reach && reach[a.key] ? shrinkCorrelation(reach[a.key].c, reach[a.key].n, z) : 0;
-    var v = f + r * reachW;
+    var v = r;
     learnedRaw[a.key] = v;
     if (v !== 0) significant.push(a.key);
   });

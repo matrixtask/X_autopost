@@ -31,17 +31,26 @@ function parseVoiceInterviewRecord(raw) {
   if (text.indexOf(VOICE_RECORD_MARKER) !== 0) return null;
   var payload = voiceRecordPayload(text);
   if (payload.length > 4500) throw voiceRecordInputError('取材記録は1メッセージ4500文字以内に分割してください。');
-  var match = payload.match(/^【音声インタビュー記録 v1】\n記録ID: ([A-Za-z0-9_-]{8,64})\n分割: ([1-9][0-9]?)\/([1-9][0-9]?)\n質問番号: ([1-9][0-9]?)\n【質問】\n([\s\S]+?)\n【回答】\n([\s\S]+?)\n(?:【確認会話・原文】\n([\s\S]*?)\n)?(?:【AIメモ・原文ではない】\n([\s\S]*?)\n)?【記録完了】\s*$/);
+  var match = payload.match(/^【音声インタビュー記録 v1】\n記録ID: ([A-Za-z0-9_-]{8,64})\n分割: ([1-9][0-9]?)\/([1-9][0-9]?)\n質問番号: ([1-9][0-9]?)\n【質問】\n([\s\S]+?)\n【回答】\n([\s\S]+?)\n(?:【引用元URL】\n([^\n]+)\n)?(?:【確認会話・原文】\n([\s\S]*?)\n)?(?:【AIメモ・原文ではない】\n([\s\S]*?)\n)?【記録完了】\s*$/);
   if (!match) throw voiceRecordInputError('取材記録の見出し、分割番号、質問・回答、記録完了の形式を確認してください。');
   var result = { record_id: match[1], part: Number(match[2]), total: Number(match[3]),
     question_idx: Number(match[4]), question: match[5], answer: match[6],
-    clarification: match[7] || '', ai_note: match[8] || '', raw_text: text };
+    quote_url: match[7] ? canonicalVoiceQuoteUrl(match[7]) : '',
+    clarification: match[8] || '', ai_note: match[9] || '', raw_text: text };
   if (result.part > result.total || result.total > 30 || result.question_idx > 20 ||
       !result.question.trim() || !result.answer.trim() || result.question.length > 2000 ||
-      /\n【(?:質問|回答|確認会話・原文|AIメモ・原文ではない|記録完了)】/.test(result.question + '\n' + result.answer)) {
+      /\n【(?:質問|回答|引用元URL|確認会話・原文|AIメモ・原文ではない|記録完了)】/.test(result.question + '\n' + result.answer)) {
     throw voiceRecordInputError('取材記録の番号・本文が不正です。見出しを回答本文に埋め込まないでください。');
   }
   return result;
+}
+
+/** 引用専用欄だけ読む。回答中のURLを引用元と推測しない。 */
+function canonicalVoiceQuoteUrl(value) {
+  var url = String(value || '').trim().replace(/^<(https:\/\/[^>|]+)(?:\|[^>]+)?>$/, '$1');
+  var match = url.match(/^https:\/\/(?:(?:www|mobile)\.)?(?:x\.com|twitter\.com)\/(?:[A-Za-z0-9_]{1,15}|i)\/status\/([0-9]{5,25})(?:[?#][^\s<>]*)?$/);
+  if (!match) throw voiceRecordInputError('引用元URLにはX投稿のURLを1件だけ指定してください。');
+  return 'https://x.com/i/status/' + match[1];
 }
 
 function ensureVoiceImportSheet() {
@@ -114,7 +123,7 @@ function enqueueVoiceInterviewRecord(event) {
       record_id: part.record_id, part: part.part, total: part.total, question_idx: part.question_idx,
       slack_ts: String(event.ts), thread_ts: threadTs, received_at: fmtDateTime(new Date()),
       raw_text: part.raw_text, question: part.question, answer: part.answer,
-      ai_note: part.ai_note, status: 'received', session_id: 'voice_' + part.record_id,
+      ai_note: part.ai_note, quote_url: part.quote_url, status: 'received', session_id: 'voice_' + part.record_id,
     });
     return true;
   } finally { lock.releaseLock(); }
@@ -132,11 +141,12 @@ function assembleVoiceInterviewRecords(parts) {
     var idx = Number(part.question_idx), last = questions[questions.length - 1];
     if (last && last.idx === idx) {
       if (last.question !== String(part.question)) throw new Error('分割された回答の質問文が一致しません。');
+      if (last.quote_url !== String(part.quote_url || '')) throw new Error('分割された回答の引用元URLが一致しません。');
       last.answer += '\n' + String(part.answer);
       if (last.answer.length > 40000) throw new Error('1回答が長すぎます。取材を分けて保存してください。');
     } else {
       if (idx !== questions.length + 1) throw new Error('質問番号は1から順に記録してください。');
-      questions.push({ idx: idx, question: String(part.question), answer: String(part.answer) });
+      questions.push({ idx: idx, question: String(part.question), answer: String(part.answer), quote_url: String(part.quote_url || '') });
     }
   });
   return questions;
@@ -182,11 +192,13 @@ function processVoiceInterviewRecords() {
       return true;
     });
     if (!job) return;
+    ensureHeaders(SHEET.INTERVIEWS);
     var existing = readTable(SHEET.INTERVIEWS).filter(function (r) { return String(r.session_id) === String(job.session_id); });
     if (!existing.length) {
       appendRowsObj(SHEET.INTERVIEWS, questions.map(function (q) {
         return { session_id: job.session_id, thread_ts: 'ts_' + job.thread_ts, idx: q.idx,
-          theme: '本人・teTraの音声取材', category: 'evergreen', question: q.question, answer: q.answer,
+          theme: '本人・teTraの音声取材', category: q.quote_url ? 'news' : 'evergreen', question: q.question, answer: q.answer,
+          quote_url: q.quote_url,
           answered_at: job.received_at, status: INTERVIEW_STATUS.OPEN,
           source_kind: 'chatgpt_voice_transcript', source_record_id: job.record_id };
       }));

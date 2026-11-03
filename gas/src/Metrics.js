@@ -127,7 +127,7 @@ function fetchTweetMetrics() {
       var org = t.organic_metrics;
       var hasOrganic = org && typeof org.impression_count === 'number';
       // 分析に使うimpressions/likesはオーガニック値。広告分はpaid_impressionsに分離
-      var imp = hasOrganic ? org.impression_count : (pub.impression_count || 0);
+      var imp = hasOrganic ? org.impression_count : (typeof pub.impression_count === 'number' ? pub.impression_count : '');
       var paid = hasOrganic ? Math.max(0, (pub.impression_count || 0) - org.impression_count) : '';
       var postedMs = postedAtMs(row);
       var updates = {
@@ -633,7 +633,7 @@ function analyzeAxes(mode) {
   var withClicks = rows.filter(function (r) {
     return r.profile_clicks !== '' && Number(r.impressions || 0) > 0;
   });
-  var wantFollow = mode !== 'reach' && withClicks.length >= 10;
+  var wantFollow = mode === 'follow' && withClicks.length >= 10;
   var target, outcomeName, outcomes;
 
   if (wantFollow) {
@@ -735,7 +735,7 @@ function evaluateScoringAccuracy(mode) {
   var withClicks = all.filter(function (r) {
     return r.profile_clicks !== '' && Number(r.impressions || 0) > 0;
   });
-  var useClicks = mode !== 'reach' && withClicks.length >= 25;
+  var useClicks = mode === 'follow' && withClicks.length >= 25;
   var rows, outcomes, outcomeName;
   if (useClicks) {
     rows = withClicks.slice();
@@ -849,7 +849,7 @@ function evaluateScoringAccuracy(mode) {
  */
 function reportAxisAnalysis() {
   var models = [analyzeAxes('reach')];
-  var follow = analyzeAxes(); // 30日以内のクリック実測が10件以上あればフォローモデルになる
+  var follow = analyzeAxes('follow'); // 30日以内のクリック実測が10件以上あればフォローモデルになる
   if (follow.outcomeName !== models[0].outcomeName) models.push(follow);
 
   var hasAny = models.some(function (m) {
@@ -937,7 +937,7 @@ function reportAxisAnalysis() {
  * 自己採点の妥当性検証と、実測ベースの採点基準の学習。
  * - 採点スコアと実測インプレッションの相関を計算して報告
  * - インプレッション上位/下位の共通点から「追加採点基準」を生成し、
- *   スクリプトプロパティ QUALITY_RUBRIC_LEARNED に保存
+ *   スクリプトプロパティ QUALITY_RUBRIC_LEARNED_REACH に保存
  *   （以後の品質ゲートの採点プロンプトに自動で組み込まれる）
  * 手動実行可。週次メトリクス収集後にデータが8件以上あれば自動実行される。
  */
@@ -959,21 +959,8 @@ function evaluateScoring() {
   var corr = pearson(scores, imps);
   var corrText = corr === null ? '計算不能' : corr.toFixed(2);
 
-  // フォロワー増が目的なので、プロフィールクリック率を主目的変数として扱う
-  var withClicks = rows.filter(function (r) {
-    return r.profile_clicks !== '' && Number(r.impressions || 0) > 0;
-  });
   var clickRate = function (r) { return Number(r.profile_clicks) / Number(r.impressions) * 100; };
-  var corrClicks = withClicks.length >= 8
-    ? pearson(withClicks.map(function (r) { return Number(r.score); }), withClicks.map(clickRate))
-    : null;
-  var useClicks = corrClicks !== null;
-
   var sorted = rows.slice().sort(function (a, b) {
-    if (useClicks) {
-      var ra = Number(a.profile_clicks || 0), rb = Number(b.profile_clicks || 0);
-      if (rb !== ra) return rb - ra;
-    }
     return Number(b.impressions || 0) - Number(a.impressions || 0);
   });
   var list = sorted.map(function (r) {
@@ -987,24 +974,21 @@ function evaluateScoring() {
   var result = askClaudeJson(
     [
       'あなたはXアカウント運用のデータアナリストです。',
-      'このアカウントの最終目的は「フォロワーを増やすこと」です。',
+      'このアカウントの最優先の成果は「オーガニックインプレッション」です。',
       'AIの自己採点（本人らしさ・具体性・引き・完成度の100点満点）と、実際のXでの反応を突き合わせて評価します。',
-      useClicks
-        ? '評価の主軸はプロフィールクリック率（そのポストを見た人がプロフィールを見に行った割合）です。フォローの直前行動なので、インプレッションよりフォロワー増に近い指標です。'
-        : 'プロフィールクリックのデータがまだ足りないため、今回はインプレッションといいねを主軸にします。',
+      '評価の主軸はオーガニックインプレッションです。クリックやいいねは補助指標。観測時点・広告・引用有無を区別し、因果や再現性を断定しない。',
     ].join('\n'),
     [
-      '投稿実績（' + (useClicks ? 'プロフィールクリック降順' : 'インプレッション降順') + '）:',
+      '投稿実績（インプレッション降順）:',
       '',
       list,
       '',
       '採点とインプレッションの相関: ' + corrText,
-      useClicks ? '採点とプロフィールクリック率の相関: ' + corrClicks.toFixed(2) : '',
       follow ? 'アカウント全体: 現在' + follow.current + 'フォロワー / 直近' + follow.days + '日で' + (follow.gained >= 0 ? '+' : '') + follow.gained + '人' : '',
       '',
       'タスク:',
-      '1. verdict: 自己採点は「フォロワーが増えるポスト」を予測できているか。ズレている場合はどこがズレているかを150字以内で',
-      '2. rubric: ' + (useClicks ? 'プロフィールクリック率が高いポスト' : '反応が良いポスト') + 'の共通点・低いポストの共通点から、採点プロンプトにそのまま追記できる「追加採点基準」を箇条書き3〜5行で。憶測ではなく上のデータに現れている事実だけから作る。「読んだ人がこの人を知りたくなるか」という観点を必ず含める',
+      '1. verdict: 自己採点は「インプレッションが伸びるポスト」を予測できているか。ズレている場合はどこがズレているかを150字以内で',
+      '2. rubric: インプレッションが高いポストの共通点・低いポストの共通点から、採点プロンプトにそのまま追記できる「追加採点基準」を箇条書き3〜5行で。憶測ではなく上のデータに現れている事実だけから作る。初見での話題の伝わりやすさを検討し、未検証の仮説を有効な法則と断定しない',
       '',
       'JSONで出力: {"verdict": "...", "rubric": "..."}',
     ].join('\n'),
@@ -1014,15 +998,15 @@ function evaluateScoring() {
   // 相関が誤差の範囲のときに「上位と下位の共通点」を学習させると、
   // ただの偶然を採点基準として固定してしまう。しかもその基準は次の採点に
   // 効いてくるので、ノイズが自分自身を強化する。有意なときだけ更新する。
-  var mainCorr = useClicks ? corrClicks : corr;
-  var noise = minDetectableCorrelation(useClicks ? withClicks.length : rows.length, 2.0);
+  var mainCorr = corr;
+  var noise = minDetectableCorrelation(rows.length, 2.0);
   var trustworthy = mainCorr !== null && Math.abs(mainCorr) >= noise;
   if (result && result.rubric && trustworthy) {
-    PropertiesService.getScriptProperties().setProperty('QUALITY_RUBRIC_LEARNED', String(result.rubric));
+    PropertiesService.getScriptProperties().setProperty('QUALITY_RUBRIC_LEARNED_REACH', String(result.rubric));
   }
   var report = [
     ':bar_chart: 採点妥当性チェック（' + rows.length + '件 / 対インプ相関 ' + corrText +
-      (useClicks ? ' / 対プロフクリック率相関 ' + corrClicks.toFixed(2) : '') + '）',
+      '）',
     '判定: ' + (result && result.verdict ? result.verdict : '(取得失敗)'),
     '',
     trustworthy
@@ -1181,12 +1165,8 @@ function weeklyMetricsReport() {
   }
   lines.push(':trophy: 投稿トラクション（累計 ' + rows.length + '件 / オーガニックインプ ' + totalImp + ' / いいね ' + totalLikes + '）');
   lines.push('');
-  // プロフィールクリック（フォローの直前行動）が取れていればそれ基準で並べる
-  var hasClicks = rows.some(function (r) { return r.profile_clicks !== ''; });
-  if (hasClicks) {
-    rows.sort(function (a, b) { return Number(b.profile_clicks || 0) - Number(a.profile_clicks || 0); });
-  }
-  lines.push(hasClicks ? 'プロフィールクリック Top10（フォローに一番近い指標）:' : 'オーガニックインプレッション Top10:');
+  // 表示順は常にオーガニックインプレッション。クリックは補助表示。
+  lines.push('オーガニックインプレッション Top10:');
   rows.slice(0, 10).forEach(function (r, i) {
     var promoTag = String(r.promoted) === 'yes' ? ' 💰広告分' + r.paid_impressions + 'は除外済み' : '';
     var clickTag = r.profile_clicks !== ''

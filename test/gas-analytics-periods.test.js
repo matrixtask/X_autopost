@@ -51,12 +51,12 @@ test('analytics ranges use JST posting dates, include lower boundary and reject 
   assert.equal(h.ctx.analyticsPostedAt_('2026-02-30 12:00'), null);
 });
 
-test('ranking keeps existing click criterion inside each period and returns an explicit empty period', () => {
+test('ranking prioritizes impressions over clicks inside each period and returns an explicit empty period', () => {
   const h = fixture();
   h.add('古いクリック最多', '2026-01-01 00:00', 500, { profile_clicks: 100 });
   h.add('最近のクリック最多', '2026-10-31 12:00', 50, { profile_clicks: 3 });
   h.add('最近のインプ最多', '2026-10-30 12:00', 100, { profile_clicks: 1 });
-  assert.equal(h.analytics('30').top10[0].text, '最近のクリック最多');
+  assert.equal(h.analytics('30').top10[0].text, '最近のインプ最多');
   assert.equal(h.analytics('all').top10[0].text, '古いクリック最多');
   h.rows.splice(1);
   const empty = h.analytics('30');

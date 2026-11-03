@@ -190,6 +190,28 @@ function reachQuestionContext() {
   return { version: REACH_VERSION, examples: reachPostExamples(stock, interviews, Date.now()), candidates: candidates };
 }
 
+/** 音声取材のURLを生成前に解決し、外部原文を本人回答と別に固定する。 */
+function resolveVoiceQuoteSource(row) {
+  var url = canonicalVoiceQuoteUrl(row.quote_url), id = url.split('/').pop();
+  if (row.quote_source) {
+    var saved = quoteSourceForRow(row);
+    if (saved.url !== url) throw new Error('音声取材の引用URLと保存済み引用元が一致しません');
+    return saved;
+  }
+  if (spendCapActiveUntil()) throw new Error('引用元の読取利用枠がありません。回答は保存済みです');
+  var result = xApiGet('/tweets/' + id, { 'tweet.fields': 'author_id,created_at,note_tweet,withheld,possibly_sensitive' });
+  var tweet = result.data;
+  if (!tweet || String(tweet.id) !== id || tweet.withheld || tweet.possibly_sensitive) throw new Error('音声取材の引用元を確認できません。回答は保存済みです');
+  var source = { tweet_id: id, url: url, text: String((tweet.note_tweet && tweet.note_tweet.text) || tweet.text || ''),
+    author_id: String(tweet.author_id || ''), created_at: String(tweet.created_at || '') };
+  var values = { quote_tweet_id: id, quote_source: JSON.stringify(source) };
+  quoteSourceForRow(values);
+  ensureHeaders(SHEET.INTERVIEWS);
+  Object.keys(values).forEach(function (key) { setColumnByRows(SHEET.INTERVIEWS, key, [{ row: row._row, value: values[key] }]); });
+  row.quote_tweet_id = values.quote_tweet_id; row.quote_source = values.quote_source;
+  return source;
+}
+
 function quoteSourceForRow(row) {
   if (!row.quote_tweet_id && !row.quote_source) return null;
   var source;

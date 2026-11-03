@@ -503,7 +503,7 @@ function generateEditedDrafts(sessionId, qa, brief) {
     });
     var groupId = newId('edit');
     g.parts.forEach(function (part, i) {
-      var quoteMode = g.quote_source ? (getProp('X_NATIVE_QUOTES_ENABLED', 'false') === 'true' ? 'native' : 'link') : '';
+      var quoteMode = g.quote_source ? 'link' : '';
       if (quoteMode === 'link' && part.text.indexOf(g.quote_source.url) < 0) part.text += '\n\n' + g.quote_source.url;
       var format = g.format;
       if (quoteMode === 'link' && format === 'single' && !fitsInTweet(part.text)) format = 'long';

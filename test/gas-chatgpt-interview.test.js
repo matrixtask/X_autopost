@@ -255,3 +255,25 @@ test('voice webhook: rejected format is explained once; temporary persistence fa
   h.ctx.ensureVoiceImportSheet = () => {};
   assert.equal(h.ctx.doPost(request(record())), 'voice record saved'); assert.equal(h.tables.VoiceImports.length, 1);
 });
+
+test('voice quote URL stays outside the answer, survives splitting and reaches saved interviews', () => {
+  const h = setup(), url = 'https://x.com/user/status/1234567890123456789?s=20';
+  const extra = `【引用元URL】\n<${url}|元投稿>\n`;
+  const ensured = []; h.ctx.ensureHeaders = name => ensured.push(name);
+  const first = record({ part: 1, total: 2, answer: '期待してる。', extra });
+  const second = record({ part: 2, total: 2, answer: 'でもまだ使ってない。', extra });
+  h.ctx.enqueueVoiceInterviewRecord(h.event(first));
+  h.ctx.enqueueVoiceInterviewRecord(h.event(second, {ts:'1.000002',thread_ts:'1.000001'}));
+  h.ctx.processVoiceInterviewRecords();
+  assert.equal(h.tables.Interviews[0].answer, '期待してる。\nでもまだ使ってない。');
+  assert.equal(h.tables.Interviews[0].quote_url, 'https://x.com/i/status/1234567890123456789');
+  assert.equal(h.tables.Interviews[0].category, 'news');
+  assert.ok(ensured.includes('Interviews'));
+  assert.equal(h.tables.VoiceImports[0].raw_text, first);
+  assert.equal(h.calls.length, 1);
+  for (const bad of ['https://x.com.evil.test/user/status/123456789', 'https://example.com/123456789', 'https://x.com/u/status/12345 https://x.com/v/status/12346']) {
+    assert.throws(() => h.ctx.parseVoiceInterviewRecord(record({extra:`【引用元URL】\n${bad}\n`})), /引用元URL/);
+  }
+  const parts = h.tables.VoiceImports.map(r => ({...r})); parts[1].quote_url = '';
+  assert.throws(() => h.ctx.assembleVoiceInterviewRecords(parts), /引用元URLが一致/);
+});

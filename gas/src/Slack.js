@@ -136,3 +136,25 @@ function notifySlack(text, threadTs) {
     return null;
   }
 }
+
+/** 見送りと修正待ちを区別し、元の取材スレッドへ判断を返す。公開処理は行わない。 */
+function notifyEditorialDecision(row, kind, reason) {
+  function plain(value, max) { return String(value || '').slice(0, max).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+  try {
+    var thread = String(row.thread_ts || '').replace(/^ts_/, '');
+    if (!thread && row.session_id) {
+      var original = readTable(SHEET.INTERVIEWS).filter(function (q) { return String(q.session_id) === String(row.session_id); })[0];
+      if (original) thread = String(original.thread_ts || '').replace(/^ts_/, '');
+    }
+    var title = kind === 'hold' ? '審査で保留：まだ予約・投稿されません' : kind === 'no_material' ? '今回は下書き生成を見送りました' : 'この下書きは見送りになりました';
+    var text = ':memo: ' + title + '\n対象: ' + plain(row.id || row.session_id, 100) +
+      (row.text ? '\n本文: ' + plain(row.text, 180) : '') + '\n理由: ' + plain(reason || '理由の記載なし', 1600) +
+      '\n回答・本文は保存されています。' + (kind === 'hold' ? '管理画面の「保留」で指摘を確認し、編集後に再審査できます。' : 'この判断で自動投稿されることはありません。');
+    var result = notifySlack(text, /^\d+\.\d+$/.test(thread) ? thread : undefined);
+    if (!result) logEvent('editorial_notice_failed', String(row.id || row.session_id) + ': ' + kind);
+    return !!result;
+  } catch (e) {
+    logEvent('editorial_notice_failed', String(row.id || row.session_id) + ': ' + String(e).slice(0, 160));
+    return false;
+  }
+}

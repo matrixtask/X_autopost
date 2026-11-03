@@ -290,7 +290,7 @@ function themePerformance() {
   var samples = themeOutcomeSamples();
   var measured = samples.map(function (x) { return x.row; });
   var pct = percentileWithinWindow(samples.map(function (x) {
-    return { t: x.t, v: x.rate };
+    return { t: x.t, v: x.impressions };
   }), 30);
 
   // 表記ゆれで実測が分断されないよう、正規化したキーで集計する
@@ -557,7 +557,7 @@ function topPostSamples(limit) {
   var samples = themeOutcomeSamples();
   if (samples.length < 5) return [];
   var pct = percentileWithinWindow(samples.map(function (x) {
-    return { t: x.t, v: x.rate };
+    return { t: x.t, v: x.impressions };
   }), 30);
   return samples.map(function (x, i) { return { text: String(x.row.text), p: pct[i] }; })
     .sort(function (a, b) { return b.p - a.p; })
@@ -582,7 +582,7 @@ function draftThemes(kind, count, ctx, taken, today) {
   if (count <= 0) return [];
   var prompts = {
     adjacent: [
-      '以下は、プロフィールクリック率が同時期に高かった参考例です。因果・再現性は未検証です。',
+      '以下は、オーガニックインプレッションが同時期に高かった参考例です。因果・再現性は未検証です。',
       (ctx.samples || []).map(function (s) { return '- ' + s; }).join('\n'),
       '',
       (ctx.questions && ctx.questions.length
@@ -784,7 +784,7 @@ function refreshThemeNotes(minSamples) {
     var chunk = themes.slice(i, i + 12);
     var user = [
       '以下のテーマのメモを書き直してください。',
-      'perfは投稿48〜168時間後のプロフィールクリック率の同時期内順位の平均。50が中位。因果・再現性は未検証。',
+      'perfは投稿48〜168時間後のオーガニックインプレッションの同時期内順位の平均。50が中位。因果・再現性は未検証。',
       '',
       chunk.map(function (t, j) {
         var p = perf.byTheme[normalizeThemeKey(t.theme)];
@@ -828,7 +828,7 @@ function themeSamples() {
   var samples = themeOutcomeSamples();
   var rows = samples.map(function (x) { return x.row; });
   var pct = percentileWithinWindow(samples.map(function (x) {
-    return { t: x.t, v: x.rate };
+    return { t: x.t, v: x.impressions };
   }), 30);
   var out = {};
   rows.forEach(function (r, i) {
@@ -869,7 +869,7 @@ function reportThemeWeights() {
   var lines = [':dart: *テーマ重みを実績で更新しました*（実測のあるテーマ' + r.measured + '件）', ''];
   r.changes.sort(function (a, b) { return b.to - a.to; }).forEach(function (c) {
     lines.push((c.to > c.from ? ':arrow_up:' : ':arrow_down:') + ' ' + c.theme +
-      ': ' + c.from + ' → ' + c.to + '（プロフィールクリック率の窓内順位' + c.perf + '点 / n=' + c.n + '）');
+      ': ' + c.from + ' → ' + c.to + '（オーガニックインプレッションの窓内順位' + c.perf + '点 / n=' + c.n + '）');
   });
   lines.push('');
   lines.push('重みが上がったテーマほど、翌朝のインタビューで選ばれやすくなります。');
