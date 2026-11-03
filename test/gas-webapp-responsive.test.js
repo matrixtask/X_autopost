@@ -160,7 +160,7 @@ test('analytics switches periods during loading, caches each result, and ignores
   h.calls[6].ok(emptyAnalytics('all')); assert.doesNotMatch(h.element('list').innerHTML, /old日/);
 });
 
-test('schedule view refreshes persisted rows, clears unrelated searches, includes date-pending approvals and shows rejections separately', () => {
+test('schedule view refreshes persisted rows, clears unrelated searches, includes date-pending approvals and excludes rejected posts from all UI lists', () => {
   const h = client(); h.ctx.searchPosts('絶対に一致しない検索'); h.ctx.setTab('scheduled');
   assert.equal(h.calls[1].name, 'api_listPosts'); assert.equal(h.ctx.query, '');
   h.calls[1].ok(JSON.stringify([
@@ -172,8 +172,10 @@ test('schedule view refreshes persisted rows, clears unrelated searches, include
   assert.match(h.element('list').innerHTML,/予約 2026-11-05 09:00/);
   assert.ok(h.element('list').innerHTML.indexOf('card-p0') < h.element('list').innerHTML.indexOf('card-p1'));
   assert.doesNotMatch(h.element('list').innerHTML,/card-p2/);
-  h.ctx.setTab('rejected'); assert.match(h.element('list').innerHTML,/card-p2/);
-  assert.match(h.element('tabs').innerHTML,/見送り 1/);
+  h.ctx.setTab('all'); assert.doesNotMatch(h.element('list').innerHTML,/card-p2/);
+  assert.doesNotMatch(h.element('tabs').innerHTML,/見送り/);
+  assert.match(h.element('tabs').innerHTML,/すべて 2/);
+  assert.equal(h.ctx.posts.find(p => p.id === 'p2').status, 'rejected'); // Persisted history stays intact.
   h.listeners.focus(); assert.equal(h.calls[2].name,'api_listPosts');
 });
 

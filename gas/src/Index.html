@@ -100,7 +100,6 @@
   var TABS = [
     { key: 'ready', label: '承認待ち' },
     { key: 'scheduled', label: '予約一覧' },
-    { key: 'rejected', label: '見送り' },
     { key: 'approved', label: '承認済み' },
     { key: 'stock', label: '保留' },
     { key: 'draft', label: '審査待ち' },
@@ -381,7 +380,7 @@
   }
 
   function matchesTab(post, key) {
-    return key === 'all' || post.status === key || (key === 'scheduled' && post.status === 'approved');
+    return post.status !== 'rejected' && (key === 'all' || post.status === key || (key === 'scheduled' && post.status === 'approved'));
   }
 
   function searchPosts(value) { query = value.trim().toLowerCase(); page = 0; renderList(); }
