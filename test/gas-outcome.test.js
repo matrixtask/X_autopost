@@ -242,13 +242,14 @@ test('outcome: exact source includes only answers, ambiguous legacy and skipped 
   assert.equal(ctx.outcomeSourceForRow({ session_id: 's', source_idx: 1 }, qa), '');
 });
 
-test('outcome: measurement freezes once, includes zero clicks, rejects ads, missing clicks and wrong ages', () => {
+test('outcome: measurement freezes once, includes zero clicks, rejects ads and wrong ages, accepts missing clicks and measured zero reach', () => {
   const { ctx } = setup();
   const row = { score_version: 'outcome-v1', text: 't', outcome_text: 't' };
   const m = { metrics_age_h: 72, impressions: 200, profile_clicks: 0, metrics_at: '2026-09-13 09:00' };
   assert.equal(JSON.parse(ctx.captureOutcomeMetrics(row, m)).profile_clicks, 0);
-  for (const overrides of [{ metrics_age_h: 47 }, { metrics_age_h: 169 }, { profile_clicks: undefined },
-    { profile_clicks: '' }, { impressions: 0 }, { promoted: 'yes' }]) {
+  assert.equal(JSON.parse(ctx.captureOutcomeMetrics(row, { ...m, profile_clicks: undefined, impressions: 0 })).impressions, 0);
+  assert.equal(JSON.parse(ctx.captureOutcomeMetrics(row, { ...m, profile_clicks: undefined })).profile_clicks, null);
+  for (const overrides of [{ metrics_age_h: 47 }, { metrics_age_h: 169 }, { impressions: '' }, { impressions: undefined }, { impressions: -1 }, { promoted: 'yes' }]) {
     assert.equal(ctx.captureOutcomeMetrics(row, { ...m, ...overrides }), '');
   }
   for (const overrides of [{ outcome_metrics: '{}' }, { outcome_text: 'old' }, { promoted: 'yes' }, { score_version: '' }]) {
@@ -263,7 +264,7 @@ function measured(ctx, id, overrides = {}) {
     outcome_scored_at: '2026-08-01 09:00', posted_at: `2026-09-${day} 09:00`,
     outcome_axes: JSON.stringify(review(ctx, Number(id) % 5).axes),
     editorial_review: JSON.stringify({ scorer: 'claude/test-model/' }),
-    outcome_metrics: JSON.stringify({ age_h: 72, impressions: 200, profile_clicks: Number(id) % 5 }), ...overrides };
+    outcome_metrics: JSON.stringify({ age_h: 72, impressions: Number(id) % 5 * 100, profile_clicks: 10 - Number(id) % 5 }), ...overrides };
 }
 
 test('outcome: prospective validation excludes old scales, retrospective scoring, stale text and repeats', () => {
@@ -317,7 +318,7 @@ test('themes: weekly rotation and generation cannot restore retired or unrelated
   assert.ok(db.Themes.filter(t => t.roster).every(ctx.isFocusedTheme));
 });
 
-test('themes: performance uses measured profile rate, excludes missing clicks and retired topics', () => {
+test('themes: performance uses impressions, accepts missing clicks and excludes retired topics', () => {
   const { ctx, db } = setup();
   db.Stock.push(...[
     { theme: 'A', impressions: 100, profile_clicks: 5 },
@@ -328,8 +329,8 @@ test('themes: performance uses measured profile rate, excludes missing clicks an
   ].map((r, i) => ({ status: 'posted', posted_at: '2026-09-01 09:00', metrics_at: '2026-09-04 09:00',
     metrics_age_h: 72, text: '自分の話', tweet_id: String(i + 1), ...r })));
   const result = ctx.themePerformance();
-  assert.equal(result.themeCount, 2);
-  assert.ok(result.byTheme.a.perf > result.byTheme.b.perf);
+  assert.equal(result.themeCount, 3);
+  assert.ok(result.byTheme.b.perf > result.byTheme.a.perf);
 });
 
 test('outcome: diagnostic entrypoints are read only and do not change legacy weights', () => {

@@ -99,16 +99,17 @@
   var TOKEN = '<?= token ?>';
   var TABS = [
     { key: 'ready', label: '承認待ち' },
-    { key: 'scheduled', label: '予約済み' },
+    { key: 'scheduled', label: '予約一覧' },
+    { key: 'rejected', label: '見送り' },
     { key: 'approved', label: '承認済み' },
-    { key: 'stock', label: 'ストック' },
+    { key: 'stock', label: '保留' },
     { key: 'draft', label: '審査待ち' },
     { key: 'failed', label: '投稿失敗' },
     { key: 'posted', label: '投稿済み' },
     { key: 'all', label: 'すべて' },
     { key: 'analytics', label: '分析' },
   ];
-  var STATUS_LABEL = { draft: '審査待ち', stock: '保留', ready: '承認待ち', approved: '承認済み', scheduled: '予約済み', posted: '投稿済み', rejected: '却下', failed: '失敗' };
+  var STATUS_LABEL = { draft: '審査待ち', stock: '保留', ready: '承認待ち', approved: '承認済み', scheduled: '予約済み', posted: '投稿済み', rejected: '見送り', failed: '失敗' };
   var CATEGORY_LABEL = { evergreen: '定番', news: '時事', neta: 'ネタ', manual: '手動' };
   var posts = [];
   var activeTab = 'ready';
@@ -154,8 +155,7 @@
 
   function renderTabs() {
     document.getElementById('tabs').innerHTML = TABS.map(function (t) {
-      var count = t.key === 'analytics' ? '' :
-        ' ' + (t.key === 'all' ? posts.length : posts.filter(function (p) { return p.status === t.key; }).length);
+      var count = t.key === 'analytics' ? '' : ' ' + posts.filter(function (p) { return matchesTab(p, t.key); }).length;
       return '<button class="tab' + (activeTab === t.key ? ' active' : '') + '" onclick="setTab(\'' + t.key + '\')">' + t.label + count + '</button>';
     }).join('');
   }
@@ -173,9 +173,11 @@
   }
   function setTab(key) {
     activeTab = key; page = 0;
+    query = ''; document.getElementById('search').value = '';
     document.getElementById('search').hidden = key === 'analytics';
     renderTabs();
     if (key === 'analytics') { renderAnalytics(); } else { renderList(); }
+    if (key === 'scheduled' && !hasUnsaved()) load();
   }
 
   function renderAnalytics() {
@@ -313,7 +315,7 @@
     }).join('');
 
     var rankingHtml =
-      '<div class="card"><h3 class="sec">' + esc(d.period.label) + ' · ' + (d.hasClicks ? 'プロフィールクリック Top10（フォローに一番近い指標）' : 'オーガニックインプレッション Top10') + '</h3>' +
+      '<div class="card"><h3 class="sec">' + esc(d.period.label) + ' · ' + 'オーガニックインプレッション Top10' + '</h3>' +
       d.top10.map(function (p, i) {
         return '<div class="top-row"><div class="meta">' +
           '<span class="badge b-posted">' + (i + 1) + '位</span>' +
@@ -364,17 +366,22 @@
   }
 
   function renderList() {
-    var items = sortForTab(activeTab === 'all' ? posts : posts.filter(function (p) { return p.status === activeTab; }), activeTab);
+    var items = sortForTab(posts.filter(function (p) { return matchesTab(p, activeTab); }), activeTab);
     if (query) items = items.filter(function (p) {
       return [p.text, p.theme, p.score_reason].join(' ').toLowerCase().indexOf(query) >= 0;
     });
     page = Math.min(page, Math.max(0, Math.ceil(items.length / PAGE_SIZE) - 1));
     var start = page * PAGE_SIZE;
     var el = document.getElementById('list');
-    if (!items.length) { el.innerHTML = '<div class="empty">' + (query ? '一致する投稿がありません' : 'ここにはまだ何もありません') + '</div>'; updateControls(); return; }
-    el.innerHTML = '<p class="list-count">' + items.length + '件中 ' + (start + 1) + '–' + Math.min(start + PAGE_SIZE, items.length) + '件</p>' + items.slice(start, start + PAGE_SIZE).map(renderCard).join('') +
+    var intro = activeTab === 'scheduled' ? '<div class="card"><h2 class="sec">予約状況</h2><p>日時確定 ' + posts.filter(function (p) { return p.status === 'scheduled'; }).length + '件 / 承認済み・日時未確定 ' + posts.filter(function (p) { return p.status === 'approved'; }).length + '件</p><div class="reason">日時未確定の投稿は「承認済みを予約」で枠に入ります。Xの画面で直接予約した投稿は、このアプリには取り込まれません。</div><button class="ghost" data-mutation onclick="scheduleNow()">承認済みを予約</button></div>' : '';
+    if (!items.length) { el.innerHTML = intro + '<div class="empty">' + (query ? '一致する投稿がありません' : activeTab === 'scheduled' ? 'このアプリに保存された予約・予約待ちは0件です。投稿済みとすべての一覧も確認できます。' : 'ここにはまだ何もありません') + '</div>'; updateControls(); return; }
+    el.innerHTML = intro + '<p class="list-count">' + items.length + '件中 ' + (start + 1) + '–' + Math.min(start + PAGE_SIZE, items.length) + '件</p>' + items.slice(start, start + PAGE_SIZE).map(renderCard).join('') +
       (items.length > PAGE_SIZE ? '<div class="pager"><button class="ghost" onclick="changePage(-1)"' + (page === 0 ? ' disabled' : '') + '>前へ</button><span>' + (page + 1) + ' / ' + Math.ceil(items.length / PAGE_SIZE) + '</span><button class="ghost" onclick="changePage(1)"' + (start + PAGE_SIZE >= items.length ? ' disabled' : '') + '>次へ</button></div>' : '');
     updateControls();
+  }
+
+  function matchesTab(post, key) {
+    return key === 'all' || post.status === key || (key === 'scheduled' && post.status === 'approved');
   }
 
   function searchPosts(value) { query = value.trim().toLowerCase(); page = 0; renderList(); }
@@ -390,6 +397,7 @@
         p.edit_group ? '<span>' + esc(p.created_at.slice(0, 10) + ' 回答Q' + p.source_idx + '・' + p.theme) + '</span>' : '',
         p.score !== null ? '<span>' + (p.score_version === 'outcome-v1' ? '新5軸・参考値 ' : '旧スコア ') + p.score + '</span>' : '',
         p.scheduled_at ? '<span>予約 ' + esc(p.scheduled_at) + '</span>' : '',
+        p.interview_date ? '<span>元の取材 ' + esc(p.interview_date) + '</span>' : '',
         p.posted_at ? '<span>投稿 ' + esc(p.posted_at) + '</span>' : '',
       ].filter(Boolean).join('');
       var actions = '';
@@ -407,7 +415,7 @@
         actions += '<button class="reject" data-mutation onclick="resolveFailure(' + arg + ', \'rejected\')">今回は見送る</button>';
       }
       if (p.status === 'ready' || p.status === 'stock') {
-        actions += '<button class="approve" data-mutation onclick="setStatus(' + arg + ', \'approved\')">承認して予約へ</button>';
+        actions += '<button class="approve" data-mutation onclick="setStatus(' + arg + ', \'approved\')">承認する（日時は未確定）</button>';
       }
       if (['ready', 'stock', 'approved', 'scheduled', 'draft'].indexOf(p.status) >= 0) {
         actions += '<button class="edit" data-mutation onclick="toggleEdit(' + arg + ')">編集</button>';
@@ -578,11 +586,13 @@
     google.script.run
       .withSuccessHandler(function (json) {
         var n = JSON.parse(json).length;
-        batchSuccess(n ? n + '件を予約しました' : '予約対象（承認済み）がありません');
+        activeTab = 'scheduled'; page = 0; query = ''; document.getElementById('search').value = '';
+        batchSuccess(n ? n + '件を予約しました' : '新しい予約は追加されませんでした。承認済みの件数・予約枠・予約前の確認を確認してください。');
       })
       .withFailureHandler(batchFailure)
       .api_scheduleNow(TOKEN);
   }
 
+  window.addEventListener('focus', function () { if (!hasUnsaved()) load(); });
   load();
 </script>

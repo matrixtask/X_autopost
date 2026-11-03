@@ -985,3 +985,40 @@ test('exhausted generation budget stops before editing and never saves partial w
   const h = setup(); h.ctx.EDITORIAL_EXECUTION_DEADLINE = Date.now() + 100;
   assert.throws(() => generate(h), /時間予算/); assert.equal(h.db.Stock.length, 0); assert.equal(h.calls.length, 0);
 });
+
+test('voice URL resolves before council, persists external evidence, generates link posts even with native flag and recovers lookup failure', () => {
+  const h = setup({X_NATIVE_QUOTES_ENABLED:'true'});
+  vm.runInContext(readFileSync(new URL('../gas/src/ChatGPTInterview.js', import.meta.url), 'utf8'), h.ctx);
+  const id = '2104053537751880093', canonical = 'https://x.com/i/status/' + id;
+  Object.assign(h.db.Interviews[0], {_row:2, quote_url:canonical});
+  h.ctx.setColumnByRows = (sheet, key, entries) => { assert.equal(sheet,'Interviews'); assert.equal(entries[0].row,2); h.db.Interviews[0][key] = entries[0].value; };
+  let reads = 0;
+  h.ctx.xApiGet = () => { reads++; throw new Error('一時的な読取失敗'); };
+  assert.throws(() => h.ctx.generateDraftsFromInterview('s'), /読取失敗/);
+  assert.equal(h.db.Interviews[0].answer, longText); assert.equal(h.db.Stock.length, 0);
+  h.ctx.xApiGet = () => { reads++; return {data:{id,text:'短い表示',note_tweet:{text:'引用元の完全な本文。'},author_id:'123'}}; };
+  generate(h); const row = h.db.Stock[0];
+  assert.equal(row.quote_mode, 'link'); assert.ok(row.text.endsWith(canonical));
+  assert.equal(JSON.parse(row.quote_source).text, '引用元の完全な本文。');
+  assert.equal(h.db.Interviews[0].answer, longText);
+  assert.equal(JSON.parse(h.db.Interviews[0].quote_source).text, '引用元の完全な本文。');
+  assert.equal(h.ctx.quotePublishingProblem(row), '');
+  assert.ok(h.calls.some(c => String(c.input || '').includes('引用元の完全な本文。')));
+  h.ctx.resolveVoiceQuoteSource(h.db.Interviews[0]); assert.equal(reads, 2); // Fixed snapshot reused.
+  h.db.Interviews[0].quote_url = 'https://x.com/i/status/999999';
+  assert.throws(() => h.ctx.resolveVoiceQuoteSource(h.db.Interviews[0]), /一致/);
+});
+
+test('quality hold and council no-material notify the saved interview, while identical re-review stays quiet', () => {
+  const h=setup(), notices=[]; h.ctx.notifyEditorialDecision=(...args)=>{notices.push(args);return true;};
+  generate(h);
+  const comp=composition(); comp.mia={persona:'mia',verdict:'revise',reason:'冒頭の対象が分からないため文脈の補完が必要',quote:core,action:'本人の回答から対象を冒頭へ補ってください'};
+  h.ctx.askClaudeJsonSalvageable=(_system,input)=>Object.fromEntries(JSON.parse(input.split('\nJSON')[0]).map(r=>[r.id,review(r.text,comp)]));
+  h.ctx.runOutcomeQualityGate();
+  assert.equal(h.db.Stock[0].status,'stock'); assert.equal(notices[0][1],'hold'); assert.match(notices[0][2],/文脈の補完/);
+  h.ctx.runOutcomeQualityGate(h.db.Stock.map(r=>({...r}))); assert.equal(notices.length,1);
+  const empty=setup(), skipped=[]; empty.ctx.notifyEditorialDecision=(...args)=>{skipped.push(args);return true;};
+  empty.requests.push(debate(),{...reflection(),no_material:true,anchors:[],reject:'公開可能な材料がまだないため生成を見送る'});
+  assert.equal(empty.ctx.generateDraftsFromInterview('s').length,0);
+  assert.equal(skipped[0][1],'no_material'); assert.match(skipped[0][2],/材料/); assert.equal(empty.db.Interviews[0].answer,longText);
+});

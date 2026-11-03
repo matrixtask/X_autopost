@@ -8,6 +8,8 @@ function generateDraftsFromInterview(sessionId) {
     return String(r.session_id) === sessionId && String(r.answered_at) !== 'skipped' && interviewAnswerText(r);
   });
   if (!qa.length) throw new Error('回答がありません: ' + sessionId);
+  // 回答は既に保存済み。引用の読取失敗でも原文を失わず通常の再生成で回復できる。
+  qa.forEach(function (r) { if (r.quote_url) resolveVoiceQuoteSource(r); });
   // 一次資料はモデル呼び出し前に版を固定。保存失敗時は出典IDを推測して付けない。
   var sourceRefs = typeof tryArchiveInterviewSources === 'function' ? tryArchiveInterviewSources(qa, 'generation_input') : {};
   qa.forEach(function (r) { r.article_source_revision_ids = JSON.stringify(sourceRefs[sessionId + ':Q' + r.idx] || []); });
@@ -22,6 +24,7 @@ function generateDraftsFromInterview(sessionId) {
     reach_guidance: typeof reachHypothesesPrompt === 'function' ? reachHypothesesPrompt() : '' }, 'generate', councilSources, sessionId);
   if (brief.reflection.no_material) {
     logEvent('drafts_created', sessionId + ' -> 0件（会議で投稿の核なし）');
+    if (typeof notifyEditorialDecision === 'function') notifyEditorialDecision(qa[0], 'no_material', brief.reflection.reject || brief.reflection.direction);
     return [];
   }
 

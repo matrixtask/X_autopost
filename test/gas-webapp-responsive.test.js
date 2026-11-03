@@ -159,3 +159,29 @@ test('analytics switches periods during loading, caches each result, and ignores
   h.calls[4].ok(emptyAnalytics('old')); assert.match(h.element('list').innerHTML, /集計中/);
   h.calls[6].ok(emptyAnalytics('all')); assert.doesNotMatch(h.element('list').innerHTML, /old日/);
 });
+
+test('schedule view refreshes persisted rows, clears unrelated searches, includes date-pending approvals and shows rejections separately', () => {
+  const h = client(); h.ctx.searchPosts('絶対に一致しない検索'); h.ctx.setTab('scheduled');
+  assert.equal(h.calls[1].name, 'api_listPosts'); assert.equal(h.ctx.query, '');
+  h.calls[1].ok(JSON.stringify([
+    {...h.rows[0],status:'scheduled',scheduled_at:'2026-11-05 09:00'},
+    {...h.rows[1],status:'approved'}, {...h.rows[2],status:'rejected'}
+  ]));
+  assert.match(h.element('list').innerHTML,/日時確定 1件/);
+  assert.match(h.element('list').innerHTML,/日時未確定 1件/);
+  assert.match(h.element('list').innerHTML,/予約 2026-11-05 09:00/);
+  assert.ok(h.element('list').innerHTML.indexOf('card-p0') < h.element('list').innerHTML.indexOf('card-p1'));
+  assert.doesNotMatch(h.element('list').innerHTML,/card-p2/);
+  h.ctx.setTab('rejected'); assert.match(h.element('list').innerHTML,/card-p2/);
+  assert.match(h.element('tabs').innerHTML,/見送り 1/);
+  h.listeners.focus(); assert.equal(h.calls[2].name,'api_listPosts');
+});
+
+test('web rejection notifies only on transition; notification failure does not undo saved decision', () => {
+  const h = server(), notices = [];
+  h.ctx.notifyEditorialDecision = (...args) => {notices.push(args); return false;};
+  const result = JSON.parse(h.ctx.api_setStatus('valid','a','rejected','今回は使わない',{includePost:true}));
+  assert.equal(result.post.status,'rejected'); assert.match(result.message,/Slack通知は失敗/);
+  assert.equal(notices[0][2],'今回は使わない');
+  h.ctx.api_setStatus('valid','a','rejected'); assert.equal(notices.length,1);
+});

@@ -507,10 +507,10 @@ function clearBackfillTrigger() {
  * 採点されることになる。分けるのをやめて、常に同じ物差しを使う。
  */
 function axisScoringSystemPrompt(samples) {
-  var learnedRubric = getProp('QUALITY_RUBRIC_LEARNED', '');
+  var learnedRubric = getProp('QUALITY_RUBRIC_LEARNED_REACH', '');
   return [
     'あなたはXアカウント運用の編集長です。ポストを採点します。',
-    'このアカウントの最終目的は「フォロワーを増やすこと」です。いいねが付くことではありません。',
+    'このアカウントの最優先の成果はオーガニックインプレッションです。フォロワー増・いいね・クリックは補助指標です。',
     '',
     '以下の各軸を、それぞれ独立に0〜100点で採点してください。',
     '軸ごとの重み付けはこちらで行うので、あなたは各軸を純粋に評価することに集中してください。',

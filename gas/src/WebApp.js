@@ -227,10 +227,17 @@ function webPostView_(r) {
     score_reason: r.score_version === OUTCOME_SCORE_VERSION ? outcomeReviewFeedback(r) : String(r.score_reason || ''),
     status: String(r.status),
     scheduled_at: String(r.scheduled_at || ''),
+    interview_date: webInterviewDate_(r.session_id),
     posted_at: String(r.posted_at || ''),
     tweet_url: storedTweetUrl_(r),
     has_media: String(r.media_url || '').trim() !== '',
   };
+}
+
+function webInterviewDate_(sessionId) {
+  var id = String(sessionId || '').replace(/^voice_/, '').replace(/^voice-/, '');
+  var match = id.match(/^(\d{4})-?(\d{2})-?(\d{2})(?:[_-]|$)/);
+  return match ? match[1] + '-' + match[2] + '-' + match[3] : '';
 }
 
 /** 既存クライアントには文字列、新UIには変更した1件だけを返す。 */
@@ -255,10 +262,14 @@ function api_setStatus(token, id, status, reason, options) {
   if (status !== STATUS.SCHEDULED) updates.scheduled_at = '';
   if (typeof archiveWebStock === 'function') archiveWebStock(id, 'unknown', 'before_user_status');
   updateStockById(id, updates);
+  var noticeFailed = false;
+  if (current && status === STATUS.REJECTED && current.status !== STATUS.REJECTED && typeof notifyEditorialDecision === 'function') {
+    noticeFailed = !notifyEditorialDecision(current, 'rejected', reason || '管理画面で本人が見送りを選択しました。');
+  }
   if (typeof archiveWebStock === 'function') archiveWebStock(id, 'user', 'status_changed', reason);
   logEvent('webapp_status', id + ' -> ' + status);
   try { syncStockRowToNotion(id); } catch (e) { logEvent('notion_error', id + ': ' + e); }
-  return options && options.includePost ? webMutationResult_(id, '更新しました', options) : 'ok';
+  return options && options.includePost ? webMutationResult_(id, noticeFailed ? '見送りを保存しました。Slack通知は失敗しました。' : '更新しました', options) : 'ok';
 }
 
 function api_updateText(token, id, text, reason, options) {
@@ -375,6 +386,10 @@ function api_resolveFailedPost(token, id, action, confirmedNotPublished) {
   } else throw new Error('不正な操作です');
   if (typeof tryArchiveEditorialRows === 'function') tryArchiveEditorialRows([row], 'unknown', 'before_failure_resolution');
   updateStockById(id, { status: status, scheduled_at: '' });
+  if (status === STATUS.REJECTED && typeof notifyEditorialDecision === 'function' &&
+      !notifyEditorialDecision(row, 'rejected', '投稿失敗の確認画面で本人が見送りを選択しました。X上での公開有無とは別の判断です。')) {
+    message += 'Slack通知は失敗しました。';
+  }
   if (typeof archiveWebStock === 'function') archiveWebStock(id, 'user', 'failure_resolved', action);
   logEvent('webapp_failure_resolved', id + ': ' + action);
   try { syncStockRowToNotion(id); } catch (e) { logEvent('notion_error', id + ': ' + e); }
@@ -410,6 +425,7 @@ function api_analytics(token, period) {
   var window = analyticsWindow_(period);
   var rows = readTable(SHEET.STOCK).filter(function (r) {
     if (String(r.status) !== STATUS.POSTED || !r.metrics_at) return false;
+    if (r.impressions === '' || r.impressions == null || !isFinite(Number(r.impressions)) || Number(r.impressions) < 0) return false;
     if (String(r.promoted) === 'yes' && r.paid_impressions === '') return false;
     if (window.days) {
       var posted = analyticsPostedAt_(r.posted_at);
@@ -463,11 +479,8 @@ function api_analytics(token, period) {
         ? Math.round(1000 * Number(r.profile_clicks) / Number(r.impressions)) / 10 : null,
     };
   }
-  // プロフィールクリック（フォローの直前行動）が取れていればそれ基準で並べる
+  // 表示順は常にオーガニックインプレッション。クリックは補助表示。
   var hasClicks = rows.some(function (r) { return r.profile_clicks !== ''; });
-  if (hasClicks) {
-    sorted.sort(function (a, b) { return Number(b.profile_clicks || 0) - Number(a.profile_clicks || 0); });
-  }
   var top10 = sorted.slice(0, 10).map(rowView);
   var table = sorted.map(rowView);
 
