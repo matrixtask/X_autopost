@@ -7,7 +7,7 @@
  * - 直近3日に絞る。Googleニュース検索の `when:3d` を使い、さらに
  *   pubDate でも足切りする（フィードによっては古い記事が混ざるため）
  * - 何媒体が扱っているかを「話題の大きさ」の代理指標にする。
- *   実インプレッションはRSSからは取れないので、これが得られる最善の近似
+ *   実インプレッションはRSSからは取れず、報道量は候補探しの目安に限る
  */
 
 /** Googleニュース検索のRSS URLを組み立てる（日本語/英語） */
@@ -20,29 +20,19 @@ function googleNewsFeed(query, lang, days) {
 
 function newsFeeds(days) {
   return [
-    // モビリティ全般（自社領域に限定しない）。
-    // 「交通」のような広い語を入れると自治体の広報記事ばかり拾うので使わない
-    { url: googleNewsFeed('自動運転 OR ロボタクシー OR EV OR ドローン OR 物流', 'ja', days), area: 'モビリティ' },
-    { url: googleNewsFeed('autonomous driving OR EV OR mobility OR transportation', 'en', days), area: 'mobility' },
-    // テクノロジー。AIを毎回先頭に置くとAIの話ばかりになるので、
-    // AI以外の技術だけを引く枠を分けて確保する
-    { url: googleNewsFeed('半導体 OR ロボット OR 宇宙 OR 電池 OR 素材', 'ja', days), area: 'テック' },
-    { url: googleNewsFeed('robotics OR semiconductor OR space OR battery OR materials', 'en', days), area: 'tech' },
-    { url: googleNewsFeed('AI OR 生成AI', 'ja', days), area: 'AI' },
-    // エンタメ・カルチャー・スポーツ。技術の話だけだと読者が偏るし、
-    // 本人の人となりが出るポストの種はこちら側から出やすい。
-    // 「炎上」のような多義語は車両火災や野球の失点まで拾うので使わない
-    { url: googleNewsFeed('映画 OR ドラマ OR 音楽 OR ゲーム OR アニメ', 'ja', days), area: 'エンタメ' },
-    { url: googleNewsFeed('優勝 OR 移籍 OR 世界記録 OR 逆転', 'ja', days), area: 'スポーツ' },
-    { url: googleNewsFeed('entertainment OR gaming OR music OR film', 'en', days), area: 'pop' },
-    { url: googleNewsFeed('SNSで話題 OR ヒット商品 OR 流行語 OR 予約殺到', 'ja', days), area: '話題' },
-    // スタートアップの資金調達・撤退（まだ知られていない話が出やすい）
-    { url: googleNewsFeed('startup funding OR acquisition OR shutdown', 'en', days), area: 'startup' },
-    { url: googleNewsFeed('スタートアップ 資金調達 OR 買収', 'ja', days), area: 'スタートアップ' },
-    // 航空・eVTOL は1本だけ（多いと時事枠が自社領域に偏る）
-    { url: googleNewsFeed('eVTOL OR "air taxi" OR aviation certification', 'en', days), area: '航空' },
-    // 媒体そのもののフィード（Googleニュースに乗らない話を拾う）
-    { url: 'https://techcrunch.com/feed/', area: 'TechCrunch' },
+    // 日英を同じ領域にまとめ、AIと複数のディープテック領域から候補を取る。
+    { url: googleNewsFeed('生成AI OR AIエージェント OR 人工知能', 'ja', days), area: 'AI' },
+    { url: googleNewsFeed('"generative AI" OR "AI agents" OR "AI models"', 'en', days), area: 'AI' },
+    { url: googleNewsFeed('ロボティクス OR ヒューマノイド OR 産業用ロボット', 'ja', days), area: 'ロボティクス' },
+    { url: googleNewsFeed('robotics OR humanoid OR "industrial robot"', 'en', days), area: 'ロボティクス' },
+    { url: googleNewsFeed('半導体 OR 量子コンピュータ OR 光コンピューティング', 'ja', days), area: '半導体・計算基盤' },
+    { url: googleNewsFeed('semiconductor OR "quantum computing"', 'en', days), area: '半導体・計算基盤' },
+    { url: googleNewsFeed('宇宙開発 OR ロケット OR 衛星通信', 'ja', days), area: '宇宙' },
+    { url: googleNewsFeed('全固体電池 OR 核融合 OR 新素材 OR 蓄電技術', 'ja', days), area: 'エネルギー・素材' },
+    { url: googleNewsFeed('"solid state battery" OR "fusion energy" OR "advanced materials"', 'en', days), area: 'エネルギー・素材' },
+    { url: googleNewsFeed('自動運転 OR ロボタクシー OR eVTOL OR ドローン技術', 'ja', days), area: 'モビリティ' },
+    { url: googleNewsFeed('"autonomous driving" OR eVTOL OR "air taxi"', 'en', days), area: 'モビリティ' },
+    { url: googleNewsFeed('ディープテック OR 合成生物学 OR バイオ製造', 'ja', days), area: 'ディープテック' },
   ];
 }
 
