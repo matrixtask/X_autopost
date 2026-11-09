@@ -17,8 +17,9 @@ function setup() {
     XmlService: { parse: () => ({ getRootElement: () => ({ getChild: () => ({ getChildren: () => entries }) }) }) },
   });
   for (const name of ['Pure', 'News']) vm.runInContext(readFileSync(new URL(`../gas/src/${name}.js`, import.meta.url), 'utf8'), ctx);
+  const actualFeeds = ctx.newsFeeds;
   ctx.newsFeeds = () => [{ url: 'https://example.com/feed', area: '移動' }];
-  return { ctx, entries };
+  return { ctx, entries, actualFeeds };
 }
 
 test('news excludes stale, unknown and future dates and preserves source metadata in question context', () => {
@@ -40,4 +41,18 @@ test('empty or unavailable feeds return no news rather than fabricated fallback 
   assert.equal(ctx.fetchNewsHeadlines(12).length, 0);
   ctx.UrlFetchApp.fetch = () => { throw new Error('offline'); };
   assert.equal(ctx.fetchNewsItems(12).length, 0);
+});
+
+
+test('default news sources cover AI and deep tech without entertainment or sports feeds', () => {
+  const { actualFeeds } = setup();
+  const feeds = actualFeeds(3);
+  const queries = feeds.map(f => new URL(f.url).searchParams.get('q'));
+  assert.ok(feeds.some(f => f.area === 'AI'));
+  assert.ok(new Set(feeds.map(f => f.area)).size >= 6);
+  assert.ok(feeds.length <= 13); // No increase over the previous daily fetch budget.
+  for (const query of queries) {
+    assert.match(query, /when:3d/);
+    assert.doesNotMatch(query, /映画|ドラマ|音楽|アニメ|優勝|移籍|流行語|entertainment|gaming|music|film/);
+  }
 });

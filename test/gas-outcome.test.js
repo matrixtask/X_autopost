@@ -423,3 +423,24 @@ test('news opinion is allowed by focus review without changing reference score a
   assert.match(prompt, /decision軸の低さだけで保留にしない/);
   assert.equal(ctx.OUTCOME_SCORE_VERSION, 'outcome-v1');
 });
+
+
+test('technology themes exclude high-weight old entertainment rows and seed only once without reviving stopped themes', () => {
+  const { ctx, db } = setup();
+  const old = { theme: '話題の映画やゲームで気になるもの', category: 'news', weight: 9999,
+    focus_version: 'news-comment-v2', reader_bridge: '趣味', roster: 'core' };
+  db.Themes.push(old);
+  assert.equal(ctx.ensureFocusedThemes(), 12);
+  assert.equal(ctx.ensureFocusedThemes(), 0);
+  const stopped = db.Themes.find(t => t.focus_version === ctx.EDITORIAL_FOCUS_VERSION);
+  stopped.weight = 0;
+  for (let i = 0; i < 20; i++) {
+    const selected = ctx.pickThemesForToday();
+    assert.ok(selected.length > 0);
+    assert.ok(selected.every(t => db.Themes.find(row => row.theme === t.theme).focus_version === 'tech-news-v3' && t.theme !== stopped.theme));
+  }
+  assert.equal(db.Themes.length, 13);
+  assert.equal(db.Themes[0], old);
+  assert.equal(old.weight, 9999);
+  assert.equal(stopped.weight, 0);
+});

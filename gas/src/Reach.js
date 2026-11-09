@@ -18,7 +18,7 @@ function reachNumber(value) {
 function reachHypothesesPrompt() {
   return [
     '表示数を伸ばすための取材仮説（成功の保証・採点の正解ではない）:',
-    '- 一般の仕事・暮らしに関係する最近の話題を入口にする。航空機開発や経営への接続は自然に出た場合だけ。比喩の答えを先に作らない。',
+    '- AI・ディープテック・テクノロジーの変化が仕事・暮らしにどう関係するかを短く説明できる最近の話題を入口にする。航空機開発や経営への接続は自然に出た場合だけ。比喩の答えを先に作らない。',
     '- 最近のニュースへの第一印象や気になる点を聞く。現場の選択・採らなかった案・代償の説明を必須にしない。',
     '- 本人が遭遇した具体的な場面、予想と現実のずれ、自然な笑いを拾う。劇的な失敗を経験済みと決めつけない。',
     '- 4問以上なら上の異なる入口を少なくとも2つ検討する。テーマと回答済みの内容を優先し、無理に全型を埋めない。',
@@ -134,7 +134,7 @@ function refreshQuoteSources() {
       });
       if (observations.length) appendRowsObj(QUOTE_SOURCE_SHEET, observations);
     }
-    var query = getProp('QUOTE_SEARCH_QUERY', '(ものづくり OR 製造 OR 設計 OR 移動 OR チーム OR 採用) lang:ja -is:retweet -is:reply -is:quote');
+    var query = getProp('QUOTE_SEARCH_QUERY', '(生成AI OR AIエージェント OR ロボット OR 半導体 OR 宇宙開発 OR 電池 OR ディープテック) lang:ja -is:retweet -is:reply -is:quote');
     var result = xApiGet('/tweets/search/recent', { query: query, max_results: '20', sort_order: 'relevancy',
       start_time: new Date(now - 72 * 3600000).toISOString(), 'tweet.fields': fields });
     var observed = {};
