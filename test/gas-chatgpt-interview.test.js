@@ -72,6 +72,25 @@ test('voice record: accepts connector attribution only after completion and arch
   }
 });
 
+test('voice record: transport typography is accepted only in the envelope and cannot modify answer text', () => {
+  const h = setup(), answer = '記録ID：これは本文。\n_使用して送信されました_\u00a0<@U123|ChatGPT>';
+  const original = record({ answer });
+  const delivered = original.replace('記録ID: ', '記録ID：').replace('分割: ', '分割:\u00a0').replace('質問番号: ', '質問番号：') +
+    '\n_Sent using_\u00a0<@U123|ChatGPT>';
+  const parsed = h.ctx.parseVoiceInterviewRecord(delivered);
+  assert.equal(parsed.answer, answer);
+  assert.equal(parsed.raw_text, delivered);
+  assert.equal(h.ctx.voiceRecordPayload(delivered), original);
+  assert.throws(() => h.ctx.parseVoiceInterviewRecord(original + '\n_Sent using* <@U123|ChatGPT>'), /後に取り込めない行/);
+});
+
+test('voice record: an incomplete intermediate part identifies its missing end marker without logging the answer', () => {
+  const h = setup(), body = record({ total: 5, answer: 'private body' });
+  assert.throws(() => h.ctx.parseVoiceInterviewRecord(body.replace('【記録完了】', '*Sent using* <@U123|ChatGPT>')),
+    error => /各分割の末尾/.test(error.message) && !/private body/.test(error.message));
+  assert.throws(() => h.ctx.parseVoiceInterviewRecord(body.replace('分割: 1/5', '分割: 1')), /3行目/);
+});
+
 test('voice record: attribution cannot excuse a missing end, unrelated trailing prose, or another record', () => {
   const h = setup(), footer = '\n*使用して送信されました* <@U123456789|ChatGPT>';
   for (const text of [record().replace('【記録完了】', '') + footer, record() + '\n別の追記' + footer,

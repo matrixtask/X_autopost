@@ -120,7 +120,7 @@ function doPost(e) {
     if (acceptsVoiceRecordEvent(event)) {
       try { enqueueVoiceInterviewRecord(event); }
       catch (error) {
-        logEvent('voice_record_receive_error', String(error));
+        logEvent('voice_record_receive_error', 'Slack ts=' + (/^\d+\.\d+$/.test(String(event.ts)) ? String(event.ts) : 'unknown') + ' ' + String(error));
         // 入力違反だけACKして原因を返す。一時的な保存失敗は再配送できるよう例外を残す。
         if (!error.voiceRecordInput) throw error;
         var rejectedCache = CacheService.getScriptCache();
