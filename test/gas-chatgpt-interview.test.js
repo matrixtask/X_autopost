@@ -91,6 +91,37 @@ test('voice record: an incomplete intermediate part identifies its missing end m
   assert.throws(() => h.ctx.parseVoiceInterviewRecord(body.replace('分割: 1/5', '分割: 1')), /3行目/);
 });
 
+test('voice webhook: same-line Slack attribution and an emphasized completion marker preserve the recorded answer', () => {
+  const h = setup();
+  const answer = '一行目。\n\n  二行目。  ';
+  const raw = record({ answer }).replace('【記録完了】', '\u200b*【記録完了】* Sent using <@U123|ChatGPT>');
+  const parsed = h.ctx.parseVoiceInterviewRecord(raw);
+  assert.equal(parsed.answer, answer);
+  assert.equal(parsed.raw_text, raw);
+  assert.throws(() => h.ctx.parseVoiceInterviewRecord(raw + ' 不明な追記'));
+});
+
+test('voice webhook: displayed blocks can supply a missing completion boundary only for the exact fallback body', () => {
+  const h = setup(), logs = [], answer = '本人: &lt; と書いた。\n  次の行。';
+  h.ctx.logEvent = (name, value) => logs.push([name, value]);
+  const plain = record({ answer });
+  const fallback = plain.slice(0, plain.indexOf('\n【記録完了】')).replace(/&/g, '&amp;');
+  const blocks = [{ type: 'rich_text', elements: [{ type: 'rich_text_section', elements: [{ type: 'text', text: plain }] }] },
+    { type: 'context', elements: [{ type: 'mrkdwn', text: '*使用して送信されました* <@U123|ChatGPT>' }] }];
+  h.ctx.enqueueVoiceInterviewRecord(h.event(fallback, { blocks }));
+  h.ctx.enqueueVoiceInterviewRecord(h.event(fallback, { blocks }));
+  assert.equal(h.tables.VoiceImports.length, 1);
+  assert.equal(h.tables.VoiceImports[0].answer, answer);
+  assert.equal(h.tables.VoiceImports[0].slack_fallback_text, fallback);
+  assert.deepEqual(logs, [['voice_record_received', 'ts=1.000001 part=1/1 source=blocks saved'],
+    ['voice_record_received', 'ts=1.000001 part=1/1 source=blocks duplicate']]);
+  assert.throws(() => h.ctx.enqueueVoiceInterviewRecord(h.event(fallback + '別の本文', { blocks })));
+  assert.throws(() => h.ctx.enqueueVoiceInterviewRecord(h.event(fallback, { blocks: [...blocks, { type: 'image' }] })));
+  assert.throws(() => h.ctx.enqueueVoiceInterviewRecord(h.event(fallback, {
+    blocks: [{ type: 'section', text: { type: 'mrkdwn', text: fallback } }]
+  })), /各分割の末尾/);
+});
+
 test('voice record: attribution cannot excuse a missing end, unrelated trailing prose, or another record', () => {
   const h = setup(), footer = '\n*使用して送信されました* <@U123456789|ChatGPT>';
   for (const text of [record().replace('【記録完了】', '') + footer, record() + '\n別の追記' + footer,

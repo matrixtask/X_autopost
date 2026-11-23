@@ -23,7 +23,8 @@ function voiceRecordText(text) {
 /** Slack連携が完了マーカーの後に付ける署名だけを除く。原文内の同じ文字列は残す。 */
 function voiceRecordPayload(text) {
   // Slackの太字・斜体、通常の空白・改行しない空白を署名行だけで受ける。
-  var body = text.replace(/(\n【記録完了】)[ \t\u00a0]*\n(?:[ \t\u00a0]*\n)*([*_])(?:使用して送信されました|Sent using)\2[ \t\u00a0]+<@[A-Z0-9]+(?:\|ChatGPT)?>[ \t\u00a0\n]*$/, '$1');
+  var body = text.replace(/\n[ \t\u00a0\u200b\ufeff]*([*_]?)【記録完了】\1[ \t\u00a0\u200b\ufeff]*(?:\n[ \t\u00a0]*)*([*_]?)(?:使用して送信されました|Sent using)\2[ \t\u00a0]+<@[A-Z0-9]+(?:\|ChatGPT)?>[ \t\u00a0\n]*$/, '\n【記録完了】');
+  body = body.replace(/\n[ \t\u00a0\u200b\ufeff]*([*_]?)【記録完了】\1[ \t\u00a0\u200b\ufeff\n]*$/, '\n【記録完了】');
   // 半角/全角コロンと区切り空白を冒頭の既知の管理行だけで揃える。
   return body.replace(/^(【音声インタビュー記録 v1】)[ \t]*\n記録ID[：:][ \t\u00a0]*([A-Za-z0-9_-]{8,64})[ \t]*\n分割[：:][ \t\u00a0]*([1-9][0-9]?\/[1-9][0-9]?)[ \t]*\n質問番号[：:][ \t\u00a0]*([1-9][0-9]?)[ \t]*\n/, '$1\n記録ID: $2\n分割: $3\n質問番号: $4\n');
 }
@@ -39,6 +40,7 @@ function voiceRecordFormatIssue_(payload) {
   var answer = lines.indexOf('【回答】');
   if (answer < 0) return '質問文の次に【回答】を独立した1行で入れてください。';
   if (answer === 5) return '【質問】と【回答】の間に質問文が必要です。';
+  if (payload.indexOf('【記録完了】') !== -1 && !/^【記録完了】[ \t]*$/m.test(payload)) return '受信した【記録完了】の前後に同じ行の文字があります。回答の次に独立した行で入れてください。';
   if (!/^【記録完了】[ \t]*$/m.test(payload)) return 'この分割には独立行の【記録完了】がありません。最後の分割だけでなく、各分割の末尾に入れてください。';
   if (!/\n【記録完了】\s*$/.test(payload)) return '【記録完了】の後に取り込めない行があります。連携の署名以外の後書きは省いてください。';
   return '【回答】の次の行から回答本文を入れ、任意の欄は引用元URL・確認会話・AIメモの順に置いてください。';
@@ -116,10 +118,81 @@ function acceptsVoiceRecordEvent(event) {
   return voiceRecordText(event.text).indexOf(VOICE_RECORD_MARKER) === 0;
 }
 
+/** Slackが表示するテキストを同じイベント内から復元。未対応要素は読み飛ばさない。 */
+function voiceBlockText_(blocks) {
+  if (!Array.isArray(blocks) || !blocks.length) return '';
+  var lines = [];
+  function plain(value) { return String(value).replace(/&/g, '&amp;'); }
+  for (var i = 0; i < blocks.length; i++) {
+    var block = blocks[i];
+    if (!block) return '';
+    if (block.type === 'section' && !block.accessory && !block.fields && block.text &&
+        /^(plain_text|mrkdwn)$/.test(block.text.type) && typeof block.text.text === 'string') {
+      lines.push(block.text.type === 'plain_text' ? plain(block.text.text) : block.text.text);
+    } else if (block.type === 'context' && Array.isArray(block.elements) && block.elements.length === 1 &&
+        block.elements[0] && block.elements[0].type === 'mrkdwn' && typeof block.elements[0].text === 'string') {
+      // 文脈欄は末尾の署名に限る。本文として扱わない。
+      if (i !== blocks.length - 1 || voiceRecordPayload('\n【記録完了】\n' + block.elements[0].text) !== '\n【記録完了】') return '';
+      lines.push(block.elements[0].text);
+    } else if (block.type === 'rich_text' && Array.isArray(block.elements)) {
+      for (var j = 0; j < block.elements.length; j++) {
+        var section = block.elements[j];
+        if (!section || !/^(rich_text_section|rich_text_quote|rich_text_preformatted)$/.test(section.type) ||
+            !Array.isArray(section.elements)) return '';
+        var line = '';
+        for (var k = 0; k < section.elements.length; k++) {
+          var el = section.elements[k];
+          if (el && el.type === 'text' && typeof el.text === 'string') line += plain(el.text);
+          else if (el && el.type === 'user' && /^[A-Z0-9]+$/.test(el.user_id)) line += '<@' + el.user_id + '>';
+          else return '';
+        }
+        lines.push(line);
+      }
+    } else return '';
+  }
+  return lines.join('\n');
+}
+
+/** 本文をログに出さず、失敗したイベントでマーカーが見えた位置と表示ブロック有無を記す。 */
+function voiceEnvelopeTrace_(event) {
+  var text = voiceRecordText(event.text);
+  var marker = '【記録完了】', pos = text.lastIndexOf(marker);
+  var blocks = voiceBlockText_(event.blocks);
+  if (pos < 0) return 'textEnd=absent blockEnd=' + (blocks.indexOf(marker) >= 0 ? 'present' : 'unavailable');
+  var previous = text.slice(0, pos).split('\n').pop();
+  var suffix = text.slice(pos + marker.length);
+  return 'textEnd=present linePrefixChars=' + previous.length + ' suffixChars=' + suffix.length +
+    ' footerLabel=' + /使用して送信されました|Sent using/.test(suffix) +
+    ' blockEnd=' + (blocks.indexOf(marker) >= 0 ? 'present' : 'unavailable');
+}
+
+/** 通知用textが欠けても、同一イベントの表示本文と質問・回答が一致した場合だけ採用。 */
+function voicePartFromEvent_(event) {
+  try { return parseVoiceInterviewRecord(event.text); }
+  catch (error) {
+    if (!error.voiceRecordInput) throw error;
+    var displayed = voiceBlockText_(event.blocks);
+    if (displayed.indexOf(VOICE_RECORD_MARKER) !== 0) throw error;
+    var part = parseVoiceInterviewRecord(displayed);
+    var complete = voiceRecordPayload(part.raw_text);
+    var end = complete.lastIndexOf('\n【記録完了】');
+    var beforeEnd = complete.slice(0, end);
+    var fallback = voiceRecordPayload(voiceRecordText(event.text));
+    // 区切りや連携署名だけが食い違う場合に限る。異なる本人回答・付記は採用しない。
+    if (fallback.slice(0, beforeEnd.length) !== beforeEnd) throw error;
+    var tail = fallback.slice(beforeEnd.length);
+    if (tail.trim() && voiceRecordPayload('\n【記録完了】\n' + tail.trim()) !== '\n【記録完了】') throw error;
+    part.slack_fallback_text = String(event.text);
+    return part;
+  }
+}
+
 /** Events APIでは保存だけ行う。LLMは5分トリガーで実行し、再配送は永続キーで排除。 */
 function enqueueVoiceInterviewRecord(event) {
-  var part = parseVoiceInterviewRecord(event.text);
+  var part = voicePartFromEvent_(event);
   if (!part) return false;
+  var trace = 'ts=' + (/^\d+\.\d+$/.test(String(event.ts)) ? event.ts : 'unknown') +
+    ' part=' + part.part + '/' + part.total + ' source=' + (part.slack_fallback_text ? 'blocks' : 'text');
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(1000)) throw new Error('取材記録の保存が競合しています。Slack再配送で再試行します。');
   try {
@@ -131,6 +204,7 @@ function enqueueVoiceInterviewRecord(event) {
       if (voiceRecordPayload(String(existing.raw_text)) !== voiceRecordPayload(part.raw_text)) {
         throw voiceRecordInputError('同じ記録ID・分割番号に別の本文があります。元の記録を残しています。');
       }
+      logEvent('voice_record_received', trace + ' duplicate');
       return true;
     }
     var threadTs = String(event.thread_ts || event.ts || '');
@@ -141,9 +215,10 @@ function enqueueVoiceInterviewRecord(event) {
     appendRowObj(VOICE_IMPORT_SHEET, {
       record_id: part.record_id, part: part.part, total: part.total, question_idx: part.question_idx,
       slack_ts: String(event.ts), thread_ts: threadTs, received_at: fmtDateTime(new Date()),
-      raw_text: part.raw_text, question: part.question, answer: part.answer,
+      raw_text: part.raw_text, slack_fallback_text: part.slack_fallback_text || '', question: part.question, answer: part.answer,
       ai_note: part.ai_note, quote_url: part.quote_url, status: 'received', session_id: 'voice_' + part.record_id,
     });
+    logEvent('voice_record_received', trace + ' saved');
     return true;
   } finally { lock.releaseLock(); }
 }
