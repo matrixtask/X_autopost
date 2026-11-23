@@ -22,7 +22,26 @@ function voiceRecordText(text) {
 
 /** Slack連携が完了マーカーの後に付ける署名だけを除く。原文内の同じ文字列は残す。 */
 function voiceRecordPayload(text) {
-  return text.replace(/(\n【記録完了】)[ \t]*\n(?:[ \t]*\n)*\*(?:使用して送信されました|Sent using)\* <@[A-Z0-9]+(?:\|ChatGPT)?>[ \t\n]*$/, '$1');
+  // Slackの太字・斜体、通常の空白・改行しない空白を署名行だけで受ける。
+  var body = text.replace(/(\n【記録完了】)[ \t\u00a0]*\n(?:[ \t\u00a0]*\n)*([*_])(?:使用して送信されました|Sent using)\2[ \t\u00a0]+<@[A-Z0-9]+(?:\|ChatGPT)?>[ \t\u00a0\n]*$/, '$1');
+  // 半角/全角コロンと区切り空白を冒頭の既知の管理行だけで揃える。
+  return body.replace(/^(【音声インタビュー記録 v1】)[ \t]*\n記録ID[：:][ \t\u00a0]*([A-Za-z0-9_-]{8,64})[ \t]*\n分割[：:][ \t\u00a0]*([1-9][0-9]?\/[1-9][0-9]?)[ \t]*\n質問番号[：:][ \t\u00a0]*([1-9][0-9]?)[ \t]*\n/, '$1\n記録ID: $2\n分割: $3\n質問番号: $4\n');
+}
+
+/** 入力を表示・ログへ転記せず、再送時に直す箇所だけを示す。 */
+function voiceRecordFormatIssue_(payload) {
+  var lines = payload.split('\n');
+  if (lines[0] !== VOICE_RECORD_MARKER) return '先頭の記録見出しを独立した1行にしてください。';
+  if (!/^記録ID: [A-Za-z0-9_-]{8,64}$/.test(lines[1] || '')) return '2行目に「記録ID: 」と8〜64字の英数字・ハイフン・アンダースコアのIDを入れてください。';
+  if (!/^分割: [1-9][0-9]?\/[1-9][0-9]?$/.test(lines[2] || '')) return '3行目に「分割: 1/5」のように分割番号と全体数を入れてください。';
+  if (!/^質問番号: [1-9][0-9]?$/.test(lines[3] || '')) return '4行目に「質問番号: 1」のように質問番号を入れてください。';
+  if (lines[4] !== '【質問】') return '5行目に【質問】を置き、次の行から質問文を入れてください。';
+  var answer = lines.indexOf('【回答】');
+  if (answer < 0) return '質問文の次に【回答】を独立した1行で入れてください。';
+  if (answer === 5) return '【質問】と【回答】の間に質問文が必要です。';
+  if (!/^【記録完了】[ \t]*$/m.test(payload)) return 'この分割には独立行の【記録完了】がありません。最後の分割だけでなく、各分割の末尾に入れてください。';
+  if (!/\n【記録完了】\s*$/.test(payload)) return '【記録完了】の後に取り込めない行があります。連携の署名以外の後書きは省いてください。';
+  return '【回答】の次の行から回答本文を入れ、任意の欄は引用元URL・確認会話・AIメモの順に置いてください。';
 }
 
 /** 全文一致する、完結した1パートだけ受け付ける。AIメモは回答に入れない。 */
@@ -32,7 +51,7 @@ function parseVoiceInterviewRecord(raw) {
   var payload = voiceRecordPayload(text);
   if (payload.length > 4500) throw voiceRecordInputError('取材記録は1メッセージ4500文字以内に分割してください。');
   var match = payload.match(/^【音声インタビュー記録 v1】\n記録ID: ([A-Za-z0-9_-]{8,64})\n分割: ([1-9][0-9]?)\/([1-9][0-9]?)\n質問番号: ([1-9][0-9]?)\n【質問】\n([\s\S]+?)\n【回答】\n([\s\S]+?)\n(?:【引用元URL】\n([^\n]+)\n)?(?:【確認会話・原文】\n([\s\S]*?)\n)?(?:【AIメモ・原文ではない】\n([\s\S]*?)\n)?【記録完了】\s*$/);
-  if (!match) throw voiceRecordInputError('取材記録の見出し、分割番号、質問・回答、記録完了の形式を確認してください。');
+  if (!match) throw voiceRecordInputError(voiceRecordFormatIssue_(payload));
   var result = { record_id: match[1], part: Number(match[2]), total: Number(match[3]),
     question_idx: Number(match[4]), question: match[5], answer: match[6],
     quote_url: match[7] ? canonicalVoiceQuoteUrl(match[7]) : '',
