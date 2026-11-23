@@ -3,7 +3,7 @@
  */
 
 var SHEET_HEADERS = {
-  VoiceImports: ['record_id', 'part', 'total', 'question_idx', 'slack_ts', 'thread_ts', 'received_at', 'raw_text', 'question', 'answer', 'ai_note', 'status', 'session_id', 'started_at', 'error', 'notified_at', 'quote_url'],
+  VoiceImports: ['record_id', 'part', 'total', 'question_idx', 'slack_ts', 'thread_ts', 'received_at', 'raw_text', 'question', 'answer', 'ai_note', 'status', 'session_id', 'started_at', 'error', 'notified_at', 'quote_url', 'slack_fallback_text'],
   QuoteSources: ['tweet_id', 'author_id', 'url', 'text', 'created_at', 'observed_at', 'impressions', 'previous_impressions', 'previous_at', 'growth', 'status'],
   SourceRevisions: ['revision_id', 'source_id', 'source_kind', 'session_id', 'source_idx', 'source_field', 'source_time', 'observed_at', 'channel_id', 'thread_ts', 'question', 'theme', 'text', 'media_url', 'media_type', 'content_hash', 'supersedes_revision_id', 'change_origin', 'publication_scope', 'reason', 'deleted', 'quote_tweet_id', 'quote_source'],
   EditorialHistory: ['event_id', 'post_id', 'session_id', 'source_idx', 'observed_at', 'actor_type', 'event_type', 'text', 'status', 'reason', 'source_revision_ids', 'edit_meta', 'content_hash', 'previous_event_id'],
