@@ -720,6 +720,40 @@ test('verified source quotes paraphrased out of the body get one text repair wit
   assert.equal(h.db.Stock[0].status, h.ctx.STATUS.DRAFT);
 });
 
+test('mixed evidence repair restores source-only quotes and reselects body-only supplemental quotes in one pass', () => {
+  for (const mutation of ['none', 'wrong-source', 'missing-from-body', 'changed-valid-quote', 'changed-other-post']) {
+    const { h, g, r } = mergeFixture(), invalid = structuredClone(g);
+    const q2 = g.parts[0].evidence[1].quote, q3 = '実験してみないとわからないです。';
+    h.db.Interviews.push({ ...answer(), idx: 3, answer: q3, question: '需要は？' },
+      { ...answer(), idx: 4, answer: '別の話です。', question: 'ほかには？' });
+    invalid.source_qis.push(3);
+    invalid.parts[0].evidence[1].quote = '記録なしでは次に生かせない。';
+    invalid.parts[0].text = invalid.parts[0].text.replace(q2, invalid.parts[0].evidence[1].quote) + 'まだ不明です。';
+    invalid.parts[0].evidence.push({ qi: 3, quote: q3 });
+    const other = { qi: 4, source_qis: [4], format: 'single', reason: '別の話題', tradeoff: 'まとめない', omitted: '',
+      parts: [{ text: '別の話です。', core_quote: '別の話です。', evidence: [{qi: 4, quote:'別の話です。'}], question_context: [] }] };
+    const result = structuredClone([invalid, other]), part = result[0].parts[0];
+    part.evidence[1].quote = q2;
+    part.text = g.parts[0].text + q3;
+    if (mutation === 'wrong-source') part.evidence[1].quote = q3;
+    if (mutation === 'missing-from-body') part.text = part.text.replace(q2, '');
+    if (mutation === 'changed-valid-quote') part.evidence[2].quote = '実験';
+    if (mutation === 'changed-other-post') result[1].parts[0].text += '追加。';
+    result[1].parts[0].evidence[0] = { quote: '別の話です。', qi: 4 }; // JSON member order is immaterial.
+    h.requests.push(result);
+    const validate = () => h.ctx.validatePostCompositionsWithEvidenceRepair([invalid, other], h.db.Interviews,
+      {reflection: r}, '', true, {stage:'initial'});
+    if (mutation === 'none') {
+      const saved = validate();
+      assert.equal(saved[0].parts[0].text, part.text);
+      assert.deepEqual(Array.from(saved[0].parts[0].evidence, e => e.quote), [g.parts[0].core_quote, q2, q3]);
+      const call = h.calls.find(c => String(c.system).includes('一度だけの本文修復'));
+      assert.match(call.system, /訂正前の言い方を現在の方針として独立して残さない/);
+    } else assert.throws(validate);
+    assert.equal(h.calls.filter(c => /一度だけの本文修復|メタデータだけを修復/.test(c.system || '')).length, 1);
+  }
+});
+
 test('supplemental evidence can use a long common source/body excerpt without rewriting the post or calling repair', () => {
   const { h, g, r } = mergeFixture();
   const originalQuote = 'でも記録がない試験は次の判断にそのまま使えません。';
