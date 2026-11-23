@@ -17,6 +17,7 @@ function postCompositionInstructions() {
     '根拠は本人回答。質問は文脈の補助資料。回答がその問いに答えている範囲で、質問から話題や対象を補って自然な投稿にする。本人が肯定・説明していない質問の前提（成果・数字・経験・因果・感情）を事実として採用しない。否定や訂正を優先。文体見本を事実にせず、非公開・迷い・代償を尊重し、一般論や採用CTAを足さない。',
     '各partのcore_quoteは同じqiの回答に完全一致する80字以内の固有な核で、本文にもそのまま残す。各グループはsource_qisの中にミアが選んだanchorのqiを含み、そのanchorを少なくとも一つ本文に残す。ミアが核を選んでいない回答だけで別グループを追加しない。全回答を投稿にする必要はない。',
     '各partにevidenceを置く。使った回答それぞれから本文にも残した80字以内の原文quoteとqiを1組ずつ記録し、主回答のquoteはcore_quoteと同じにする。question_contextは質問から補った箇所ごとにqi,field(question/followup_question),quote(質問の原文200字以内),answer_quote(同じ回答の原文80字以内),text(補った本文箇所200字以内),use(topic/referent),reason(250字以内)を記録。補わなければ[]。最大4件。',
+    '本人が先の言い方を後で訂正・限定した場合は、訂正後の意味を完成稿の方針として書く。訂正前の言い方を現在の方針として独立して残さない。本人が両立すると説明した要素を二者択一にしない。',
     '同じ論点の言い換えを複数ストックしない。全体で最大6グループ/8ポスト、本文合計6000文字以内。reason/tradeoff/omittedは各500字以内。省いた材料があればomittedへ正直に記録する。',
     '回答に固有な公開材料がないものは出力しない。完成稿に人格名や編集理由は混ぜない。',
     '会議のno_material=falseでanchorsがある場合、その核を使う案を最低1グループ返す。未確認の技術的理由を省いて本人が見たこと・驚いたことだけに絞ってよい。推測は推測のまま残し、公開可否や追加確認は後段の審査へ渡す。空配列で材料不足へ変更しない。',
@@ -212,6 +213,7 @@ function validatePostCompositionsWithEvidenceRepair(groups, qa, brief, styleProm
   }
   catch (error) {
     if (!/回答ごとの原文引用が不正です/.test(String(error && error.message || error))) throw error;
+    if (contextRepair.quotedTextStages && contextRepair.quotedTextStages[contextRepair.stage]) throw error;
     originalError = error;
   }
   assertEditorialExecutionBudget();
@@ -293,11 +295,11 @@ function normalizeCompositionContextSpans(groups) {
   });
 }
 
-/** 原文で確認できる引用だけが本文から失われた場合、出典を固定して本文を一度直す。 */
+/** 本文から失われた原文を戻す。混在する補助引用の言い換えは同じ出典内でだけ選び直す。 */
 function repairCompositionQuotedText(groups, qa, brief, stylePrompt, allowMissingAnchors, state) {
   state.quotedTextStages = state.quotedTextStages || {};
   if (state.quotedTextStages[state.stage] || Object.keys(state.quotedTextStages).length >= 2 || !Array.isArray(groups)) return null;
-  var required = [], safe = true;
+  var required = [], reselect = [], editable = {}, safe = true;
   try {
     groups.forEach(function (g, gi) {
       var sources = compositionSources(g.source_qis === undefined ? [g.qi] : g.source_qis, qa);
@@ -307,33 +309,54 @@ function repairCompositionQuotedText(groups, qa, brief, stylePrompt, allowMissin
         if (typeof p.text !== 'string' || !Array.isArray(evidence) || evidence.length !== sources.length) throw new Error('evidence');
         sources.forEach(function (r) {
           var matches = evidence.filter(function (e) { return e && String(e.qi) === String(r.idx); });
-          if (matches.length !== 1 || !councilText(matches[0].quote, 80) || compositionRawAnswer(r).indexOf(matches[0].quote) < 0 ||
-              (String(r.idx) === String(g.qi) && matches[0].quote !== p.core_quote)) throw new Error('source');
-          if (p.text.indexOf(matches[0].quote) < 0) required.push({ group: gi + 1, part: pi + 1, qi: r.idx, quote: matches[0].quote });
+          if (matches.length !== 1 || !councilText(matches[0].quote, 80)) throw new Error('source');
+          var quote = matches[0].quote, primary = String(r.idx) === String(g.qi);
+          var raw = compositionRawAnswer(r), key = gi + '/' + pi;
+          if (primary && (quote !== p.core_quote || raw.indexOf(quote) < 0)) throw new Error('core');
+          if (raw.indexOf(quote) < 0) {
+            // 補助引用が本文にだけ存在し、回答原文の表現と異なる。回答先qiは変えない。
+            if (p.text.indexOf(quote) < 0) throw new Error('unidentified_quote');
+            reselect.push({ group: gi + 1, part: pi + 1, qi: r.idx, invalid_quote: quote });
+            editable[key] = true;
+          } else if (p.text.indexOf(quote) < 0) {
+            required.push({ group: gi + 1, part: pi + 1, qi: r.idx, quote: quote });
+            editable[key] = true;
+          }
         });
       });
     });
   } catch (e) { safe = false; }
   if (!safe || !required.length) return null;
   function frozen(values) {
-    return JSON.stringify(values.map(function (g) {
+    return JSON.stringify(values.map(function (g, gi) {
       return { qi: g.qi, source_qis: g.source_qis, format: g.format, reason: g.reason, tradeoff: g.tradeoff, omitted: g.omitted,
-        parts: g.parts.map(function (p) { return { core_quote: p.core_quote, evidence: p.evidence,
-          question_context: Array.isArray(p.question_context) ? p.question_context.map(function (c) {
-            return { qi: c.qi, field: c.field, quote: c.quote, answer_quote: c.answer_quote, use: c.use, reason: c.reason };
-          }) : p.question_context }; }) };
+        parts: g.parts.map(function (p, pi) {
+          var changeText = editable[gi + '/' + pi];
+          // 元から不正な補助quoteだけを比較対象から外す。qiと配列順は固定。
+          var evidence = Array.isArray(p.evidence) ? p.evidence.map(function (e) {
+            var replaceQuote = reselect.some(function (m) {
+              return m.group === gi + 1 && m.part === pi + 1 && String(m.qi) === String(e.qi);
+            });
+            return { qi: e.qi, quote: replaceQuote ? undefined : e.quote };
+          }) : p.evidence;
+          return { text: changeText ? undefined : p.text, core_quote: p.core_quote, evidence: evidence,
+            question_context: Array.isArray(p.question_context) ? p.question_context.map(function (c) {
+              return { qi: c.qi, field: c.field, quote: c.quote, answer_quote: c.answer_quote, use: c.use,
+                reason: c.reason, text: changeText ? undefined : c.text };
+            }) : p.question_context };
+        }) };
     }));
   }
   state.quotedTextStages[state.stage] = true; // 初稿と最終編集で各1回。各工程内では繰り返さない。
   assertEditorialExecutionBudget();
-  logEvent('composition_quote_text_repair', JSON.stringify({ session_id: String(qa[0].session_id), stage: state.stage, status: 'started', missing: required }));
+  logEvent('composition_quote_text_repair', JSON.stringify({ session_id: String(qa[0].session_id), stage: state.stage, status: 'started', missing: required, reselect: reselect }));
   var repaired = askClaudeJson(stylePrompt + editorialCouncilInstructions(brief) + '\n' + postCompositionInstructions() + '\n' + [
     '原文で確認済みだが投稿本文では言い換えられてしまった引用を戻す、一度だけの本文修復。',
-    '変更してよいのは各partのtextと、その変更に伴うquestion_context.textだけ。全グループ/partの数・順序・qi・source_qis・format・reason・tradeoff・omitted・core_quote・evidenceは完全に保持。質問補完メモの件数・順序・qi・field・quote・answer_quote・use・reasonも完全に保持し、削除しない。',
+    'missingまたはreselectに指定したpartのtextと、その変更に伴うquestion_context.textだけを編集する。reselectの補助回答に限り、invalid_quoteをその回答原文に実在する意味のある連続引用（80字以内）に選び直し、evidence.quoteと本文textの両方に一字一句同じ引用を使う。原文と方向性が合うならミアの同じqiのanchorを優先する。全グループ/partの数・順序・qi・source_qis・format・reason・tradeoff・omitted・core_quote、指定外のevidenceと、missing・reselectのどちらにも該当しないpartの本文を保持。質問補完メモの件数・順序・qi・field・quote・answer_quote・use・reasonも完全に保持し、削除しない。',
     'missingのquoteを対応する本文の自然な位置へ一字一句そのまま戻す。意味の同じ言い換え箇所を置き換え、末尾に証拠として羅列しない。元からある核と他の引用を本文に保持する。補完箇所の文言を変えた場合はquestion_context.textも新本文の完全一致箇所へ更新し、質問から補った対象・意味は変えない。',
     '回答にない事実や因果を足さない。聞いた説明と本人の推測を区別し、留保・否定を削らない。各本文4000字以内、splitは各280重み以内。全グループのJSON配列だけ返す。',
   ].join('\n'), JSON.stringify({ answers: qa.map(function (r) { return { qi: r.idx, question: r.question, answer: compositionRawAnswer(r) }; }),
-    drafts: groups, missing: required }), 12000, { purpose: 'generate' });
+    drafts: groups, missing: required, reselect: reselect }), 12000, { purpose: 'generate' });
   try {
     if (!Array.isArray(repaired) || frozen(repaired) !== frozen(groups)) throw new Error('原文引用の本文修復で出典・核・編集判断が変わりました。保存を止めました');
     normalizeCompositionFormats(repaired);
